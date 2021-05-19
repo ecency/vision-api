@@ -26,16 +26,6 @@ server
     // Auth Api
     .post("^/auth-api/hs-token-refresh$", authApi.hsTokenRefresh)
 
-    // Private api check middleware
-    .use((req: express.Request, res: express.Response, next: express.NextFunction) => {
-
-        if (req.path.startsWith("/private-api/") && config.usePrivate !== "1") {
-            res.status(403).send("Forbidden");
-            return;
-        }
-
-        next();
-    })
     // Private Api
     .get("^/private-api/received-vesting/:username$", privateApi.receivedVesting)
     .get("^/private-api/rewarded-communities$", privateApi.rewardedCommunities)
