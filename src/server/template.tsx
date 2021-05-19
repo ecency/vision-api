@@ -1,19 +1,10 @@
-import express from "express";
-
 import React from "react";
-import { Provider } from "react-redux";
+
 import { renderToString } from "react-dom/server";
-import { StaticRouter } from "react-router-dom";
 
 import { Helmet } from "react-helmet";
 
-import serialize from "serialize-javascript";
-
 import App from "../common/app";
-
-import { AppState } from "../common/store/index";
-
-import configureStore from "../common/store/configure";
 
 let assets: any;
 
@@ -22,20 +13,10 @@ const syncLoadAssets = () => {
 };
 syncLoadAssets();
 
-export const render = (req: express.Request, state: AppState) => {
-  const store = configureStore(state);
-
-  const context = {};
-
+export const render = () => {
   const markup = renderToString(
-    <Provider store={store}>
-      <StaticRouter location={req.originalUrl} context={context}>
-        <App />
-      </StaticRouter>
-    </Provider>
+      <App />
   );
-
-  const finalState = store.getState();
 
   const helmet = Helmet.renderStatic();
   const headHelmet =
@@ -74,11 +55,8 @@ export const render = (req: express.Request, state: AppState) => {
                     : `<script src="${assets.client.js}" defer crossorigin></script>`
                 }
             </head>
-            <body class="${`theme-${state.global.theme}`}">
+            <body>
                 <div id="root">${markup}</div>
-                <script>
-                  window.__PRELOADED_STATE__ = ${serialize(finalState)}
-                </script>
             </body>
         </html>`;
 };
