@@ -6,8 +6,6 @@ import * as privateApi from "./handlers/private-api";
 import * as searchApi from "./handlers/search-api";
 import * as authApi from "./handlers/auth-api";
 
-import config from "../config";
-
 const server = express();
 
 server
