@@ -2,14 +2,13 @@ version: '3.7'
 
 services:
   app:
-    image: ecency/api:development
+    image: ecency/api:latest
     environment:
       - PRIVATE_API_ADDR
       - PRIVATE_API_AUTH
       - HIVESIGNER_CLIENT_SECRET
       - SEARCH_API_ADDR
       - SEARCH_API_SECRET
-      - USE_PRIVATE
     ports:
       - "4000:4000"
     deploy:

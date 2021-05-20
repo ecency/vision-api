@@ -31,7 +31,7 @@
 
 ##### Pushing new code / Pull requests
 
-- Make sure to branch off your changes from `development` branch.
+- Make sure to branch off your changes from `main` branch.
 - Make sure to run `yarn test` and add tests to your changes.
 - Code on!
 
@@ -60,7 +60,7 @@ docker run -it --rm -p 3000:3000 -e PRIVATE_API_ADDR=https://api.example.com -e 
 You can easily deploy a set of vision instances to your production environment, using example `docker-compose.yml` file. Docker Swarm will automatically keep it alive and load balance incoming traffic between the containers:
 
 ```bash
-docker stack deploy -c docker-compose.yml -c docker-compose.production.yml vision
+docker stack deploy -c docker-compose.yml vision-api
 ```
 
 ## Issues
