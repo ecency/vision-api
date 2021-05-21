@@ -3,7 +3,7 @@ import React from "react";
 const App = () => {
     return (
         <>
-            Hello there!
+            Hello there! This is Vision API.
         </>
     );
 };
