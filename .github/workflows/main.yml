@@ -62,11 +62,13 @@ jobs:
         HIVESIGNER_CLIENT_SECRET: ${{secrets.HIVESIGNER_CLIENT_SECRET}}
         SEARCH_API_ADDR: ${{secrets.SEARCH_API_ADDR}}
         SEARCH_API_SECRET: ${{secrets.SEARCH_API_SECRET}}
+        SSH_PRODUCTION_HOST: ${{secrets.SSH_PRODUCTION_HOST}}
+        SSH_USERNAME: ${{secrets.SSH_USERNAME}}
+        SSH_KEY: ${{secrets.SSH_KEY}}
       with:
         host: ${{ secrets.SSH_PRODUCTION_HOST }}
         username: ${{ secrets.SSH_USERNAME }}
         key: ${{ secrets.SSH_KEY }}
-        port: ${{ secrets.SSH_PORT }}
         envs: PRIVATE_API_ADDR,PRIVATE_API_AUTH,HIVESIGNER_CLIENT_SECRET,SEARCH_API_ADDR,SEARCH_API_SECRET
         script: |
           export PRIVATE_API_ADDR=$PRIVATE_API_ADDR
