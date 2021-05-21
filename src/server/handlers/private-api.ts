@@ -122,20 +122,6 @@ export const markNotifications = async (req: express.Request, res: express.Respo
     pipe(apiRequest(`activities/${username}`, "PUT", {}, data), res);
 };
 
-export const usrActivity = async (req: express.Request, res: express.Response) => {
-    const us = await validateCode(req, res);
-    if (!us) return;
-
-    const {ty, bl, tx} = req.body;
-
-    const payload = {us, ty};
-
-    if (bl) payload['bl'] = bl;
-    if (tx) payload['tx'] = tx;
-
-    pipe(apiRequest(`usr-activity`, "POST", {}, payload), res);
-};
-
 export const images = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) return;

@@ -38,7 +38,6 @@ server
     .post("^/private-api/notifications$", privateApi.notifications)
     .post("^/private-api/notifications/unread$", privateApi.unreadNotifications)
     .post("^/private-api/notifications/mark$", privateApi.markNotifications)
-    .post("^/private-api/usr-activity$", privateApi.usrActivity)
     .post("^/private-api/images$", privateApi.images)
     .post("^/private-api/images-delete$", privateApi.imagesDelete)
     .post("^/private-api/images-add$", privateApi.imagesAdd)
