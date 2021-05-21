@@ -6,12 +6,15 @@ import * as privateApi from "./handlers/private-api";
 import * as searchApi from "./handlers/search-api";
 import * as authApi from "./handlers/auth-api";
 
+const cors = require("cors")
+
 const server = express();
 
 server
     .disable("x-powered-by")
     .use(express.static(process.env.RAZZLE_PUBLIC_DIR!))
     .use(express.json())
+    .use(cors())
 
     // Search Api
     .post("^/search-api/search$", searchApi.search)
