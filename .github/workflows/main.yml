@@ -24,15 +24,14 @@ jobs:
     needs: deps
     runs-on: ubuntu-latest
     steps:
-      - name: Check Out Repo
-        uses: actions/checkout@v2
-      - name: Login to Docker Hub
+      - 
+        name: Login to Docker Hub
         uses: docker/login-action@v1
         with:
           username: ${{secrets.DOCKERHUB_USERNAME}}
-          password: ${{secrets.DOCKERHUB_ACCESSTOKEN}}
-          logout: true
-      - name: Build and push
+          password: ${{secrets.DOCKERHUB_TOKEN}}
+      - 
+        name: Build and push
         id: docker_build
         uses: docker/build-push-action@v2
         with:
@@ -40,7 +39,8 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: ecency/api:latest
-      - name: Image digest
+      - 
+        name: Image digest
         run: echo ${{ steps.docker_build.outputs.digest }}
 
   deploy:
