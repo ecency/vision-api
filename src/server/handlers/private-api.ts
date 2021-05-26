@@ -324,8 +324,6 @@ export const boostedPost = async (req: express.Request, res: express.Response) =
 }
 
 export const subscribeNewsletter = async (req: express.Request, res: express.Response) => {
-    const username = await validateCode(req, res);
-    if (!username) return;
     const {email} = req.body;
     const [first_name] = email.split('@')
     const data = {email, first_name};
