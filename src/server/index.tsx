@@ -69,11 +69,13 @@ server
     .post("^/private-api/promoted-post$", privateApi.promotedPost)
     .post("^/private-api/boost-options$", privateApi.boostOptions)
     .post("^/private-api/boosted-post$", privateApi.boostedPost)
-
-    // For all others paths
-    .get("*", fallbackHandler)
+    .post("^/private-api/subscribe$", privateApi.subscribeNewsletter)
 
     // Health check script for docker swarm
-    .get("^/healthcheck.json$", healthCheck);
+    .get("^/healthcheck.json$", healthCheck)
+
+    // For all others paths
+    .get("*", fallbackHandler);
+  
 
 export default server;

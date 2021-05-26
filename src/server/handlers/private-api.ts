@@ -1,6 +1,8 @@
 import express from "express";
 
 import hs from "hivesigner";
+import axios, {AxiosRequestConfig} from "axios";
+import config from "../../config";
 
 import {apiRequest, getPromotedEntries} from "../helper";
 
@@ -319,4 +321,23 @@ export const boostedPost = async (req: express.Request, res: express.Response) =
     if (!username) return;
     const {author, permlink} = req.body;
     pipe(apiRequest(`boosted-posts/${author}/${permlink}`, "GET"), res);
+}
+
+export const subscribeNewsletter = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req, res);
+    if (!username) return;
+    const {email} = req.body;
+    const [first_name] = email.split('@')
+    const data = {email, first_name};
+    
+    const requestConf: AxiosRequestConfig = {
+        url: "https://www.getrevue.co/api/v2/subscribers",
+        method: "POST",
+        validateStatus: () => true,
+        responseType: "json",
+        headers: {"Authorization": `Token ${config.revueToken}`},
+        data: {...data}
+    }
+
+    pipe(axios(requestConf), res)
 }
