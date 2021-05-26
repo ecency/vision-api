@@ -37,6 +37,7 @@ server
     .post("^/private-api/points$", privateApi.points)
     .post("^/private-api/point-list$", privateApi.pointList)
     .post("^/private-api/account-create$", privateApi.createAccount)
+    .post("^/private-api/subscribe$", privateApi.subscribeNewsletter)
     /* Login required private api endpoints */
     .post("^/private-api/notifications$", privateApi.notifications)
     .post("^/private-api/notifications/unread$", privateApi.unreadNotifications)
@@ -69,7 +70,6 @@ server
     .post("^/private-api/promoted-post$", privateApi.promotedPost)
     .post("^/private-api/boost-options$", privateApi.boostOptions)
     .post("^/private-api/boosted-post$", privateApi.boostedPost)
-    .post("^/private-api/subscribe$", privateApi.subscribeNewsletter)
 
     // Health check script for docker swarm
     .get("^/healthcheck.json$", healthCheck)
