@@ -28,7 +28,7 @@ export const apiRequest = (endpoint: string, method: Method, extraHeaders: any =
 
     const headers = {
         "Content-Type": "application/json",
-        ...makeApiAuth(),
+        ...apiAuth,
         ...extraHeaders
     }
 
