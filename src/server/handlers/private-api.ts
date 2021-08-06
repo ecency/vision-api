@@ -88,7 +88,7 @@ export const notifications = async (req: express.Request, res: express.Response)
     const username = await validateCode(req, res);
     if (!username) return;
 
-    const {filter, since} = req.body;
+    const {filter, since, limit} = req.body;
 
     let u = `activities/${username}`
 
@@ -98,6 +98,14 @@ export const notifications = async (req: express.Request, res: express.Response)
 
     if (since) {
         u += `?since=${since}`;
+    }
+
+    if (since && limit) {
+        u += `&limit=${limit}`;
+    }
+
+    if (!since && limit) {
+        u += `?limit=${limit}`;
     }
 
     pipe(apiRequest(u, "GET"), res);
