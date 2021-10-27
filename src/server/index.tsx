@@ -35,6 +35,7 @@ server
     .get("^/private-api/leaderboard/:duration(day|week|month)$", privateApi.leaderboard)
     .get("^/private-api/curation/:duration(day|week|month)$", privateApi.curation)
     .get("^/private-api/promoted-entries$", privateApi.promotedEntries)
+    .get("^/private-api/market-data/:currency/:token$", privateApi.marketData)
     .post("^/private-api/comment-history$", privateApi.commentHistory)
     .post("^/private-api/points$", privateApi.points)
     .post("^/private-api/point-list$", privateApi.pointList)

@@ -352,3 +352,8 @@ export const subscribeNewsletter = async (req: express.Request, res: express.Res
     }
     
 }
+
+export const marketData = async (req: express.Request, res: express.Response) => {
+    const {currency, token} = req.params;
+    pipe(apiRequest(`market-data/currency-rate/${currency}/${token}`, "GET"), res);
+};
