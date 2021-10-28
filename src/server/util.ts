@@ -4,7 +4,8 @@ import express from "express";
 
 export const pipe = (promise: Promise<AxiosResponse>, res: express.Response) => {
     promise.then(r => {
-        res.status(r.status).send(r.data);
+        const ddata = typeof r.data === 'number' ? r.data.toString() : r.data;
+        res.status(r.status).send(ddata);
     }).catch(() => {
         res.status(500).send("Server Error");
     });
