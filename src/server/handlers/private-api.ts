@@ -38,6 +38,15 @@ export const leaderboard = async (req: express.Request, res: express.Response) =
     pipe(apiRequest(`leaderboard?duration=${duration}`, "GET"), res);
 };
 
+export const referrals = async (req: express.Request, res: express.Response) => {
+    const {username, max_id} = req.params;
+    let u = `referrals/${username}?size=20`;
+    if (max_id) {
+        u += `&max_id=${max_id}`;
+    }
+    pipe(apiRequest(u, "GET"), res);
+};
+
 export const curation = async (req: express.Request, res: express.Response) => {
     const {duration} = req.params;
     pipe(apiRequest(`curation?duration=${duration}`, "GET"), res);
