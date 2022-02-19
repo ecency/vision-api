@@ -39,7 +39,8 @@ export const leaderboard = async (req: express.Request, res: express.Response) =
 };
 
 export const referrals = async (req: express.Request, res: express.Response) => {
-    const {username, max_id} = req.params;
+    const {username} = req.params;
+    const {max_id} = req.query;
     let u = `referrals/${username}?size=20`;
     if (max_id) {
         u += `&max_id=${max_id}`;
