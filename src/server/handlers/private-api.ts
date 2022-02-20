@@ -103,6 +103,10 @@ export const notifications = async (req: express.Request, res: express.Response)
             username = user;
         }
     };
+    // if user defined but not same as user's code
+    if (user && username!==user) {
+        username = user;
+    }
 
     let u = `activities/${username}`
 
