@@ -48,6 +48,13 @@ export const referrals = async (req: express.Request, res: express.Response) => 
     pipe(apiRequest(u, "GET"), res);
 };
 
+export const referralsStats = async (req: express.Request, res: express.Response) => {
+    const {username} = req.params;
+    let u = `referrals/${username}/stats`;
+    pipe(apiRequest(u, "GET"), res);
+};
+
+
 export const curation = async (req: express.Request, res: express.Response) => {
     const {duration} = req.params;
     pipe(apiRequest(`curation?duration=${duration}`, "GET"), res);

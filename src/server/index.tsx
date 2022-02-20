@@ -37,6 +37,7 @@ server
     .get("^/private-api/promoted-entries$", privateApi.promotedEntries)
     .get("^/private-api/market-data/:fiat/:token$", privateApi.marketData)
     .get("^/private-api/referrals/:username$", privateApi.referrals)
+    .get("^/private-api/referrals/:username/stats$", privateApi.referralsStats)
     .post("^/private-api/comment-history$", privateApi.commentHistory)
     .post("^/private-api/points$", privateApi.points)
     .post("^/private-api/point-list$", privateApi.pointList)
