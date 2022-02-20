@@ -42,8 +42,8 @@ server
     .post("^/private-api/point-list$", privateApi.pointList)
     .post("^/private-api/account-create$", privateApi.createAccount)
     .post("^/private-api/subscribe$", privateApi.subscribeNewsletter)
-    /* Login required private api endpoints */
     .post("^/private-api/notifications$", privateApi.notifications)
+    /* Login required private api endpoints */
     .post("^/private-api/notifications/unread$", privateApi.unreadNotifications)
     .post("^/private-api/notifications/mark$", privateApi.markNotifications)
     .post("^/private-api/images$", privateApi.images)

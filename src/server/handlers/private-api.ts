@@ -92,13 +92,17 @@ export const createAccount = async (req: express.Request, res: express.Response)
     pipe(apiRequest(`signup/account-create`, "POST", headers, payload), res);
 };
 
-/* Login required endpoints */
-
 export const notifications = async (req: express.Request, res: express.Response) => {
-    const username = await validateCode(req, res);
-    if (!username) return;
+    let username = await validateCode(req, res);
+    const {filter, since, limit, user} = req.body;
 
-    const {filter, since, limit} = req.body;
+    if (!username) {
+        if (!user) {
+            return;
+        } else {
+            username = user;
+        }
+    };
 
     let u = `activities/${username}`
 
@@ -120,6 +124,8 @@ export const notifications = async (req: express.Request, res: express.Response)
 
     pipe(apiRequest(u, "GET"), res);
 };
+
+/* Login required endpoints */
 
 export const unreadNotifications = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
