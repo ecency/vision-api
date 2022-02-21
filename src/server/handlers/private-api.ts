@@ -384,3 +384,7 @@ export const marketData = async (req: express.Request, res: express.Response) =>
     const {fiat, token} = req.params;
     pipe(apiRequest(`market-data/currency-rate/${fiat}/${token}`, "GET"), res);
 };
+
+export const marketDataLatest = async (req: express.Request, res: express.Response) => {
+    pipe(apiRequest(`market-data/latest`, "GET"), res);
+};

@@ -36,6 +36,7 @@ server
     .get("^/private-api/curation/:duration(day|week|month)$", privateApi.curation)
     .get("^/private-api/promoted-entries$", privateApi.promotedEntries)
     .get("^/private-api/market-data/:fiat/:token$", privateApi.marketData)
+    .get("^/private-api/market-data/latest$", privateApi.marketDataLatest)
     .get("^/private-api/referrals/:username$", privateApi.referrals)
     .get("^/private-api/referrals/:username/stats$", privateApi.referralsStats)
     .post("^/private-api/comment-history$", privateApi.commentHistory)
