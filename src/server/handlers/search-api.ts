@@ -5,15 +5,16 @@ import config from "../../config";
 import {baseApiRequest, pipe} from "../util";
 
 export const search = async (req: express.Request, res: express.Response) => {
-    const {q, sort, hide_low, since, scroll_id} = req.body;
+    const {q, sort, hide_low, since, scroll_id, votes} = req.body;
 
     const url = `${config.searchApiAddr}/search`;
     const headers = {'Authorization': config.searchApiToken};
 
-    const payload: { q: string, sort: string, hide_low: string, since?: string, scroll_id?: string } = {q, sort, hide_low};
+    const payload: { q: string, sort: string, hide_low: string, since?: string, scroll_id?: string, votes?: number } = {q, sort, hide_low};
 
     if (since) payload.since = since;
     if (scroll_id) payload.scroll_id = scroll_id;
+    if (votes) payload.votes = votes;
 
     pipe(baseApiRequest(url, "POST", headers, payload), res);
 }
