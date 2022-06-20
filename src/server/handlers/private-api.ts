@@ -159,6 +159,21 @@ export const markNotifications = async (req: express.Request, res: express.Respo
     pipe(apiRequest(`activities/${username}`, "PUT", {}, data), res);
 };
 
+export const registerDevice = async (req: express.Request, res: express.Response) => {
+    const _username = await validateCode(req, res);
+    if (!_username) return;
+    const {username, token, system, allows_notify, notify_types} = req.body;
+    const data = {username, token, system, allows_notify, notify_types};
+    pipe(apiRequest(`rgstrmbldvc`, "POST", {}, data), res);
+};
+
+export const detailDevice = async (req: express.Request, res: express.Response) => {
+    const _username = await validateCode(req, res);
+    if (!_username) return;
+    const {username, token} = req.body;
+    pipe(apiRequest(`mbldvcdtl/${username}/${token}`, "GET"), res);
+};
+
 export const images = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) return;

@@ -48,6 +48,8 @@ server
     /* Login required private api endpoints */
     .post("^/private-api/notifications/unread$", privateApi.unreadNotifications)
     .post("^/private-api/notifications/mark$", privateApi.markNotifications)
+    .post("^/private-api/register-device$", privateApi.registerDevice)
+    .post("^/private-api/detail-device$", privateApi.detailDevice)
     .post("^/private-api/images$", privateApi.images)
     .post("^/private-api/images-delete$", privateApi.imagesDelete)
     .post("^/private-api/images-add$", privateApi.imagesAdd)
