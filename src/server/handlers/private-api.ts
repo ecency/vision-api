@@ -164,7 +164,7 @@ export const registerDevice = async (req: express.Request, res: express.Response
     if (!_username) return;
     const {username, token, system, allows_notify, notify_types} = req.body;
     const data = {username, token, system, allows_notify, notify_types};
-    pipe(apiRequest(`rgstrmbldvc`, "POST", {}, data), res);
+    pipe(apiRequest(`rgstrmbldvc/`, "POST", {}, data), res);
 };
 
 export const detailDevice = async (req: express.Request, res: express.Response) => {
