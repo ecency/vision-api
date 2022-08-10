@@ -78,7 +78,7 @@ server
     .post("^/private-api/promoted-post$", privateApi.promotedPost)
     .post("^/private-api/boost-options$", privateApi.boostOptions)
     .post("^/private-api/boosted-post$", privateApi.boostedPost)
-    .post("^/private-api/usr-activity$", privateApi.activities)
+    .post("^/private-api/pusr-activity$", privateApi.activities)
 
     // Health check script for docker swarm
     .get("^/healthcheck.json$", healthCheck)

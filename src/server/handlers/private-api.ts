@@ -390,13 +390,13 @@ export const activities = async (req: express.Request, res: express.Response) =>
 
         const rec = await redisGetAsync(client)(identifier);
         if (rec) {
-            if (new Date().getTime() - new Date(rec).getTime() < 900000) {
+            if (new Date().getTime() - new Date(Number(rec)).getTime() < 900000) {
                 res.status(201).send({})
                 return
             }
-            await redisSetAsync(client)(identifier, new Date().getTime());
+            await redisSetAsync(client)(identifier, new Date().getTime().toString());
         } else {
-            await redisSetAsync(client)(identifier, new Date().getTime());
+            await redisSetAsync(client)(identifier, new Date().getTime().toString());
         }
     }
 
