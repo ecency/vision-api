@@ -29,6 +29,11 @@ export const receivedVesting = async (req: express.Request, res: express.Respons
     pipe(apiRequest(`delegatee_vesting_shares/${username}`, "GET"), res);
 };
 
+export const receivedRC = async (req: express.Request, res: express.Response) => {
+    const {username} = req.params;
+    pipe(apiRequest(`delegatee_rc/${username}`, "GET"), res);
+};
+
 export const rewardedCommunities = async (req: express.Request, res: express.Response) => {
     pipe(apiRequest(`rewarded-communities`, "GET"), res);
 };

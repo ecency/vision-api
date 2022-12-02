@@ -31,6 +31,7 @@ server
 
     // Private Api
     .get("^/private-api/received-vesting/:username$", privateApi.receivedVesting)
+    .get("^/private-api/received-rc/:username$", privateApi.receivedRC)
     .get("^/private-api/rewarded-communities$", privateApi.rewardedCommunities)
     .get("^/private-api/leaderboard/:duration(day|week|month)$", privateApi.leaderboard)
     .get("^/private-api/curation/:duration(day|week|month)$", privateApi.curation)
