@@ -7,4 +7,5 @@ export default {
     searchApiAddr: process.env.SEARCH_API_ADDR || "https://api.search.com",
     searchApiToken: process.env.SEARCH_API_SECRET || "searchApiSecret",
     revueToken: process.env.REVUE_TOKEN || "revueApiToken",
+    redisUrl: process.env.REDIS_URL || "redisUrl",
 };
