@@ -5,7 +5,7 @@ on:
       - main
 jobs:
   deps:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-18.04
     strategy:
       matrix:
         node-version: [14.19.3]
@@ -17,13 +17,12 @@ jobs:
         node-version: ${{ matrix.node-version }}
     - name: npm install, lint and/or test
       run: |
-        npm config set python $(which python2)
         yarn
       env:
         CI: true
   build:
     needs: deps
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-18.04
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
@@ -53,7 +52,7 @@ jobs:
 
   deploy:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-18.04
     steps:
     - name: SSH and deploy node app
       uses: appleboy/ssh-action@master
