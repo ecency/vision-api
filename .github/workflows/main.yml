@@ -17,6 +17,7 @@ jobs:
         node-version: ${{ matrix.node-version }}
     - name: npm install, lint and/or test
       run: |
+        npm config set python $(which python3)
         yarn
       env:
         CI: true
