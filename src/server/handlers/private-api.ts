@@ -46,12 +46,7 @@ export const leaderboard = async (req: express.Request, res: express.Response) =
 };
 
 export const getAnnouncement = async (req: express.Request, res: express.Response) => {
-    res.send({
-        status: 200,
-        body: {
-            data: announcements
-        }
-    })
+    res.send(announcements)
 }
 
 export const referrals = async (req: express.Request, res: express.Response) => {
