@@ -11,14 +11,15 @@ export const pipe = (promise: Promise<AxiosResponse>, res: express.Response) => 
     });
 };
 
-export const baseApiRequest = (url: string, method: Method, headers: any = {}, payload: any = {}): Promise<AxiosResponse> => {
+export const baseApiRequest = (url: string, method: Method, headers: any = {}, payload: any = {}, params: any = {}): Promise<AxiosResponse> => {
     const requestConf: AxiosRequestConfig = {
         url,
         method,
         validateStatus: () => true,
         responseType: "json",
         headers: {...headers},
-        data: {...payload}
+        data: {...payload},
+        params: {...params}
     }
 
     return axios(requestConf)
