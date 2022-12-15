@@ -5,6 +5,7 @@ import fallbackHandler, {healthCheck} from "./handlers/fallback";
 import * as privateApi from "./handlers/private-api";
 import * as searchApi from "./handlers/search-api";
 import * as authApi from "./handlers/auth-api";
+import * as engineApi from "./handlers/engine-api";
 
 const cors = require("cors")
 
@@ -28,6 +29,11 @@ server
 
     // Auth Api
     .post("^/auth-api/hs-token-refresh$", authApi.hsTokenRefresh)
+
+    // Engine Api
+    .post("^/private-api/engine-api$", engineApi.eapi)
+    .get("^/private-api/engine-reward-api$", engineApi.erewardapi)
+    .get("^/private-api/engine-chart-api$", engineApi.echartapi)
 
     // Private Api
     .get("^/private-api/received-vesting/:username$", privateApi.receivedVesting)
