@@ -5,7 +5,7 @@ import hs from "hivesigner";
 import axios, {AxiosRequestConfig} from "axios";
 
 import config from "../../config";
-import announcements from "../handlers/ann.json";
+import {announcements} from "./announcements";
 import {apiRequest, getPromotedEntries} from "../helper";
 
 import {pipe} from "../util";
