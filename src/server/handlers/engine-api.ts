@@ -1,7 +1,5 @@
 import express from "express";
 
-import config from "../../config";
-
 import {baseApiRequest, pipe} from "../util";
 
 const BASE_URL = 'https://api.hive-engine.com';
