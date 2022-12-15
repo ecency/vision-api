@@ -3,8 +3,9 @@ import { createClient, RedisClient } from 'redis';
 import { promisify } from 'util';
 import hs from "hivesigner";
 import axios, {AxiosRequestConfig} from "axios";
-import config from "../../config";
 
+import config from "../../config";
+import announcements from "../handlers/ann.json";
 import {apiRequest, getPromotedEntries} from "../helper";
 
 import {pipe} from "../util";
@@ -43,6 +44,15 @@ export const leaderboard = async (req: express.Request, res: express.Response) =
     const {duration} = req.params;
     pipe(apiRequest(`leaderboard?duration=${duration}`, "GET"), res);
 };
+
+export const getAnnouncement = async (req: express.Request, res: express.Response) => {
+    res.send({
+        status: 200,
+        body: {
+            data: announcements
+        }
+    })
+}
 
 export const referrals = async (req: express.Request, res: express.Response) => {
     const {username} = req.params;

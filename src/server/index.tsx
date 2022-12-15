@@ -40,12 +40,15 @@ server
     .get("^/private-api/market-data/latest$", privateApi.marketDataLatest)
     .get("^/private-api/referrals/:username$", privateApi.referrals)
     .get("^/private-api/referrals/:username/stats$", privateApi.referralsStats)
+    .get("^/private-api/announcements$", privateApi.getAnnouncement)
+
     .post("^/private-api/comment-history$", privateApi.commentHistory)
     .post("^/private-api/points$", privateApi.points)
     .post("^/private-api/point-list$", privateApi.pointList)
     .post("^/private-api/account-create$", privateApi.createAccount)
     .post("^/private-api/subscribe$", privateApi.subscribeNewsletter)
     .post("^/private-api/notifications$", privateApi.notifications)
+
     /* Login required private api endpoints */
     .post("^/private-api/notifications/unread$", privateApi.unreadNotifications)
     .post("^/private-api/notifications/mark$", privateApi.markNotifications)

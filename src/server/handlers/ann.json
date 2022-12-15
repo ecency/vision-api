@@ -1,0 +1,27 @@
+[
+    {
+      "id": 101,
+      "title": "1 Hey! Hurry up and get your Discount",
+      "description": "Our store is giving 50% discount on the sale. Grab your tokens and availed that opportunity.",
+      "button_text": "Learn More",
+      "button_link": "https://www.google.com/",
+      "path": "/hot"
+    },
+    {
+      "id": 102,
+      "title": "2 Are you want to buy Winter Outfit?",
+      "description": "Outfitter Brand is giving upto 25% off. Hurry Up! and buy your winter cloths.",
+      "button_text": "Get Token",
+      "button_link": "https://www.google.com/",
+      "path": "/controversial"
+    },
+    {
+      "id": 103,
+      "title": "3 Congratulations to the newly promoted employee",
+      "description": "The statement should make the promoted employee feel special and recognized without being overly distracting.",
+      "button_text": "Learn More",
+      "button_link": "https://www.google.com/",
+      "path": "/trending"
+    }
+]
+  
