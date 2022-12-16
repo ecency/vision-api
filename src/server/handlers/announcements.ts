@@ -22,7 +22,7 @@ export const announcements = [
       "description": "You can support Ecency team by voting on this proposal.",
       "button_text": "Learn More",
       "button_link": "https://ecency.com/proposals/245",
-      "path": "/@[\w\.\d-]+/(blog|posts|wallet|points|engine|permissions|spk)"
+      "path": "/@.+/(blog|posts|wallet|points|engine|permissions|spk)"
     }
 ]
   
