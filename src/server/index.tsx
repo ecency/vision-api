@@ -32,7 +32,7 @@ server
 
     // Engine Api
     .post("^/private-api/engine-api$", engineApi.eapi)
-    .get("^/private-api/engine-reward-api$", engineApi.erewardapi)
+    .get("^/private-api/engine-reward-api/:username$", engineApi.erewardapi)
     .get("^/private-api/engine-chart-api$", engineApi.echartapi)
 
     // Private Api

@@ -19,16 +19,17 @@ export const eapi = async (req: express.Request, res: express.Response) => {
 
 
 export const erewardapi = async (req: express.Request, res: express.Response) => {
-    const params = req.params;
+    const {username} = req.params;
+    const params = req.query;
 
-    const url = `${ENGINE_REWARDS_URL}${req.path}`;
+    const url = `${ENGINE_REWARDS_URL}@${username}`;
     const headers = { 'Content-type': 'application/json' };
 
     pipe(baseApiRequest(url, "GET", headers, undefined, params), res);
 }
 
 export const echartapi = async (req: express.Request, res: express.Response) => {
-    const params = req.params;
+    const params = req.query;
 
     const url = `${ENGIEN_CHART_URL}`;
     const headers = { 'Content-type': 'application/json' };
