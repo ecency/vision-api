@@ -20,7 +20,7 @@ export const announcements = [
       "id": 102,
       "title": "Support Ecency! ❤️",
       "description": "You can support Ecency team by voting on this proposal.",
-      "button_text": "Learn More",
+      "button_text": "Support now",
       "button_link": "https://ecency.com/proposals/245",
       "path": "/@.+/(blog|posts|wallet|points|engine|permissions|spk)"
     }
