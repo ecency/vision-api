@@ -14,7 +14,7 @@ export const announcements = [
       "title": "Happy Ho ho ho holidays! 🎉",
       "description": "Are you participating in our annual Advent Calendar to celebrate holidays and earn more?",
       "button_text": "Check it out",
-      "button_link": "https://ecency.com/created/adventcalendar",
+      "button_link": "/created/adventcalendar",
       "path": "/(hot|created|trending|rising|controversial)",
       "auth": true
     },
@@ -23,7 +23,7 @@ export const announcements = [
       "title": "Support Ecency! ❤️",
       "description": "You can support Ecency team by voting on Ecency proposal. Every vote and support counts!",
       "button_text": "Support now",
-      "button_link": "https://ecency.com/proposals/245",
+      "button_link": "/proposals/245",
       "path": "/@.+/(blog|posts|wallet|points|engine|permissions|spk)",
       "auth": true
     }
