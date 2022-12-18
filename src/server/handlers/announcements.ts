@@ -26,6 +26,15 @@ export const announcements = [
       "button_link": "/proposals/245",
       "path": "/@.+/(blog|posts|wallet|points|engine|permissions|spk)",
       "auth": true
+    },
+    {
+      "id": 103,
+      "title": "Hi! 👋 I am new announcer",
+      "description": "Occasionally, when there is really important announcements, I will show up and inform you. Hope you don't mind! 😉",
+      "button_text": "Okay",
+      "button_link": "/",
+      "path": "/",
+      "auth": true
     }
 ]
   
