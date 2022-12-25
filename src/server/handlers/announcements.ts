@@ -9,7 +9,7 @@
 */
 
 export const announcements = [
-    {
+    /*{
       "id": 101,
       "title": "Happy Ho ho ho holidays! 🎉",
       "description": "Are you participating in our annual Advent Calendar to celebrate holidays and earn more?",
@@ -17,7 +17,7 @@ export const announcements = [
       "button_link": "/created/adventcalendar",
       "path": "/(hot|created|trending|rising|controversial)",
       "auth": true
-    },
+    },*/
     {
       "id": 102,
       "title": "Support Ecency! ❤️",
