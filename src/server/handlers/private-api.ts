@@ -344,6 +344,35 @@ export const fragmentsDelete = async (req: express.Request, res: express.Respons
     pipe(apiRequest(`fragments/${username}/${id}`, "DELETE"), res);
 }
 
+export const decks = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req, res);
+    if (!username) return;
+    pipe(apiRequest(`decks/${username}`, "GET"), res);
+}
+
+export const decksAdd = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req, res);
+    if (!username) return;
+    const {title, body, tags, meta} = req.body;
+    const data = {username, title, body, tags, meta};
+    pipe(apiRequest(`deck`, "POST", {}, data), res);
+}
+
+export const decksUpdate = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req, res);
+    if (!username) return;
+    const {id, title, body, tags, meta} = req.body;
+    const data = {username, title, body, tags, meta};
+    pipe(apiRequest(`decks/${username}/${id}`, "PUT", {}, data), res);
+}
+
+export const decksDelete = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req, res);
+    if (!username) return;
+    const {id} = req.body;
+    pipe(apiRequest(`decks/${username}/${id}`, "DELETE"), res);
+}
+
 export const pointsClaim = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) return;
