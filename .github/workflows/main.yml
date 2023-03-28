@@ -5,7 +5,7 @@ on:
       - main
 jobs:
   deps:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-20.04
     strategy:
       matrix:
         node-version: [14.19.3]
@@ -22,7 +22,7 @@ jobs:
         CI: true
   build:
     needs: deps
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-20.04
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
@@ -52,7 +52,7 @@ jobs:
 
   deploy:
     needs: build
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-20.04
     steps:
     - name: SSH and deploy node app
       uses: appleboy/ssh-action@master
