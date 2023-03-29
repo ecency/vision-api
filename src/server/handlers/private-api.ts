@@ -376,7 +376,7 @@ export const decksDelete = async (req: express.Request, res: express.Response) =
 export const recoveries = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) return;
-    pipe(apiRequest(`recovery/${username}`, "GET"), res);
+    pipe(apiRequest(`recoveries/${username}`, "GET"), res);
 }
 
 export const recoveriesAdd = async (req: express.Request, res: express.Response) => {
@@ -384,7 +384,7 @@ export const recoveriesAdd = async (req: express.Request, res: express.Response)
     if (!username) return;
     const {email, public_keys} = req.body;
     const data = {username, email, public_keys};
-    pipe(apiRequest(`recoveries`, "POST", {}, data), res);
+    pipe(apiRequest(`recovery`, "POST", {}, data), res);
 }
 
 export const recoveriesUpdate = async (req: express.Request, res: express.Response) => {
