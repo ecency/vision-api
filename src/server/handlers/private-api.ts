@@ -353,16 +353,16 @@ export const decks = async (req: express.Request, res: express.Response) => {
 export const decksAdd = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) return;
-    const {title, body, tags, meta} = req.body;
-    const data = {username, title, body, tags, meta};
+    const {title, settings,} = req.body;
+    const data = {username, title, settings};
     pipe(apiRequest(`deck`, "POST", {}, data), res);
 }
 
 export const decksUpdate = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) return;
-    const {id, title, body, tags, meta} = req.body;
-    const data = {username, title, body, tags, meta};
+    const {id, title, settings} = req.body;
+    const data = {username, title, settings};
     pipe(apiRequest(`decks/${username}/${id}`, "PUT", {}, data), res);
 }
 
@@ -371,6 +371,35 @@ export const decksDelete = async (req: express.Request, res: express.Response) =
     if (!username) return;
     const {id} = req.body;
     pipe(apiRequest(`decks/${username}/${id}`, "DELETE"), res);
+}
+
+export const recoveries = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req, res);
+    if (!username) return;
+    pipe(apiRequest(`recovery/${username}`, "GET"), res);
+}
+
+export const recoveriesAdd = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req, res);
+    if (!username) return;
+    const {email, public_keys} = req.body;
+    const data = {username, email, public_keys};
+    pipe(apiRequest(`recoveries`, "POST", {}, data), res);
+}
+
+export const recoveriesUpdate = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req, res);
+    if (!username) return;
+    const {id, email, public_keys} = req.body;
+    const data = {username, email, public_keys};
+    pipe(apiRequest(`recoveries/${username}/${id}`, "PUT", {}, data), res);
+}
+
+export const recoveriesDelete = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req, res);
+    if (!username) return;
+    const {id} = req.body;
+    pipe(apiRequest(`recoveries/${username}/${id}`, "DELETE"), res);
 }
 
 export const pointsClaim = async (req: express.Request, res: express.Response) => {
