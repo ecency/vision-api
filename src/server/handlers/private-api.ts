@@ -353,9 +353,9 @@ export const decks = async (req: express.Request, res: express.Response) => {
 export const decksAdd = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) return;
-    const {title, settings,} = req.body;
+    const {title, settings} = req.body;
     const data = {username, title, settings};
-    pipe(apiRequest(`deck`, "POST", {}, data), res);
+    pipe(apiRequest(`decks`, "POST", {}, data), res);
 }
 
 export const decksUpdate = async (req: express.Request, res: express.Response) => {
