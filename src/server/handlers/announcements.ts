@@ -35,6 +35,15 @@ export const announcements = [
       "button_link": "/",
       "path": "/",
       "auth": true
+    },
+    {
+      "id": 104,
+      "title": "Introducing Waves and Decks 2.0 🎉",
+      "description": "Short-content publishing, surfing is here! Next iteration of Social Dashboard will revolutionize your experience on Web3.0. ",
+      "button_text": "Okay",
+      "button_link": "/decks",
+      "path": "/(hot|created|trending|rising|controversial)",
+      "auth": true
     }
 ]
   
