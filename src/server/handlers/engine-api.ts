@@ -2,7 +2,9 @@ import express from "express";
 
 import {baseApiRequest, pipe} from "../util";
 
+//docs: https://hive-engine.github.io/engine-docs/
 const BASE_URL = 'https://api.hive-engine.com';
+
 const ENGINE_REWARDS_URL = 'https://scot-api.hive-engine.com/';
 const ENGINE_CHART_URL = 'https://info-api.tribaldex.com/market/ohlcv';
 
