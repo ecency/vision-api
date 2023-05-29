@@ -5,6 +5,10 @@ import {baseApiRequest, pipe} from "../util";
 const BASE_URL = 'https://api.hive-engine.com';
 const ENGINE_REWARDS_URL = 'https://scot-api.hive-engine.com/';
 const ENGIEN_CHART_URL = 'https://info-api.tribaldex.com/market/ohlcv';
+
+//docs: https://github.com/hive-engine/ssc_tokens_history/tree/hive#api-usage
+const ENGINE_ACCOUNT_HISTORY_URL = 'https://history.hive-engine.com/accountHistory';
+
 const PATH_RPC = 'rpc';
 export const PATH_CONTRACTS = 'contracts';
 
@@ -36,4 +40,13 @@ export const echartapi = async (req: express.Request, res: express.Response) => 
 
     pipe(baseApiRequest(url, "GET", headers, undefined, params), res);
 }
+
+export const engineAccountHistory =  (req: express.Request, res: express.Response) => {
+    const params = req.query;
+
+    const url = `${ENGINE_ACCOUNT_HISTORY_URL}`;
+    const headers = { 'Content-type': 'application/json' };
+
+    pipe(baseApiRequest(url, "GET", headers, undefined, params), res);
+} 
 

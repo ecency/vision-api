@@ -34,6 +34,7 @@ server
     .post("^/private-api/engine-api$", engineApi.eapi)
     .get("^/private-api/engine-reward-api/:username$", engineApi.erewardapi)
     .get("^/private-api/engine-chart-api$", engineApi.echartapi)
+    .get("^/private-api/engine-account-history", engineApi.engineAccountHistory)
 
     // Private Api
     .get("^/private-api/received-vesting/:username$", privateApi.receivedVesting)
