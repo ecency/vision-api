@@ -53,6 +53,7 @@ server
     .post("^/private-api/points$", privateApi.points)
     .post("^/private-api/point-list$", privateApi.pointList)
     .post("^/private-api/account-create$", privateApi.createAccount)
+    .post("^/private-api/account-create-friend$", privateApi.createAccountFriend)
     .post("^/private-api/subscribe$", privateApi.subscribeNewsletter)
     .post("^/private-api/notifications$", privateApi.notifications)
 

@@ -110,6 +110,15 @@ export const createAccount = async (req: express.Request, res: express.Response)
     pipe(apiRequest(`signup/account-create`, "POST", headers, payload), res);
 };
 
+export const createAccountFriend = async (req: express.Request, res: express.Response) => {
+    const {username, email, friend} = req.body;
+
+    const headers = {'X-Real-IP-V': req.headers['x-forwarded-for'] || ''};
+    const payload = {username, email, friend};
+
+    pipe(apiRequest(`signup/account-create-friend`, "POST", headers, payload), res);
+};
+
 export const notifications = async (req: express.Request, res: express.Response) => {
     let username = await validateCode(req, res);
     const {filter, since, limit, user} = req.body;
