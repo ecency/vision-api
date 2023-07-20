@@ -498,3 +498,48 @@ export const marketData = async (req: express.Request, res: express.Response) =>
 export const marketDataLatest = async (req: express.Request, res: express.Response) => {
     pipe(apiRequest(`market-data/latest`, "GET"), res);
 };
+
+export const report = async (req: express.Request, res: express.Response) => {
+    res.send({
+        status: 200,
+        body: {
+            status: 'ok'
+        }
+    });
+};
+
+export const requestDelete = async (req: express.Request, res: express.Response) => {
+    res.send({
+        status: 200,
+        body: {
+            status: 'ok'
+        }
+    });
+};
+
+export const reblogs = async (req: express.Request, res: express.Response) => {
+    const {author, permlink} = req.params;
+    pipe(apiRequest(`post-reblogs/${author}/${permlink}`, "GET"), res);
+};
+
+export const reblogCount = async (req: express.Request, res: express.Response) => {
+    const {author, permlink} = req.params;
+    pipe(apiRequest(`post-reblog-count/${author}/${permlink}`, "GET"), res);
+};
+
+export const gameGet = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req, res);
+    if (!username) return;
+    const {game_type} = req.params;
+    pipe(apiRequest(`game/${username}?type=${game_type}`, "GET"), res);
+};
+
+export const gamePost = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req, res);
+    if (!username) return;
+
+    const {game_type} = req.params;
+    const {key} = req.body;
+    const data = {key};
+    pipe(apiRequest(`game/${username}?type=${game_type}`, "POST", {}, data), res);
+};

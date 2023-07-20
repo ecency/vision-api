@@ -56,6 +56,10 @@ server
     .post("^/private-api/account-create-friend$", privateApi.createAccountFriend)
     .post("^/private-api/subscribe$", privateApi.subscribeNewsletter)
     .post("^/private-api/notifications$", privateApi.notifications)
+    .post("^/private-api/report$", privateApi.report)
+    .post("^/private-api/request-delete$", privateApi.report)
+    .post("^/private-api/post-reblogs$", privateApi.reblogs)
+    .post("^/private-api/post-reblog-count$", privateApi.reblogCount)
 
     /* Login required private api endpoints */
     .post("^/private-api/notifications/unread$", privateApi.unreadNotifications)
@@ -99,6 +103,8 @@ server
     .post("^/private-api/boost-options$", privateApi.boostOptions)
     .post("^/private-api/boosted-post$", privateApi.boostedPost)
     .post("^/private-api/usr-activity$", privateApi.activities)
+    .post("^/private-api/get-game$", privateApi.gameGet)
+    .post("^/private-api/post-game$", privateApi.gamePost)
 
     // Health check script for docker swarm
     .get("^/healthcheck.json$", healthCheck)
