@@ -543,3 +543,12 @@ export const gamePost = async (req: express.Request, res: express.Response) => {
     const data = {key};
     pipe(apiRequest(`game/${username}?type=${game_type}`, "POST", {}, data), res);
 };
+
+export const purchaseOrder = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req, res);
+    if (!username) return;
+
+    const {platform, product, receipt, user } = req.body;
+    const data = {platform, product, receipt, user};
+    pipe(apiRequest(`purchase-order`, "POST", {}, data), res);
+};

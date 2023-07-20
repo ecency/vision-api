@@ -105,6 +105,7 @@ server
     .post("^/private-api/usr-activity$", privateApi.activities)
     .post("^/private-api/get-game$", privateApi.gameGet)
     .post("^/private-api/post-game$", privateApi.gamePost)
+    .post("^/private-api/purchase-order$", privateApi.purchaseOrder)
 
     // Health check script for docker swarm
     .get("^/healthcheck.json$", healthCheck)
