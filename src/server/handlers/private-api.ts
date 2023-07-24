@@ -461,7 +461,7 @@ export const activities = async (req: express.Request, res: express.Response) =>
         let identifier = `${vip}`;
         const client = createClient({
             socket: {
-                host: 'redis',
+                host: '127.0.0.1',
                 port: 6379
             },
             password: config.redisPass
