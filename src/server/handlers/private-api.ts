@@ -468,16 +468,33 @@ export const activities = async (req: express.Request, res: express.Response) =>
         });
         await client.connect();
         const redis = new Redis(client);
-        
-        const rec = await redis.get(identifier);
+        let rec;
+        try {
+            rec = await redis.get(identifier);
+        } catch (e) {
+            console.error(e);
+            console.error("Redis is unavailable. Cache ignoring");
+        }
+
         if (rec) {
             if (new Date().getTime() - new Date(Number(rec)).getTime() < 900000) {
                 res.status(201).send({})
                 return
             }
-            await redis.set(identifier, new Date().getTime().toString());
+            try {
+                await redis.set(identifier, new Date().getTime().toString());
+            } catch (error) {
+                console.error(error);
+                console.error("Redis is unavailable. Cache ignoring");
+            }
+            
         } else {
-            await redis.set(identifier, new Date().getTime().toString());
+            try {
+                await redis.set(identifier, new Date().getTime().toString());
+            } catch (error) {
+                console.error(error);
+                console.error("Redis is unavailable. Cache ignoring");
+            }
         }
     }
 
