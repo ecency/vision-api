@@ -14,6 +14,8 @@ services:
       - REDIS_HOST_PASSWORD
     ports:
       - "4000:4000"
+    networks:
+      default: null
     deploy:
       replicas: 4
       resources:
@@ -33,5 +35,6 @@ services:
         delay: 5s
         max_attempts: 5
         window: 60s
-    networks:
-      - vision
+networks:
+  default:
+    name: vision
