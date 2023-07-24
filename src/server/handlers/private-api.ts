@@ -466,14 +466,18 @@ export const activities = async (req: express.Request, res: express.Response) =>
             },
             password: config.redisPass
         });
-        await client.connect();
+        try {
+            await client.connect();    
+        } catch (error) {
+            console.error("Redis connection failed.");
+        }
         const redis = new Redis(client);
         let rec;
         try {
             rec = await redis.get(identifier);
         } catch (e) {
             console.error(e);
-            console.error("Redis is unavailable. Cache ignoring");
+            console.error("Redis is unavailable. Cache get failed.");
         }
 
         if (rec) {
@@ -485,7 +489,7 @@ export const activities = async (req: express.Request, res: express.Response) =>
                 await redis.set(identifier, new Date().getTime().toString());
             } catch (error) {
                 console.error(error);
-                console.error("Redis is unavailable. Cache ignoring");
+                console.error("Redis is unavailable. Cache set failed.");
             }
             
         } else {
@@ -493,7 +497,7 @@ export const activities = async (req: express.Request, res: express.Response) =>
                 await redis.set(identifier, new Date().getTime().toString());
             } catch (error) {
                 console.error(error);
-                console.error("Redis is unavailable. Cache ignoring");
+                console.error("Redis is unavailable. Cache set failed.");
             }
         }
     }
