@@ -8,4 +8,5 @@ export default {
     searchApiToken: process.env.SEARCH_API_SECRET || "searchApiSecret",
     revueToken: process.env.REVUE_TOKEN || "revueApiToken",
     redisUrl: process.env.REDIS_URL || "redisUrl",
+    redisPass: process.env.REDIS_HOST_PASSWORD || ""
 };

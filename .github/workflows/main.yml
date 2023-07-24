@@ -64,12 +64,13 @@ jobs:
         SEARCH_API_SECRET: ${{secrets.SEARCH_API_SECRET}}
         REVUE_TOKEN: ${{secrets.REVUE_TOKEN}}
         REDIS_URL: ${{secrets.REDIS_URL}}
+        REDIS_HOST_PASSWORD: ${{secrets.REDIS_HOST_PASSWORD}}
         API_PORT: ${{secrets.API_PORT}}
       with:
         host: ${{ secrets.SSH_PRODUCTION_HOST }}
         username: ${{ secrets.SSH_USERNAME }}
         key: ${{ secrets.SSH_KEY }}
-        envs: PRIVATE_API_ADDR,PRIVATE_API_AUTH,HIVESIGNER_CLIENT_SECRET,SEARCH_API_ADDR,SEARCH_API_SECRET,REVUE_TOKEN,REDIS_URL,API_PORT
+        envs: PRIVATE_API_ADDR,PRIVATE_API_AUTH,HIVESIGNER_CLIENT_SECRET,SEARCH_API_ADDR,SEARCH_API_SECRET,REVUE_TOKEN,REDIS_URL,API_PORT,REDIS_HOST_PASSWORD
         script: |
           export PRIVATE_API_ADDR=$PRIVATE_API_ADDR
           export PRIVATE_API_AUTH=$PRIVATE_API_AUTH
@@ -78,6 +79,7 @@ jobs:
           export SEARCH_API_SECRET=$SEARCH_API_SECRET
           export REVUE_TOKEN=$REVUE_TOKEN
           export REDIS_URL=$REDIS_URL
+          export REDIS_HOST_PASSWORD=$REDIS_HOST_PASSWORD
           export API_PORT=$API_PORT
           cd ~/vision-api
           git pull origin main

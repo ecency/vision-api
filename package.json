@@ -19,7 +19,7 @@
     "node-sass": "^4.14.1",
     "react": "^16.8.6",
     "react-dom": "^16.8.6",
-    "redis": "^3.1.2"
+    "redis": "^4.6.7"
   },
   "devDependencies": {
     "@types/bytebuffer": "^5.0.41",
@@ -28,7 +28,7 @@
     "@types/node": "^12.6.6",
     "@types/react": "^16.8.23",
     "@types/react-dom": "^16.8.4",
-    "@types/redis": "^2.8.32",
+    "@types/redis": "^4.0.11",
     "@types/webpack-env": "^1.14.0",
     "razzle": "^3.0.0",
     "razzle-plugin-scss": "^3.1.3",
