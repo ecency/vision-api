@@ -11,6 +11,7 @@ services:
       - SEARCH_API_SECRET
       - REVUE_TOKEN
       - REDIS_URL
+      - REDIS_HOST_PASSWORD
     ports:
       - "4000:4000"
     deploy:
@@ -32,3 +33,5 @@ services:
         delay: 5s
         max_attempts: 5
         window: 60s
+    networks:
+      - vision
