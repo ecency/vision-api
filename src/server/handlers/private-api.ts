@@ -456,7 +456,7 @@ export const activities = async (req: express.Request, res: express.Response) =>
     if (!username) return;
     const {ty, bl, tx} = req.body;
 
-    if (ty === 10) {
+    /*if (ty === 10) {
         const vip = req.headers['x-real-ip'] || req.connection.remoteAddress || req.headers['x-forwarded-for'] || '';
         let identifier = `${vip}`;
         const client = createClient({
@@ -500,7 +500,7 @@ export const activities = async (req: express.Request, res: express.Response) =>
                 console.error("Redis is unavailable. Cache set failed.");
             }
         }
-    }
+    }*/
 
     let pipe_json = {
         "us": username,
