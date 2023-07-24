@@ -1,12 +1,17 @@
 import express from "express";
 import hs from "hivesigner";
 import axios, {AxiosRequestConfig} from "axios";
+import { createClient, RedisClient } from 'redis';
+import { promisify } from 'util';
 
 import config from "../../config";
 import {announcements} from "./announcements";
 import {apiRequest, getPromotedEntries} from "../helper";
 
 import {pipe} from "../util";
+
+const redisGetAsync = (client: RedisClient) => promisify(client.get).bind(client);
+const redisSetAsync = (client: RedisClient) => promisify(client.set).bind(client);
 
 const validateCode = async (req: express.Request, res: express.Response): Promise<string | false> => {
     const {code} = req.body;
@@ -453,6 +458,25 @@ export const activities = async (req: express.Request, res: express.Response) =>
     const username = await validateCode(req, res);
     if (!username) return;
     const {ty, bl, tx} = req.body;
+
+    if (ty === 10) {
+        const vip = req.headers['x-real-ip'] || req.connection.remoteAddress || req.headers['x-forwarded-for'] || '';
+        let identifier = `${vip}`;
+        const client = createClient({
+            url: config.redisUrl
+        });
+
+        const rec = await redisGetAsync(client)(identifier);
+        if (rec) {
+            if (new Date().getTime() - new Date(Number(rec)).getTime() < 900000) {
+                res.status(201).send({})
+                return
+            }
+            await redisSetAsync(client)(identifier, new Date().getTime().toString());
+        } else {
+            await redisSetAsync(client)(identifier, new Date().getTime().toString());
+        }
+    }
 
     let pipe_json = {
         "us": username,
