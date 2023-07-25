@@ -5,8 +5,5 @@ export default {
     privateApiAuth: process.env.PRIVATE_API_AUTH || "privateapiauth",
     hsClientSecret: process.env.HIVESIGNER_CLIENT_SECRET || "hivesignerclientsecret",
     searchApiAddr: process.env.SEARCH_API_ADDR || "https://api.search.com",
-    searchApiToken: process.env.SEARCH_API_SECRET || "searchApiSecret",
-    revueToken: process.env.REVUE_TOKEN || "revueApiToken",
-    redisUrl: process.env.REDIS_URL || "redisUrl",
-    redisPass: process.env.REDIS_HOST_PASSWORD || ""
+    searchApiToken: process.env.SEARCH_API_SECRET || "searchApiSecret"
 };

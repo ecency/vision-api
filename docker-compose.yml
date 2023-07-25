@@ -9,9 +9,6 @@ services:
       - HIVESIGNER_CLIENT_SECRET
       - SEARCH_API_ADDR
       - SEARCH_API_SECRET
-      - REVUE_TOKEN
-      - REDIS_URL
-      - REDIS_HOST_PASSWORD
     ports:
       - "4000:4000"
     networks:

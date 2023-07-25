@@ -1,14 +1,13 @@
 import express from "express";
 import hs from "hivesigner";
 import axios, {AxiosRequestConfig} from "axios";
-import { createClient} from 'redis';
 
 import config from "../../config";
 import {announcements} from "./announcements";
 import {apiRequest, getPromotedEntries} from "../helper";
-import { Redis } from "../redis";
 
 import {pipe} from "../util";
+import { cache } from '../cache';
 
 const validateCode = async (req: express.Request, res: express.Response): Promise<string | false> => {
     const {code} = req.body;
@@ -456,28 +455,16 @@ export const activities = async (req: express.Request, res: express.Response) =>
     if (!username) return;
     const {ty, bl, tx} = req.body;
 
-    /*if (ty === 10) {
+    if (ty === 10) {
         const vip = req.headers['x-real-ip'] || req.connection.remoteAddress || req.headers['x-forwarded-for'] || '';
         let identifier = `${vip}`;
-        const client = createClient({
-            socket: {
-                host: 'redis',
-                port: 6379
-            },
-            password: config.redisPass
-        });
-        try {
-            await client.connect();    
-        } catch (error) {
-            console.error("Redis connection failed.");
-        }
-        const redis = new Redis(client);
+        
         let rec;
         try {
-            rec = await redis.get(identifier);
+            rec = cache.get(identifier);
         } catch (e) {
             console.error(e);
-            console.error("Redis is unavailable. Cache get failed.");
+            console.error("Cache get failed.");
         }
 
         if (rec) {
@@ -486,21 +473,21 @@ export const activities = async (req: express.Request, res: express.Response) =>
                 return
             }
             try {
-                await redis.set(identifier, new Date().getTime().toString());
+                cache.set(identifier, new Date().getTime().toString());
             } catch (error) {
                 console.error(error);
-                console.error("Redis is unavailable. Cache set failed.");
+                console.error("Cache set failed.");
             }
             
         } else {
             try {
-                await redis.set(identifier, new Date().getTime().toString());
+                cache.set(identifier, new Date().getTime().toString(), 901);
             } catch (error) {
                 console.error(error);
-                console.error("Redis is unavailable. Cache set failed.");
+                console.error("Cache set failed.");
             }
         }
-    }*/
+    }
 
     let pipe_json = {
         "us": username,
@@ -518,24 +505,8 @@ export const activities = async (req: express.Request, res: express.Response) =>
 
 export const subscribeNewsletter = async (req: express.Request, res: express.Response) => {
     const {email} = req.body;
-    if (email) {
-        const [first_name] = email.split('@');
-        const data = {email, first_name};
-        
-        const requestConf: AxiosRequestConfig = {
-            url: "https://www.getrevue.co/api/v2/subscribers",
-            method: "POST",
-            validateStatus: () => true,
-            responseType: "json",
-            headers: {"Authorization": `Token ${config.revueToken}`},
-            data: {...data}
-        }
-
-        pipe(axios(requestConf), res)    
-    } else {
-        res.status(500).send("Server Error");
-    }
-    
+    const data = {email};
+    pipe(apiRequest(`newsletter/subscribe`, "POST", {}, data), res);
 }
 
 export const marketData = async (req: express.Request, res: express.Response) => {
