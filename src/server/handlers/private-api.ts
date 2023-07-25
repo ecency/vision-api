@@ -473,7 +473,7 @@ export const activities = async (req: express.Request, res: express.Response) =>
                 return
             }
             try {
-                cache.set(identifier, new Date().getTime().toString());
+                cache.set(identifier, new Date().getTime().toString(), 901);
             } catch (error) {
                 console.error(error);
                 console.error("Cache set failed.");
