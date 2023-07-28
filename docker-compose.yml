@@ -34,4 +34,4 @@ services:
         window: 60s
 networks:
   default:
-    name: vision
+    name: vision-api
