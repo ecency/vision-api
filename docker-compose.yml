@@ -31,7 +31,7 @@ services:
         condition: any
         delay: 5s
         max_attempts: 5
-        window: 60s
+        window: 15s
 networks:
   default:
     name: vision-api
