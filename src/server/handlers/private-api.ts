@@ -469,7 +469,8 @@ export const activities = async (req: express.Request, res: express.Response) =>
 
         if (rec) {
             if (new Date().getTime() - new Date(Number(rec)).getTime() < 900000) {
-                return res.status(201).send({});
+                res.status(201).send({});
+                return;
             }
             try {
                 cache.set(identifier, new Date().getTime().toString(), 901);
