@@ -469,8 +469,7 @@ export const activities = async (req: express.Request, res: express.Response) =>
 
         if (rec) {
             if (new Date().getTime() - new Date(Number(rec)).getTime() < 900000) {
-                res.status(201).send({})
-                return
+                return res.status(201).send({});
             }
             try {
                 cache.set(identifier, new Date().getTime().toString(), 901);
@@ -478,7 +477,6 @@ export const activities = async (req: express.Request, res: express.Response) =>
                 console.error(error);
                 console.error("Cache set failed.");
             }
-            
         } else {
             try {
                 cache.set(identifier, new Date().getTime().toString(), 901);

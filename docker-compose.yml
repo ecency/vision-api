@@ -14,13 +14,13 @@ services:
     networks:
       default: null
     deploy:
-      replicas: 4
+      replicas: 1
       resources:
         limits:
           cpus: "0.9"
           memory: 2048M
       update_config:
-        parallelism: 4
+        parallelism: 1
         order: start-first
         failure_action: rollback
         delay: 10s
