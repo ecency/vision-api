@@ -60,6 +60,7 @@ server
     .post("^/private-api/request-delete$", privateApi.report)
     .post("^/private-api/post-reblogs$", privateApi.reblogs)
     .post("^/private-api/post-reblog-count$", privateApi.reblogCount)
+    .post("^/private-api/portfolio$", privateApi.portfolio)
 
     /* Login required private api endpoints */
     .post("^/private-api/notifications/unread$", privateApi.unreadNotifications)
