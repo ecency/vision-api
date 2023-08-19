@@ -100,6 +100,12 @@ export const pointList = async (req: express.Request, res: express.Response) => 
     pipe(apiRequest(u, "GET"), res);
 };
 
+export const portfolio = async (req: express.Request, res: express.Response) => {
+    const {username} = req.body;
+    let u = `users/${username}/portfolio`;
+    pipe(apiRequest(u, "GET"), res);
+};
+
 export const createAccount = async (req: express.Request, res: express.Response) => {
     const {username, email, referral} = req.body;
 
