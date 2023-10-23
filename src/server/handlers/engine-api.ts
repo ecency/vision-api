@@ -18,7 +18,7 @@ export const eapi = async (req: express.Request, res: express.Response) => {
     const data = req.body;
 
     const url = `${BASE_URL}/${PATH_RPC}/${PATH_CONTRACTS}`;
-    const headers = { 'Content-type': 'application/json' };
+    const headers = { 'Content-type': 'application/json', 'USER-Agent': 'Ecency Apps' };
 
     pipe(baseApiRequest(url, "POST", headers, data), res);
 }
@@ -29,7 +29,7 @@ export const erewardapi = async (req: express.Request, res: express.Response) =>
     const params = req.query;
 
     const url = `${ENGINE_REWARDS_URL}@${username}`;
-    const headers = { 'Content-type': 'application/json' };
+    const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency Apps' };
 
     pipe(baseApiRequest(url, "GET", headers, undefined, params), res);
 }
@@ -38,7 +38,7 @@ export const echartapi = async (req: express.Request, res: express.Response) => 
     const params = req.query;
 
     const url = `${ENGINE_CHART_URL}`;
-    const headers = { 'Content-type': 'application/json' };
+    const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency Apps' };
 
     pipe(baseApiRequest(url, "GET", headers, undefined, params), res);
 }
@@ -47,7 +47,7 @@ export const engineAccountHistory =  (req: express.Request, res: express.Respons
     const params = req.query;
 
     const url = `${ENGINE_ACCOUNT_HISTORY_URL}`;
-    const headers = { 'Content-type': 'application/json' };
+    const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency Apps' };
 
     pipe(baseApiRequest(url, "GET", headers, undefined, params), res);
 }
