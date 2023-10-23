@@ -3,7 +3,7 @@ import express from "express";
 import {baseApiRequest, pipe} from "../util";
 
 //docs: https://hive-engine.github.io/engine-docs/
-const BASE_URL = 'https://api.hive-engine.com';
+const BASE_URL = 'https://he.ausbit.dev';//'https://api.hive-engine.com';
 
 const ENGINE_REWARDS_URL = 'https://scot-api.hive-engine.com/';
 const ENGINE_CHART_URL = 'https://info-api.tribaldex.com/market/ohlcv';
@@ -50,5 +50,5 @@ export const engineAccountHistory =  (req: express.Request, res: express.Respons
     const headers = { 'Content-type': 'application/json' };
 
     pipe(baseApiRequest(url, "GET", headers, undefined, params), res);
-} 
+}
 
