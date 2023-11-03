@@ -17,7 +17,7 @@ export const announcements = [
       "button_link": "/created/adventcalendar",
       "path": "/(hot|created|trending|rising|controversial)",
       "auth": true
-    },*/
+    },
     {
       "id": 102,
       "title": "Support Ecency! ❤️",
@@ -35,7 +35,7 @@ export const announcements = [
       "button_link": "/",
       "path": "/",
       "auth": true
-    },
+    },*/
     {
       "id": 104,
       "title": "Introducing Waves and Decks 2.0 🎉",
@@ -44,6 +44,14 @@ export const announcements = [
       "button_link": "/decks",
       "path": "/(hot|created|trending|rising|controversial)",
       "auth": true
+    },
+    {
+        "id": 105,
+        "title": "Support Ecency! ❤️",
+        "description": "You can support Ecency team by voting on New Ecency proposal. Every vote and support counts!",
+        "button_text": "Support now",
+        "button_link": "/proposals/283",
+        "path": "/@.+/(blog|posts|wallet|points|engine|permissions|spk)",
+        "auth": true
     }
 ]
-  
