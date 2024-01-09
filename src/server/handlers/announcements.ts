@@ -35,7 +35,7 @@ export const announcements = [
       "button_link": "/",
       "path": "/",
       "auth": true
-    },*/
+    },
     {
       "id": 104,
       "title": "Introducing Waves and Decks 2.0 🎉",
@@ -49,6 +49,15 @@ export const announcements = [
         "id": 105,
         "title": "Support Ecency! ❤️",
         "description": "You can support Ecency team by voting on New Ecency proposal. Every vote and support counts!",
+        "button_text": "Support now",
+        "button_link": "/proposals/283",
+        "path": "/@.+/(blog|posts|wallet|points|engine|permissions|spk)",
+        "auth": true
+    },*/
+    {
+        "id": 106,
+        "title": "Vote New Proposal! ❤️",
+        "description": "We still need your support. Every vote and support matters!",
         "button_text": "Support now",
         "button_link": "/proposals/283",
         "path": "/@.+/(blog|posts|wallet|points|engine|permissions|spk)",
