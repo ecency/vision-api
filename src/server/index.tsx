@@ -107,12 +107,16 @@ server
     .post("^/private-api/get-game$", privateApi.gameGet)
     .post("^/private-api/post-game$", privateApi.gamePost)
     .post("^/private-api/purchase-order$", privateApi.purchaseOrder)
+    .post("^/private-api/chats$", privateApi.chats)
+    .post("^/private-api/chats-add$", privateApi.chatsAdd)
+    .post("^/private-api/chats-update$", privateApi.chatsUpdate)
+
 
     // Health check script for docker swarm
     .get("^/healthcheck.json$", healthCheck)
 
     // For all others paths
     .get("*", fallbackHandler);
-  
+
 
 export default server;

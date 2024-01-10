@@ -464,7 +464,7 @@ export const activities = async (req: express.Request, res: express.Response) =>
     if (ty === 10) {
         const vip = req.headers['x-real-ip'] || req.connection.remoteAddress || req.headers['x-forwarded-for'] || '';
         let identifier = `${vip}`;
-        
+
         let rec;
         try {
             rec = cache.get(identifier);
@@ -577,3 +577,27 @@ export const purchaseOrder = async (req: express.Request, res: express.Response)
     const data = {platform, product, receipt, user};
     pipe(apiRequest(`purchase-order`, "POST", {}, data), res);
 };
+
+export const chats = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req, res);
+    if (!username) return;
+    pipe(apiRequest(`chats/${username}`, "GET"), res);
+}
+
+export const chatsAdd = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req, res);
+    if (!username) return;
+    const {key, pubkey, iv, meta} = req.body;
+    const data = {username, key, pubkey, iv, meta};
+    pipe(apiRequest(`chats`, "POST", {}, data), res);
+}
+
+export const chatsUpdate = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req, res);
+    if (!username) return;
+    const {id, key, pubkey, iv, meta} = req.body;
+    const data = {key, pubkey, iv, meta};
+    pipe(apiRequest(`chats/${username}/${id}`, "PUT", {}, data), res);
+}
+
+
