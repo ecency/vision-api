@@ -600,4 +600,9 @@ export const chatsUpdate = async (req: express.Request, res: express.Response) =
     pipe(apiRequest(`chats/${username}/${id}`, "PUT", {}, data), res);
 }
 
+export const chatsPub = async (req: express.Request, res: express.Response) => {
+    const {username} = req.params;
+    pipe(apiRequest(`chats/pub/${username}`, "GET"), res);
+}
+
 

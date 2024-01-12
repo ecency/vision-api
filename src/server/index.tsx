@@ -48,6 +48,7 @@ server
     .get("^/private-api/referrals/:username$", privateApi.referrals)
     .get("^/private-api/referrals/:username/stats$", privateApi.referralsStats)
     .get("^/private-api/announcements$", privateApi.getAnnouncement)
+    .get("^/private-api/chats-pub", privateApi.chatsPub)
 
     .post("^/private-api/comment-history$", privateApi.commentHistory)
     .post("^/private-api/points$", privateApi.points)
@@ -61,6 +62,7 @@ server
     .post("^/private-api/post-reblogs$", privateApi.reblogs)
     .post("^/private-api/post-reblog-count$", privateApi.reblogCount)
     .post("^/private-api/portfolio$", privateApi.portfolio)
+
 
     /* Login required private api endpoints */
     .post("^/private-api/notifications/unread$", privateApi.unreadNotifications)
