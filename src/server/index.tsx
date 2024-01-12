@@ -48,7 +48,7 @@ server
     .get("^/private-api/referrals/:username$", privateApi.referrals)
     .get("^/private-api/referrals/:username/stats$", privateApi.referralsStats)
     .get("^/private-api/announcements$", privateApi.getAnnouncement)
-    .get("^/private-api/chats-pub", privateApi.chatsPub)
+    .get("^/private-api/chats-pub/:username$", privateApi.chatsPub)
 
     .post("^/private-api/comment-history$", privateApi.commentHistory)
     .post("^/private-api/points$", privateApi.points)
