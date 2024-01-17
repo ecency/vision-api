@@ -605,4 +605,15 @@ export const chatsPub = async (req: express.Request, res: express.Response) => {
     pipe(apiRequest(`chats/pub/${username}`, "GET"), res);
 }
 
+export const channelAdd = async (req: express.Request, res: express.Response) => {
+    const _username = await validateCode(req, res);
+    if (!_username && _username !== 'ecency') return;
+    const {username, channel_id, meta} = req.body;
+    const data = {username, channel_id, meta};
+    pipe(apiRequest(`channel`, "POST", {}, data), res);
+}
 
+export const channelGet = async (req: express.Request, res: express.Response) => {
+    const {username} = req.params;
+    pipe(apiRequest(`channel/${username}`, "GET"), res);
+}

@@ -49,6 +49,7 @@ server
     .get("^/private-api/referrals/:username/stats$", privateApi.referralsStats)
     .get("^/private-api/announcements$", privateApi.getAnnouncement)
     .get("^/private-api/chats-pub/:username$", privateApi.chatsPub)
+    .get("^/private-api/channel/:username$", privateApi.channelGet)
 
     .post("^/private-api/comment-history$", privateApi.commentHistory)
     .post("^/private-api/points$", privateApi.points)
@@ -112,6 +113,7 @@ server
     .post("^/private-api/chats$", privateApi.chats)
     .post("^/private-api/chats-add$", privateApi.chatsAdd)
     .post("^/private-api/chats-update$", privateApi.chatsUpdate)
+    .post("^/private-api/channel-add$", privateApi.channelAdd)
 
 
     // Health check script for docker swarm
