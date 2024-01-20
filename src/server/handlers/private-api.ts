@@ -130,11 +130,11 @@ export const notifications = async (req: express.Request, res: express.Response)
 
     if (!username) {
         if (!user) {
-            return;
+            res.status(401).send("Unauthorized");
         } else {
             username = user;
         }
-    };
+    }
     // if user defined but not same as user's code
     if (user && username!==user) {
         username = user;
@@ -165,14 +165,14 @@ export const notifications = async (req: express.Request, res: express.Response)
 
 export const unreadNotifications = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
 
     pipe(apiRequest(`activities/${username}/unread-count`, "GET"), res);
 };
 
 export const markNotifications = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");;
 
     const {id} = req.body;
     const data: { id?: string } = {};
@@ -186,7 +186,7 @@ export const markNotifications = async (req: express.Request, res: express.Respo
 
 export const registerDevice = async (req: express.Request, res: express.Response) => {
     const _username = await validateCode(req, res);
-    if (!_username) return;
+    if (!_username) res.status(401).send("Unauthorized");
     const {username, token, system, allows_notify, notify_types} = req.body;
     const data = {username, token, system, allows_notify, notify_types};
     pipe(apiRequest(`rgstrmbldvc/`, "POST", {}, data), res);
@@ -194,28 +194,28 @@ export const registerDevice = async (req: express.Request, res: express.Response
 
 export const detailDevice = async (req: express.Request, res: express.Response) => {
     const _username = await validateCode(req, res);
-    if (!_username) return;
+    if (!_username) res.status(401).send("Unauthorized");
     const {username, token} = req.body;
     pipe(apiRequest(`mbldvcdtl/${username}/${token}`, "GET"), res);
 };
 
 export const images = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
 
     pipe(apiRequest(`images/${username}`, "GET"), res);
 }
 
 export const imagesDelete = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {id} = req.body;
     pipe(apiRequest(`images/${username}/${id}`, "DELETE"), res);
 }
 
 export const imagesAdd = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {url} = req.body;
     const data = {username, image_url: url};
     pipe(apiRequest(`image`, "POST", {}, data), res);
@@ -223,13 +223,13 @@ export const imagesAdd = async (req: express.Request, res: express.Response) => 
 
 export const drafts = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     pipe(apiRequest(`drafts/${username}`, "GET"), res);
 }
 
 export const draftsAdd = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {title, body, tags, meta} = req.body;
     const data = {username, title, body, tags, meta};
     pipe(apiRequest(`draft`, "POST", {}, data), res);
@@ -237,7 +237,7 @@ export const draftsAdd = async (req: express.Request, res: express.Response) => 
 
 export const draftsUpdate = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {id, title, body, tags, meta} = req.body;
     const data = {username, title, body, tags, meta};
     pipe(apiRequest(`drafts/${username}/${id}`, "PUT", {}, data), res);
@@ -245,20 +245,20 @@ export const draftsUpdate = async (req: express.Request, res: express.Response) 
 
 export const draftsDelete = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {id} = req.body;
     pipe(apiRequest(`drafts/${username}/${id}`, "DELETE"), res);
 }
 
 export const bookmarks = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     pipe(apiRequest(`bookmarks/${username}`, "GET"), res);
 }
 
 export const bookmarksAdd = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {author, permlink} = req.body;
     const data = {username, author, permlink, chain: 'steem'};
     pipe(apiRequest(`bookmark`, "POST", {}, data), res);
@@ -266,20 +266,20 @@ export const bookmarksAdd = async (req: express.Request, res: express.Response) 
 
 export const bookmarksDelete = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {id} = req.body;
     pipe(apiRequest(`bookmarks/${username}/${id}`, "DELETE"), res);
 }
 
 export const schedules = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     pipe(apiRequest(`schedules/${username}`, "GET"), res);
 }
 
 export const schedulesAdd = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
 
     const {permlink, title, body, meta, options, schedule, reblog} = req.body;
 
@@ -289,34 +289,34 @@ export const schedulesAdd = async (req: express.Request, res: express.Response) 
 
 export const schedulesDelete = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {id} = req.body;
     pipe(apiRequest(`schedules/${username}/${id}`, "DELETE"), res);
 }
 
 export const schedulesMove = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {id} = req.body;
     pipe(apiRequest(`schedules/${username}/${id}`, "PUT"), res);
 }
 
 export const favorites = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     pipe(apiRequest(`favorites/${username}`, "GET"), res);
 }
 
 export const favoritesCheck = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {account} = req.body;
     pipe(apiRequest(`isfavorite/${username}/${account}`, "GET"), res);
 }
 
 export const favoritesAdd = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {account} = req.body;
     const data = {username, account};
     pipe(apiRequest(`favorite`, "POST", {}, data), res);
@@ -324,20 +324,20 @@ export const favoritesAdd = async (req: express.Request, res: express.Response) 
 
 export const favoritesDelete = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {account} = req.body;
     pipe(apiRequest(`favoriteUser/${username}/${account}`, "DELETE"), res);
 }
 
 export const fragments = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     pipe(apiRequest(`fragments/${username}`, "GET"), res);
 }
 
 export const fragmentsAdd = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {title, body} = req.body;
     const data = {username, title, body};
     pipe(apiRequest(`fragment`, "POST", {}, data), res);
@@ -345,7 +345,7 @@ export const fragmentsAdd = async (req: express.Request, res: express.Response) 
 
 export const fragmentsUpdate = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {id, title, body} = req.body;
     const data = {title, body};
     pipe(apiRequest(`fragments/${username}/${id}`, "PUT", {}, data), res);
@@ -353,20 +353,20 @@ export const fragmentsUpdate = async (req: express.Request, res: express.Respons
 
 export const fragmentsDelete = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {id} = req.body;
     pipe(apiRequest(`fragments/${username}/${id}`, "DELETE"), res);
 }
 
 export const decks = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     pipe(apiRequest(`decks/${username}`, "GET"), res);
 }
 
 export const decksAdd = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {title, settings} = req.body;
     const data = {username, title, settings};
     pipe(apiRequest(`deck`, "POST", {}, data), res);
@@ -374,7 +374,7 @@ export const decksAdd = async (req: express.Request, res: express.Response) => {
 
 export const decksUpdate = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {id, title, settings} = req.body;
     const data = {username, title, settings};
     pipe(apiRequest(`decks/${username}/${id}`, "PUT", {}, data), res);
@@ -382,20 +382,20 @@ export const decksUpdate = async (req: express.Request, res: express.Response) =
 
 export const decksDelete = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {id} = req.body;
     pipe(apiRequest(`decks/${username}/${id}`, "DELETE"), res);
 }
 
 export const recoveries = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     pipe(apiRequest(`recoveries/${username}`, "GET"), res);
 }
 
 export const recoveriesAdd = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {email, public_keys} = req.body;
     const data = {username, email, public_keys};
     pipe(apiRequest(`recovery`, "POST", {}, data), res);
@@ -403,7 +403,7 @@ export const recoveriesAdd = async (req: express.Request, res: express.Response)
 
 export const recoveriesUpdate = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {id, email, public_keys} = req.body;
     const data = {username, email, public_keys};
     pipe(apiRequest(`recoveries/${username}/${id}`, "PUT", {}, data), res);
@@ -411,54 +411,54 @@ export const recoveriesUpdate = async (req: express.Request, res: express.Respon
 
 export const recoveriesDelete = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {id} = req.body;
     pipe(apiRequest(`recoveries/${username}/${id}`, "DELETE"), res);
 }
 
 export const pointsClaim = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const data = {us: username};
     pipe(apiRequest(`claim`, "PUT", {}, data), res);
 }
 
 export const pointsCalc = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {amount} = req.body;
     pipe(apiRequest(`estm-calc?username=${username}&amount=${amount}`, "GET"), res);
 }
 
 export const promotePrice = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     pipe(apiRequest(`promote-price`, "GET"), res);
 }
 
 export const promotedPost = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {author, permlink} = req.body;
     pipe(apiRequest(`promoted-posts/${author}/${permlink}`, "GET"), res);
 }
 
 export const boostOptions = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     pipe(apiRequest(`boost-options`, "GET"), res);
 }
 
 export const boostedPost = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {author, permlink} = req.body;
     pipe(apiRequest(`boosted-posts/${author}/${permlink}`, "GET"), res);
 }
 
 export const activities = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {ty, bl, tx} = req.body;
 
     if (ty === 10) {
@@ -476,7 +476,6 @@ export const activities = async (req: express.Request, res: express.Response) =>
         if (rec) {
             if (new Date().getTime() - new Date(Number(rec)).getTime() < 900000) {
                 res.status(201).send({});
-                return;
             }
             try {
                 cache.set(identifier, new Date().getTime().toString(), 901);
@@ -554,14 +553,14 @@ export const reblogCount = async (req: express.Request, res: express.Response) =
 
 export const gameGet = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {game_type} = req.params;
     pipe(apiRequest(`game/${username}?type=${game_type}`, "GET"), res);
 };
 
 export const gamePost = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
 
     const {game_type} = req.params;
     const {key} = req.body;
@@ -571,7 +570,7 @@ export const gamePost = async (req: express.Request, res: express.Response) => {
 
 export const purchaseOrder = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
 
     const {platform, product, receipt, user } = req.body;
     const data = {platform, product, receipt, user};
@@ -580,13 +579,13 @@ export const purchaseOrder = async (req: express.Request, res: express.Response)
 
 export const chats = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     pipe(apiRequest(`chats/${username}`, "GET"), res);
 }
 
 export const chatsAdd = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {key, pubkey, iv, meta} = req.body;
     const data = {username, key, pubkey, iv, meta};
     pipe(apiRequest(`chats`, "POST", {}, data), res);
@@ -594,7 +593,7 @@ export const chatsAdd = async (req: express.Request, res: express.Response) => {
 
 export const chatsUpdate = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) return;
+    if (!username) res.status(401).send("Unauthorized");
     const {id, key, pubkey, iv, meta} = req.body;
     const data = {key, pubkey, iv, meta};
     pipe(apiRequest(`chats/${username}/${id}`, "PUT", {}, data), res);
@@ -607,7 +606,7 @@ export const chatsPub = async (req: express.Request, res: express.Response) => {
 
 export const channelAdd = async (req: express.Request, res: express.Response) => {
     const creator = await validateCode(req, res);
-    if (!creator || creator !== 'ecency') return;
+    if (!creator || creator !== 'ecency') res.status(401).send("Unauthorized");
 
     const {username, channel_id, meta} = req.body;
     const data = {creator, username, channel_id, meta};
