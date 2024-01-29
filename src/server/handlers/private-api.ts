@@ -554,7 +554,7 @@ export const reblogCount = async (req: express.Request, res: express.Response) =
 export const gameGet = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {game_type} = req.params;
+    const {game_type} = req.body;
     pipe(apiRequest(`game/${username}?type=${game_type}`, "GET"), res);
 };
 
@@ -562,9 +562,8 @@ export const gamePost = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
 
-    const {game_type} = req.params;
-    const {key} = req.body;
-    const data = {key};
+    const {key, game_type} = req.body;
+    const data = {key: key};
     pipe(apiRequest(`game/${username}?type=${game_type}`, "POST", {}, data), res);
 };
 
