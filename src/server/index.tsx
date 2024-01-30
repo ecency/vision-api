@@ -63,6 +63,8 @@ server
     .post("^/private-api/post-reblogs$", privateApi.reblogs)
     .post("^/private-api/post-reblog-count$", privateApi.reblogCount)
     .post("^/private-api/portfolio$", privateApi.portfolio)
+    .post("^/private-api/chats-get$", privateApi.chatsGet)
+    .post("^/private-api/channels-get", privateApi.channelsGet)
 
 
     /* Login required private api endpoints */

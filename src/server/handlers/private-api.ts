@@ -616,3 +616,15 @@ export const channelGet = async (req: express.Request, res: express.Response) =>
     const {username} = req.params;
     pipe(apiRequest(`channel/${username}`, "GET"), res);
 }
+
+export const channelsGet = async (req: express.Request, res: express.Response) => {
+    const {users} = req.body;
+    const data = {users};
+    pipe(apiRequest(`channels`, "POST", {}, data), res);
+}
+
+export const chatsGet = async (req: express.Request, res: express.Response) => {
+    const {users} = req.body;
+    const data = {users};
+    pipe(apiRequest(`chats/pubs`, "POST", {}, data), res);
+}
