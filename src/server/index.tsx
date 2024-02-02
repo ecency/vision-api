@@ -106,6 +106,8 @@ server
     .post("^/private-api/points-calc$", privateApi.pointsCalc)
     .post("^/private-api/promote-price$", privateApi.promotePrice)
     .post("^/private-api/promoted-post$", privateApi.promotedPost)
+    .post("^/private-api/boost-plus-price$", privateApi.boostPlusPrice)
+    .post("^/private-api/boosted-plus-account$", privateApi.boostedPlusAccount)
     .post("^/private-api/boost-options$", privateApi.boostOptions)
     .post("^/private-api/boosted-post$", privateApi.boostedPost)
     .post("^/private-api/usr-activity$", privateApi.activities)

@@ -443,6 +443,19 @@ export const promotedPost = async (req: express.Request, res: express.Response) 
     pipe(apiRequest(`promoted-posts/${author}/${permlink}`, "GET"), res);
 }
 
+export const boostPlusPrice = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req, res);
+    if (!username) res.status(401).send("Unauthorized");
+    pipe(apiRequest(`boost-plus-price`, "GET"), res);
+}
+
+export const boostedPlusAccount = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req, res);
+    if (!username) res.status(401).send("Unauthorized");
+    const {account} = req.body;
+    pipe(apiRequest(`boosted-plus-accounts/${account}`, "GET"), res);
+}
+
 export const boostOptions = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
