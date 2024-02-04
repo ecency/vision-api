@@ -8,6 +8,7 @@ import {apiRequest, getPromotedEntries} from "../helper";
 
 import {pipe} from "../util";
 import { cache } from '../cache';
+import {bots} from "./constants";
 
 const validateCode = async (req: express.Request, res: express.Response): Promise<string | false> => {
     const {code} = req.body;
@@ -626,8 +627,7 @@ export const channelAdd = async (req: express.Request, res: express.Response) =>
 }
 
 export const channelGet = async (req: express.Request, res: express.Response) => {
-    const {username} = req.params;
-    pipe(apiRequest(`channel/${username}`, "GET"), res);
+    res.send(bots)
 }
 
 export const channelsGet = async (req: express.Request, res: express.Response) => {

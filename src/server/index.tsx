@@ -37,6 +37,7 @@ server
     .get("^/private-api/engine-account-history", engineApi.engineAccountHistory)
 
     // Private Api
+    .get("^/private-api/public/bots$", privateApi.channelGet)
     .get("^/private-api/received-vesting/:username$", privateApi.receivedVesting)
     .get("^/private-api/received-rc/:username$", privateApi.receivedRC)
     .get("^/private-api/rewarded-communities$", privateApi.rewardedCommunities)

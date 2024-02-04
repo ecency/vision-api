@@ -1,0 +1,18 @@
+export const bots = [
+        "bbhbot",
+        "beerlover",
+        "dhedge",
+        "hivebuzz",
+        "hiq.smartbot",
+        "ladytoken",
+        "lolzbot",
+        "pgm-curator",
+        "pixresteemer",
+        "poshthreads",
+        "sloth.buzz",
+        "tipu",
+        "thepimpdistrict",
+        "visualbot",
+        "wine.bot",
+        "youarealive",
+    ]
