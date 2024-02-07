@@ -61,6 +61,7 @@ export const announcements = [
         "button_text": "Support now",
         "button_link": "/proposals/283",
         "path": "/@.+/(blog|posts|wallet|points|engine|permissions|spk)",
-        "auth": true
+        "auth": true,
+        "ops": "hive://sign/op/WyJ1cGRhdGVfcHJvcG9zYWxfdm90ZXMiLHsidm90ZXIiOiJfX3NpZ25lciIsInByb3Bvc2FsX2lkcyI6IjI4MyIsImFwcHJvdmUiOnRydWUsImV4dGVuc2lvbnMiOltdfV0."
     }
 ]
