@@ -63,6 +63,6 @@ export const announcements = [
         "button_link": "/proposals/283",
         "path": "/@.+/(blog|posts|wallet|points|engine|permissions|spk)",
         "auth": true,
-        "ops": "hive://sign/op/WyJ1cGRhdGVfcHJvcG9zYWxfdm90ZXMiLHsidm90ZXIiOiJfX3NpZ25lciIsInByb3Bvc2FsX2lkcyI6IjI4MyIsImFwcHJvdmUiOnRydWUsImV4dGVuc2lvbnMiOltdfV0."
+        "ops": "hive://sign/op/WyJ1cGRhdGVfcHJvcG9zYWxfdm90ZXMiLHsidm90ZXIiOiAiX19zaWduZXIiLCJwcm9wb3NhbF9pZHMiOiBbMjgzXSwiYXBwcm92ZSI6dHJ1ZSwiZXh0ZW5zaW9ucyI6IFtdfV0."
     }
 ]
