@@ -5,7 +5,8 @@
   button_text - text of actionable button
   button_link - link that actionable button opens
   path - which path it should show, supports regex on location
-  auth - should there be authorized/logged in user to show announcement
+  auth - should there be authorized/logged in user to show announcement,
+  ops - hive uri format operation for mobile app signing
 */
 
 export const announcements = [
