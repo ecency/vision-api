@@ -527,6 +527,11 @@ export const subscribeNewsletter = async (req: express.Request, res: express.Res
     pipe(apiRequest(`newsletter/subscribe`, "POST", {}, data), res);
 }
 
+export const unSubscribeNewsletter = async (req: express.Request, res: express.Response) => {
+    const {id} = req.params;
+    pipe(apiRequest(`newsletter/subscribe?id=${id}`, "PUT"), res);
+}
+
 export const marketData = async (req: express.Request, res: express.Response) => {
     const {fiat, token} = req.params;
     const {fixed} = req.query;
@@ -585,8 +590,8 @@ export const purchaseOrder = async (req: express.Request, res: express.Response)
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
 
-    const {platform, product, receipt, user } = req.body;
-    const data = {platform, product, receipt, user};
+    const {platform, product, receipt, user, meta } = req.body;
+    const data = {platform, product, receipt, user, meta};
     pipe(apiRequest(`purchase-order`, "POST", {}, data), res);
 };
 

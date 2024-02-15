@@ -20,6 +20,7 @@ export const bots = [
         "hive-lu",
         "hiq.smartbot",
         "hk-gifts",
+        "hug.bot",
         "indiaunited",
         "kennybrown",
         "ladytoken",
