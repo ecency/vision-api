@@ -49,6 +49,7 @@ export const bots = [
         "utopian-io",
         "visualblock",
         "visualbot",
+        "warofclans",
         "weed.dispenser",
         "wine.bot",
         "youarealive",
