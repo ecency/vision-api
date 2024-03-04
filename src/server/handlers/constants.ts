@@ -13,6 +13,7 @@ export const bots = [
         "discovery-it",
         "dsc-r2cornell",
         "gifbot",
+        "hive-177745",
         "hivebits",
         "hivebuzz",
         "hivecurators",

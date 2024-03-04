@@ -29,6 +29,7 @@ server
 
     // Auth Api
     .post("^/auth-api/hs-token-refresh$", authApi.hsTokenRefresh)
+    .post("^/auth-api/hs-token-create$", authApi.hsTokenCreate)
 
     // Engine Api
     .post("^/private-api/engine-api$", engineApi.eapi)
