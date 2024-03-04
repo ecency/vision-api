@@ -33,7 +33,7 @@ export const hsTokenCreate = async (req: express.Request, res: express.Response)
     const {username, password, app} = req.body;
 
     const timestamp = parseInt((new Date().getTime() / 1000) + '', 10)
-    const messageObj: Record<string, object | object[] | number> = { signed_message: {"type":"posting",app}, authors: [`${username}`], timestamp }
+    const messageObj: Record<string, object | object[] | number> = { signed_message: {"type":"code",app}, authors: [`${username}`], timestamp }
     const hash = cryptoUtils.sha256(JSON.stringify(messageObj))
     const privateKey = PrivateKey.fromLogin(username, password, 'posting')
     const signature = privateKey.sign(hash).toString()
