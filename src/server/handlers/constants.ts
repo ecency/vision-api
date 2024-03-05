@@ -48,7 +48,6 @@ export const bots = [
         "thepimpdistrict",
         "upmewhale",
         "utopian-io",
-        "visualblock",
         "visualbot",
         "warofclans",
         "weed.dispenser",
