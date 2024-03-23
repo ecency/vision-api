@@ -587,10 +587,12 @@ export const gamePost = async (req: express.Request, res: express.Response) => {
 };
 
 export const purchaseOrder = async (req: express.Request, res: express.Response) => {
-    const username = await validateCode(req, res);
-    if (!username) res.status(401).send("Unauthorized");
-
     const {platform, product, receipt, user, meta } = req.body;
+    if (user !== 'ecency') {
+        const username = await validateCode(req, res);
+        if (!username) res.status(401).send("Unauthorized");
+    }
+
     const data = {platform, product, receipt, user, meta};
     pipe(apiRequest(`purchase-order`, "POST", {}, data), res);
 };

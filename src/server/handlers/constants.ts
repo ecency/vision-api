@@ -47,6 +47,7 @@ export const bots = [
         "tipu",
         "thepimpdistrict",
         "upmewhale",
+        "upvotebank",
         "utopian-io",
         "visualbot",
         "warofclans",
