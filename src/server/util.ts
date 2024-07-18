@@ -1,3 +1,4 @@
+import { Asset } from "@hiveio/dhive";
 import axios, {AxiosRequestConfig, AxiosResponse, Method} from "axios";
 
 import express from "express";
@@ -24,3 +25,31 @@ export const baseApiRequest = (url: string, method: Method, headers: any = {}, p
 
     return axios(requestConf)
 }
+
+
+export const parseToken = (strVal: string | Asset) => {
+    // checks if first part of string is float
+    const regex = /^\-?[0-9]+(e[0-9]+)?(\.[0-9]+)? .*$/;
+    if (!regex.test(strVal)) {
+      return 0;
+    }
+  
+    return Number(parseFloat(strVal.split(' ')[0]));
+  };
+
+
+export const parseAsset = (strVal:string) => {
+    if (typeof strVal !== 'string') {
+      // console.log(strVal);
+      return {
+        amount: 0,
+        symbol: '',
+      };
+    }
+    const sp = strVal.split(' ');
+    return {
+      amount: parseFloat(sp[0]),
+      symbol: Symbol[sp[1]],
+    };
+  };
+  
