@@ -3,6 +3,8 @@ import express from "express";
 import { baseApiRequest, pipe } from "../util";
 import { fetchGlobalProps, getAccount } from "./dhive";
 import { apiRequest } from "../helper";
+import { EngineContracts, EngineIds, EngineMetric, EngineRequestPayload, EngineTables, JSON_RPC, Methods, Token, TokenBalance } from "../../models/hiveEngine.types";
+import { convertEngineToken } from "../../models/converters";
 
 //docs: https://hive-engine.github.io/engine-docs/
 const BASE_ENGINE_URL = 'https://api2.hive-engine.com';//'https://api.hive-engine.com';
@@ -17,13 +19,11 @@ const ENGINE_ACCOUNT_HISTORY_URL = 'https://history.hive-engine.com/accountHisto
 const PATH_RPC = 'rpc';
 export const PATH_CONTRACTS = 'contracts';
 
+
+//client engine api requests
 export const eapi = async (req: express.Request, res: express.Response) => {
     const data = req.body;
-
-    const url = `${BASE_ENGINE_URL}/${PATH_RPC}/${PATH_CONTRACTS}`;
-    const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency' };
-
-    pipe(baseApiRequest(url, "POST", headers, data), res);
+    pipe(engineContractsRequest(data), res);
 }
 
 
@@ -56,18 +56,129 @@ export const engineAccountHistory = (req: express.Request, res: express.Response
 }
 
 
+//raw engine api calls
+const engineContractsRequest = (data: EngineRequestPayload) => {
+    const url = `${BASE_ENGINE_URL}/${PATH_RPC}/${PATH_CONTRACTS}`;
+    const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency' };
 
-const fetchSpkData = async (username:string) => {
-    try{
+    return baseApiRequest(url, "POST", headers, data)
+}
+
+
+
+
+//engine contracts methods
+export const fetchEngineBalances = async (account: string): Promise<TokenBalance[]> => {
+    const data: EngineRequestPayload = {
+        jsonrpc: JSON_RPC.RPC_2,
+        method: Methods.FIND,
+        params: {
+            contract: EngineContracts.TOKENS,
+            table: EngineTables.BALANCES,
+            query: {
+                account,
+            },
+        },
+        id: EngineIds.ONE,
+    };
+
+    const response = await engineContractsRequest(data);
+
+    if (!response.data?.result) {
+        throw new Error("Failed to get engine balances")
+    }
+
+    return response.data.result;
+};
+
+
+export const fetchEngineTokens = async (tokens: string[]): Promise<Token[]> => {
+    const data: EngineRequestPayload = {
+      jsonrpc: JSON_RPC.RPC_2,
+      method: Methods.FIND,
+      params: {
+        contract: EngineContracts.TOKENS,
+        table: EngineTables.TOKENS,
+        query: {
+          symbol: { $in: tokens },
+        },
+      },
+      id: EngineIds.ONE,
+    };
+
+    const response = await engineContractsRequest(data);
+
+    if (!response.data?.result) {
+        throw new Error("Failed to get engine tokens data")
+    }
+
+    return response.data.result;
+}
+
+
+export const fetchEngineMetics = async (tokens: string[]): Promise<EngineMetric[]> => {
+    const data = {
+        jsonrpc: JSON_RPC.RPC_2,
+        method: Methods.FIND,
+        params: {
+          contract: EngineContracts.MARKET,
+          table: EngineTables.METRICS,
+          query: {
+            symbol: { $in: tokens },
+          },
+        },
+        id: EngineIds.ONE,
+      };
+
+    const response = await engineContractsRequest(data);
+
+    if (!response.data?.result) {
+        throw new Error("Failed to get engine metrics data")
+    }
+
+    return response.data.result;
+}
+  
+
+
+//portfolio compilation methods
+const fetchEngineTokensWithBalance = async (username: string) => {
+    try {
+
+        const balances = await fetchEngineBalances(username);
+        const symbols = balances.map((t) => t.symbol);
+
+        const tokens = await fetchEngineTokens(symbols);
+        const metrices = await fetchEngineMetics(symbols);
+        // const unclaimed = await fetchUnclaimedRewards(username); //TODO: handle rewards later
+
+        return balances.map((balance: any) => {
+            const token = tokens.find((t: any) => t.symbol == balance.symbol);
+            const metrics = metrices.find((t: any) => t.symbol == balance.symbol);
+            // const pendingRewards = unclaimed.find((t: any) => t.symbol == balance.symbol); //TODO: handle rewards later
+            return convertEngineToken(balance, token, metrics);
+        });
+
+    } catch (err) {
+        console.warn("Spk data fetch failed", err);
+        //TODO: instead of throwing error, handle to skip spk data addition
+        return;
+    }
+}
+
+
+
+const fetchSpkData = async (username: string) => {
+    try {
         const url = `${BASE_SPK_URL}/@${username}`
         const response = await baseApiRequest(url, 'GET')
-        if(!response.data){
+        if (!response.data) {
             throw new Error("Invalid spk data");
         }
 
         return response.data;
 
-    } catch(err){
+    } catch (err) {
         console.warn("Spk data fetch failed", err);
         //TODO: instead of throwing error, handle to skip spk data addition
     }
@@ -94,7 +205,7 @@ export const portfolio = async (req: express.Request, res: express.Response) => 
         const _pointsData = await dummyPointSummary()
 
         //TODO: fetch engine assets
-        const _engineData = {};
+        const _engineData = await fetchEngineTokensWithBalance(username)
 
 
         //TODO: fetch spk assets
@@ -115,6 +226,8 @@ export const portfolio = async (req: express.Request, res: express.Response) => 
     }
 
 }
+
+
 
 
 //TODO: remove before merging
