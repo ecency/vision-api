@@ -5,7 +5,7 @@ import fallbackHandler, {healthCheck} from "./handlers/fallback";
 import * as privateApi from "./handlers/private-api";
 import * as searchApi from "./handlers/search-api";
 import * as authApi from "./handlers/auth-api";
-import * as engineApi from "./handlers/engine-api";
+import * as walletApi from "./handlers/wallet-api";
 
 const cors = require("cors")
 
@@ -31,11 +31,13 @@ server
     .post("^/auth-api/hs-token-refresh$", authApi.hsTokenRefresh)
     .post("^/auth-api/hs-token-create$", authApi.hsTokenCreate)
 
-    // Engine Api
-    .post("^/private-api/engine-api$", engineApi.eapi)
-    .get("^/private-api/engine-reward-api/:username$", engineApi.erewardapi)
-    .get("^/private-api/engine-chart-api$", engineApi.echartapi)
-    .get("^/private-api/engine-account-history", engineApi.engineAccountHistory)
+    // Wallet Api
+    .post("^/wallet-api/portfolio$", walletApi.portfolio)
+    .post("^/private-api/engine-api$", walletApi.eapi)
+    .get("^/private-api/engine-reward-api/:username$", walletApi.erewardapi)
+    .get("^/private-api/engine-chart-api$", walletApi.echartapi)
+    .get("^/private-api/engine-account-history", walletApi.engineAccountHistory)
+
 
     // Private Api
     .get("^/private-api/public/bots$", privateApi.botsGet)
@@ -64,8 +66,9 @@ server
     .post("^/private-api/request-delete$", privateApi.report)
     .post("^/private-api/post-reblogs$", privateApi.reblogs)
     .post("^/private-api/post-reblog-count$", privateApi.reblogCount)
-    .post("^/private-api/portfolio$", privateApi.portfolio)
+  
     .post("^/private-api/chats-get$", privateApi.chatsGet)
+    .post("^/private-api/channels-get", privateApi.channelsGet)
     .post("^/private-api/channels-get", privateApi.channelsGet)
 
 
