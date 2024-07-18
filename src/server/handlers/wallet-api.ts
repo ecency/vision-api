@@ -201,7 +201,7 @@ export const portfolio = async (req: express.Request, res: express.Response) => 
         // const _marketData = await dummyMarketData()
 
         //TODO: put back api request 
-        const _pointsSummary =await apiRequest(`users/${username}`, "GET");
+        const _pointsData =await apiRequest(`users/${username}`, "GET");
         // const _pointsData = await dummyPointSummary()
 
         //TODO: fetch engine assets
