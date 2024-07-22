@@ -1,7 +1,7 @@
 import express from "express";
 
 import { baseApiRequest, pipe } from "../util";
-import { fetchGlobalProps, getAccount } from "./dhive";
+import { fetchGlobalProps, getAccount } from "./hive-explorer";
 import { apiRequest } from "../helper";
 import { EngineContracts, EngineIds, EngineMetric, EngineRequestPayload, EngineTables, JSON_RPC, Methods, Token, TokenBalance } from "../../models/hiveEngine.types";
 import { convertEngineToken } from "../../models/converters";
@@ -197,12 +197,12 @@ export const portfolio = async (req: express.Request, res: express.Response) => 
 
         //fetch points data
         //TODO: put back api request 
-        const _marketData = await apiRequest(`market-data/latest`, "GET");
-        // const _marketData = await dummyMarketData()
+        // const _marketData = await apiRequest(`market-data/latest`, "GET");
+        const _marketData = await dummyMarketData()
 
         //TODO: put back api request 
-        const _pointsData =await apiRequest(`users/${username}`, "GET");
-        // const _pointsData = await dummyPointSummary()
+        // const _pointsData =await apiRequest(`users/${username}`, "GET");
+        const _pointsData = await dummyPointSummary()
 
         //TODO: fetch engine assets
         const _engineData = await fetchEngineTokensWithBalance(username)

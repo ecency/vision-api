@@ -1,33 +1,8 @@
-import {
-    Client,
-    cryptoUtils,
-    utils,
-    Types,
-    Transaction,
-    Operation,
-    TransactionConfirmation,
-    Asset,
-} from '@hiveio/dhive';
 import { baseApiRequest, parseAsset, parseToken } from '../util';
 
 
 const BASE_URL = 'https://hivexplorer.com/api';
 
-
-let client = new Client([
-    'https://api.hive.blog',
-    'https://anyx.io',
-    'https://techcoderx.com',
-    'https://api.openhive.network',
-    'https://api.deathwing.me',
-    'https://rpc.ausbit.dev',
-    'https://hived.emre.sh',
-    'https://hive-api.arcange.eu',
-], {
-    timeout: 4000,
-    failoverThreshold: 10,
-    consoleOnFailover: true,
-});
 
 export const fetchGlobalProps = async () => {
     let globalDynamic;
@@ -38,8 +13,8 @@ export const fetchGlobalProps = async () => {
         const _globalPropsUrl = `${BASE_URL}/get_dynamic_global_properties`;
         const _mediaHistoryUrl = `${BASE_URL}/get_current_median_history_price`;
 
-        const globalDynamicResp = await baseApiRequest(_globalPropsUrl, 'GET'); client.database.getDynamicGlobalProperties();
-        const medianHistoryResp = await baseApiRequest(_mediaHistoryUrl, 'GET'); client.database.call('get_feed_history');
+        const globalDynamicResp = await baseApiRequest(_globalPropsUrl, 'GET');
+        const medianHistoryResp = await baseApiRequest(_mediaHistoryUrl, 'GET');
 
         globalDynamic = globalDynamicResp.data;
         medianHistory = medianHistoryResp.data;
@@ -76,7 +51,6 @@ export const fetchGlobalProps = async () => {
         };
 
         return globalProps;
-
     } catch (e) {
         throw new Error("Failed to get globalProps", e)
     }
