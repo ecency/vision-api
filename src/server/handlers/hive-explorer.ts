@@ -52,7 +52,7 @@ export const fetchGlobalProps = async () => {
 
         return globalProps;
     } catch (e) {
-        throw new Error("Failed to get globalProps", e)
+        throw new Error("Failed to get globalProps")
     }
 };
 
@@ -74,6 +74,6 @@ export const getAccount = async (username: string) => {
 
 
     } catch (error) {
-       throw new Error("Failed to get account data", error)
+       throw new Error("Failed to get account data")
     }
 }

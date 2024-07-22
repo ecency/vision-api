@@ -7,7 +7,7 @@ import { EngineContracts, EngineIds, EngineMetric, EngineRequestPayload, EngineT
 import { convertEngineToken } from "../../models/converters";
 
 //docs: https://hive-engine.github.io/engine-docs/
-const BASE_URL = 'https://api2.hive-engine.com';//'https://api2.hive-engine.com';
+const BASE_ENGINE_URL = 'https://api2.hive-engine.com';//'https://api2.hive-engine.com';
 const BASE_SPK_URL = 'https://spk.good-karma.xyz';
 
 const ENGINE_REWARDS_URL = 'https://scot-api.hive-engine.com/';
@@ -138,7 +138,7 @@ export const fetchEngineMetics = async (tokens: string[]): Promise<EngineMetric[
 
     return response.data.result;
 }
-  
+
 
 
 //portfolio compilation methods
@@ -196,11 +196,11 @@ export const portfolio = async (req: express.Request, res: express.Response) => 
         const _userdata = await getAccount(username);
 
         //fetch points data
-        //TODO: put back api request 
+        //TODO: put back api request
         // const _marketData = await apiRequest(`market-data/latest`, "GET");
         const _marketData = await dummyMarketData()
 
-        //TODO: put back api request 
+        //TODO: put back api request
         // const _pointsData =await apiRequest(`users/${username}`, "GET");
         const _pointsData = await dummyPointSummary()
 
