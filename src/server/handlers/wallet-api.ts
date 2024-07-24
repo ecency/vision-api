@@ -94,16 +94,16 @@ export const fetchEngineBalances = async (account: string): Promise<TokenBalance
 
 export const fetchEngineTokens = async (tokens: string[]): Promise<Token[]> => {
     const data: EngineRequestPayload = {
-      jsonrpc: JSON_RPC.RPC_2,
-      method: Methods.FIND,
-      params: {
-        contract: EngineContracts.TOKENS,
-        table: EngineTables.TOKENS,
-        query: {
-          symbol: { $in: tokens },
+        jsonrpc: JSON_RPC.RPC_2,
+        method: Methods.FIND,
+        params: {
+            contract: EngineContracts.TOKENS,
+            table: EngineTables.TOKENS,
+            query: {
+                symbol: { $in: tokens },
+            },
         },
-      },
-      id: EngineIds.ONE,
+        id: EngineIds.ONE,
     };
 
     const response = await engineContractsRequest(data);
@@ -121,14 +121,14 @@ export const fetchEngineMetics = async (tokens: string[]): Promise<EngineMetric[
         jsonrpc: JSON_RPC.RPC_2,
         method: Methods.FIND,
         params: {
-          contract: EngineContracts.MARKET,
-          table: EngineTables.METRICS,
-          query: {
-            symbol: { $in: tokens },
-          },
+            contract: EngineContracts.MARKET,
+            table: EngineTables.METRICS,
+            query: {
+                symbol: { $in: tokens },
+            },
         },
         id: EngineIds.ONE,
-      };
+    };
 
     const response = await engineContractsRequest(data);
 
