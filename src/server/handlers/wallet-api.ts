@@ -198,34 +198,35 @@ const fetchSpkData = async (username: string) => {
 export const portfolio = async (req: express.Request, res: express.Response) => {
     try {
 
+        const respObj: { [key: string]: any } = {};
+
         const { username } = req.body;
 
         //fetch basic hive data
-        const _globalProps = await fetchGlobalProps();
-        const _userdata = await getAccount(username);
+        const globalProps = fetchGlobalProps();
+        const accountData = getAccount(username);
 
         //fetch market data
-        const _marketData = await apiRequest(`market-data/latest`, "GET");
+        const marketData = apiRequest(`market-data/latest`, "GET");
 
         //fetch points data
-        const _pointsData = await apiRequest(`users/${username}`, "GET");
-
+        const pointsData = apiRequest(`users/${username}`, "GET");
 
         //fetch engine assets
-        const _engineData = await fetchEngineTokensWithBalance(username)
-
+        const engineData = fetchEngineTokensWithBalance(username)
 
         //fetch spk assets
-        const _spkData = await fetchSpkData(username);
+        const spkData = fetchSpkData(username);
 
-        res.send({
-            globalProps: _globalProps,
-            marketData: _marketData,
-            accountData: _userdata,
-            pointsData: _pointsData,
-            engineData: _engineData,
-            spkData: _spkData,
+        const responses = await Promise.all([globalProps, marketData, accountData, pointsData, engineData, spkData]);
+        const responseKeys = ["globalProps", "marketData", "accountData", "pointsData", "engineData", "spkData"]
+        responses.forEach((response, index) => {
+            if (response) {
+                respObj[responseKeys[index]] = response;
+            }
         })
+
+        res.send(respObj)
 
     } catch (err: any) {
         console.warn("failed to compile portfolio", err);
