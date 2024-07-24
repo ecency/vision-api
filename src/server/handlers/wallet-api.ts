@@ -94,16 +94,16 @@ export const fetchEngineBalances = async (account: string): Promise<TokenBalance
 
 export const fetchEngineTokens = async (tokens: string[]): Promise<Token[]> => {
     const data: EngineRequestPayload = {
-      jsonrpc: JSON_RPC.RPC_2,
-      method: Methods.FIND,
-      params: {
-        contract: EngineContracts.TOKENS,
-        table: EngineTables.TOKENS,
-        query: {
-          symbol: { $in: tokens },
+        jsonrpc: JSON_RPC.RPC_2,
+        method: Methods.FIND,
+        params: {
+            contract: EngineContracts.TOKENS,
+            table: EngineTables.TOKENS,
+            query: {
+                symbol: { $in: tokens },
+            },
         },
-      },
-      id: EngineIds.ONE,
+        id: EngineIds.ONE,
     };
 
     const response = await engineContractsRequest(data);
@@ -121,14 +121,14 @@ export const fetchEngineMetics = async (tokens: string[]): Promise<EngineMetric[
         jsonrpc: JSON_RPC.RPC_2,
         method: Methods.FIND,
         params: {
-          contract: EngineContracts.MARKET,
-          table: EngineTables.METRICS,
-          query: {
-            symbol: { $in: tokens },
-          },
+            contract: EngineContracts.MARKET,
+            table: EngineTables.METRICS,
+            query: {
+                symbol: { $in: tokens },
+            },
         },
         id: EngineIds.ONE,
-      };
+    };
 
     const response = await engineContractsRequest(data);
 
@@ -146,10 +146,18 @@ const fetchEngineTokensWithBalance = async (username: string) => {
     try {
 
         const balances = await fetchEngineBalances(username);
+
+        if(!balances){
+            throw new Error("failed to fetch engine balances");
+        }
+
         const symbols = balances.map((t) => t.symbol);
 
-        const tokens = await fetchEngineTokens(symbols);
-        const metrices = await fetchEngineMetics(symbols);
+        const promiseTokens = fetchEngineTokens(symbols);
+        const promiseMmetrices = fetchEngineMetics(symbols);
+
+        const [tokens, metrices] = await Promise.all([promiseTokens, promiseMmetrices])
+
         // const unclaimed = await fetchUnclaimedRewards(username); //TODO: handle rewards later
 
         return balances.map((balance: any) => {
@@ -160,9 +168,9 @@ const fetchEngineTokensWithBalance = async (username: string) => {
         });
 
     } catch (err) {
-        console.warn("Spk data fetch failed", err);
-        //TODO: instead of throwing error, handle to skip spk data addition
-        return;
+        console.warn("Engine data fetch failed", err);
+        // instead of throwing error, handle to skip spk data addition
+        return null;
     }
 }
 
@@ -181,6 +189,7 @@ const fetchSpkData = async (username: string) => {
     } catch (err) {
         console.warn("Spk data fetch failed", err);
         //TODO: instead of throwing error, handle to skip spk data addition
+        return null;
     }
 }
 
@@ -189,36 +198,35 @@ const fetchSpkData = async (username: string) => {
 export const portfolio = async (req: express.Request, res: express.Response) => {
     try {
 
+        const respObj: { [key: string]: any } = {};
+
         const { username } = req.body;
 
         //fetch basic hive data
-        const _globalProps = await fetchGlobalProps();
-        const _userdata = await getAccount(username);
+        const globalProps = fetchGlobalProps();
+        const accountData = getAccount(username);
+
+        //fetch market data
+        const marketData = apiRequest(`market-data/latest`, "GET");
 
         //fetch points data
-        //TODO: put back api request
-        // const _marketData = await apiRequest(`market-data/latest`, "GET");
-        const _marketData = await dummyMarketData()
+        const pointsData = apiRequest(`users/${username}`, "GET");
 
-        //TODO: put back api request
-        // const _pointsData =await apiRequest(`users/${username}`, "GET");
-        const _pointsData = await dummyPointSummary()
+        //fetch engine assets
+        const engineData = fetchEngineTokensWithBalance(username)
 
-        //TODO: fetch engine assets
-        const _engineData = await fetchEngineTokensWithBalance(username)
+        //fetch spk assets
+        const spkData = fetchSpkData(username);
 
-
-        //TODO: fetch spk assets
-        const _spkData = await fetchSpkData(username);
-
-        res.send({
-            globalProps: _globalProps,
-            marketData: _marketData,
-            accountData: _userdata,
-            pointsData: _pointsData,
-            engineData: _engineData,
-            spkData: _spkData,
+        const responses = await Promise.all([globalProps, marketData, accountData, pointsData, engineData, spkData]);
+        const responseKeys = ["globalProps", "marketData", "accountData", "pointsData", "engineData", "spkData"]
+        responses.forEach((response, index) => {
+            if (response) {
+                respObj[responseKeys[index]] = response;
+            }
         })
+
+        res.send(respObj)
 
     } catch (err: any) {
         console.warn("failed to compile portfolio", err);
@@ -226,107 +234,3 @@ export const portfolio = async (req: express.Request, res: express.Response) => 
     }
 
 }
-
-
-
-
-//TODO: remove before merging
-const dummyPointSummary = async () => {
-    return {
-        "username": "${username}",
-        "points": "5523.704",
-        "points_by_type": {
-            "10": "6750.500",
-            "20": "100.000",
-            "30": "7930.000",
-            "100": "862.500",
-            "110": "1075.105",
-            "120": "190.200",
-            "130": "70.400",
-            "150": "5089.637"
-        },
-        "unclaimed_points": "276.167",
-        "unclaimed_points_by_type": {
-            "10": "96.500",
-            "30": "160.000",
-            "110": "19.667"
-        }
-    }
-}
-
-//TOOD: remove before merging
-const dummyMarketData = async () => {
-    return {
-        "btc": {
-            "quotes": {
-                "btc": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0,
-                    "price": 1
-                },
-                "usd": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0.0060308,
-                    "price": 0.0001638804887141081
-                }
-            }
-        },
-        "estm": {
-            "quotes": {
-                "btc": {
-                    "last_updated": "2022-08-12T04:57:00.000Z",
-                    "percent_change": 0,
-                    "price": 8e-8
-                },
-                "usd": {
-                    "last_updated": "2022-08-12T04:57:00.000Z",
-                    "percent_change": 0,
-                    "price": 0.002
-                }
-            }
-        },
-        "eth": {
-            "quotes": {
-                "btc": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0,
-                    "price": 1.0797900018640657e-7
-                },
-                "usd": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0,
-                    "price": 0.007013003078153161
-                }
-            }
-        },
-        "hbd": {
-            "quotes": {
-                "btc": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0.28189758,
-                    "price": 0.00001531436662541532
-                },
-                "usd": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0.19563211,
-                    "price": 0.9947278858468801
-                }
-            }
-        },
-        "hive": {
-            "quotes": {
-                "btc": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0.50376444,
-                    "price": 0.0000034331098014452116
-                },
-                "usd": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0.55258548,
-                    "price": 0.22308583979341057
-                }
-            }
-        }
-    }
-}
-
