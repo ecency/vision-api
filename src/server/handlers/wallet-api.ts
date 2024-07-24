@@ -146,10 +146,18 @@ const fetchEngineTokensWithBalance = async (username: string) => {
     try {
 
         const balances = await fetchEngineBalances(username);
+
+        if(!balances){
+            throw new Error("failed to fetch engine balances");
+        }
+
         const symbols = balances.map((t) => t.symbol);
 
-        const tokens = await fetchEngineTokens(symbols);
-        const metrices = await fetchEngineMetics(symbols);
+        const promiseTokens = fetchEngineTokens(symbols);
+        const promiseMmetrices = fetchEngineMetics(symbols);
+
+        const [tokens, metrices] = await Promise.all([promiseTokens, promiseMmetrices])
+
         // const unclaimed = await fetchUnclaimedRewards(username); //TODO: handle rewards later
 
         return balances.map((balance: any) => {
@@ -160,9 +168,9 @@ const fetchEngineTokensWithBalance = async (username: string) => {
         });
 
     } catch (err) {
-        console.warn("Spk data fetch failed", err);
-        //TODO: instead of throwing error, handle to skip spk data addition
-        return;
+        console.warn("Engine data fetch failed", err);
+        // instead of throwing error, handle to skip spk data addition
+        return null;
     }
 }
 
@@ -181,6 +189,7 @@ const fetchSpkData = async (username: string) => {
     } catch (err) {
         console.warn("Spk data fetch failed", err);
         //TODO: instead of throwing error, handle to skip spk data addition
+        return null;
     }
 }
 
