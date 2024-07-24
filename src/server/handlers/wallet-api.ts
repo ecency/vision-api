@@ -195,20 +195,18 @@ export const portfolio = async (req: express.Request, res: express.Response) => 
         const _globalProps = await fetchGlobalProps();
         const _userdata = await getAccount(username);
 
+        //fetch market data
+        const _marketData = await apiRequest(`market-data/latest`, "GET");
+
         //fetch points data
-        //TODO: put back api request 
-        // const _marketData = await apiRequest(`market-data/latest`, "GET");
-        const _marketData = await dummyMarketData()
+        const _pointsData = await apiRequest(`users/${username}`, "GET");
 
-        //TODO: put back api request 
-        // const _pointsData =await apiRequest(`users/${username}`, "GET");
-        const _pointsData = await dummyPointSummary()
 
-        //TODO: fetch engine assets
+        //fetch engine assets
         const _engineData = await fetchEngineTokensWithBalance(username)
 
 
-        //TODO: fetch spk assets
+        //fetch spk assets
         const _spkData = await fetchSpkData(username);
 
         res.send({
@@ -226,107 +224,3 @@ export const portfolio = async (req: express.Request, res: express.Response) => 
     }
 
 }
-
-
-
-
-//TODO: remove before merging
-const dummyPointSummary = async () => {
-    return {
-        "username": "${username}",
-        "points": "5523.704",
-        "points_by_type": {
-            "10": "6750.500",
-            "20": "100.000",
-            "30": "7930.000",
-            "100": "862.500",
-            "110": "1075.105",
-            "120": "190.200",
-            "130": "70.400",
-            "150": "5089.637"
-        },
-        "unclaimed_points": "276.167",
-        "unclaimed_points_by_type": {
-            "10": "96.500",
-            "30": "160.000",
-            "110": "19.667"
-        }
-    }
-}
-
-//TOOD: remove before merging
-const dummyMarketData = async () => {
-    return {
-        "btc": {
-            "quotes": {
-                "btc": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0,
-                    "price": 1
-                },
-                "usd": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0.0060308,
-                    "price": 0.0001638804887141081
-                }
-            }
-        },
-        "estm": {
-            "quotes": {
-                "btc": {
-                    "last_updated": "2022-08-12T04:57:00.000Z",
-                    "percent_change": 0,
-                    "price": 8e-8
-                },
-                "usd": {
-                    "last_updated": "2022-08-12T04:57:00.000Z",
-                    "percent_change": 0,
-                    "price": 0.002
-                }
-            }
-        },
-        "eth": {
-            "quotes": {
-                "btc": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0,
-                    "price": 1.0797900018640657e-7
-                },
-                "usd": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0,
-                    "price": 0.007013003078153161
-                }
-            }
-        },
-        "hbd": {
-            "quotes": {
-                "btc": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0.28189758,
-                    "price": 0.00001531436662541532
-                },
-                "usd": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0.19563211,
-                    "price": 0.9947278858468801
-                }
-            }
-        },
-        "hive": {
-            "quotes": {
-                "btc": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0.50376444,
-                    "price": 0.0000034331098014452116
-                },
-                "usd": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0.55258548,
-                    "price": 0.22308583979341057
-                }
-            }
-        }
-    }
-}
-
