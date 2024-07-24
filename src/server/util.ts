@@ -1,4 +1,4 @@
-import { Asset } from "@hiveio/dhive";
+import {Asset, SMTAsset} from "@hiveio/dhive";
 import axios, {AxiosRequestConfig, AxiosResponse, Method} from "axios";
 
 import express from "express";
@@ -27,13 +27,13 @@ export const baseApiRequest = (url: string, method: Method, headers: any = {}, p
 }
 
 
-export const parseToken = (strVal: string | Asset) => {
+export const parseToken = (strVal: string) => {
     // checks if first part of string is float
     const regex = /^\-?[0-9]+(e[0-9]+)?(\.[0-9]+)? .*$/;
     if (!regex.test(strVal)) {
       return 0;
     }
-  
+
     return Number(parseFloat(strVal.split(' ')[0]));
   };
 
@@ -52,4 +52,3 @@ export const parseAsset = (strVal:string) => {
       symbol: Symbol[sp[1]],
     };
   };
-  

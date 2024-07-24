@@ -7,7 +7,7 @@ import { EngineContracts, EngineIds, EngineMetric, EngineRequestPayload, EngineT
 import { convertEngineToken } from "../../models/converters";
 
 //docs: https://hive-engine.github.io/engine-docs/
-const BASE_URL = 'https://api2.hive-engine.com';//'https://api2.hive-engine.com';
+const BASE_ENGINE_URL = 'https://api2.hive-engine.com';//'https://api2.hive-engine.com';
 const BASE_SPK_URL = 'https://spk.good-karma.xyz';
 
 const ENGINE_REWARDS_URL = 'https://scot-api.hive-engine.com/';
@@ -138,7 +138,7 @@ export const fetchEngineMetics = async (tokens: string[]): Promise<EngineMetric[
 
     return response.data.result;
 }
-  
+
 
 
 //portfolio compilation methods
