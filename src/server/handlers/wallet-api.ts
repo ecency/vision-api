@@ -207,13 +207,25 @@ export const portfolio = async (req: express.Request, res: express.Response) => 
         const accountData = getAccount(username);
 
         //fetch market data
-        const marketData = apiRequest(`market-data/latest`, "GET");
+        const marketData = async () => {
+            const resp = await apiRequest(`market-data/latest`, "GET");
+            if(!resp.data){
+                throw new Error("failed to get market data");
+            }
+            return resp.data;
+        } 
 
         //fetch points data
-        const pointsData = apiRequest(`users/${username}`, "GET");
+        const pointsData = async () => {
+            const resp = await apiRequest(`users/${username}`, "GET");
+            if(!resp.data){
+                throw new Error("failed to get points data");
+            }
+            return resp.data;
+        } 
 
         //fetch engine assets
-        const engineData = fetchEngineTokensWithBalance(username)
+        const engineData = fetchEngineTokensWithBalance(username); 
 
         //fetch spk assets
         const spkData = fetchSpkData(username);
