@@ -147,7 +147,7 @@ const fetchEngineTokensWithBalance = async (username: string) => {
 
         const balances = await fetchEngineBalances(username);
 
-        if(!balances){
+        if (!balances) {
             throw new Error("failed to fetch engine balances");
         }
 
@@ -188,44 +188,39 @@ const fetchSpkData = async (username: string) => {
 
     } catch (err) {
         console.warn("Spk data fetch failed", err);
-        //TODO: instead of throwing error, handle to skip spk data addition
+        //instead of throwing error, handle to skip spk data addition
         return null;
     }
 }
 
 
 
+const apiRequestData = async (endpoint: string) => {
+    const resp = await apiRequest(endpoint, "GET");
+
+    if (!resp.data) {
+        throw new Error("failed to get data");
+    }
+    return resp.data;
+}
+
+
 export const portfolio = async (req: express.Request, res: express.Response) => {
     try {
 
         const respObj: { [key: string]: any } = {};
-
         const { username } = req.body;
 
         //fetch basic hive data
         const globalProps = fetchGlobalProps();
         const accountData = getAccount(username);
 
-        //fetch market data
-        const marketData = async () => {
-            const resp = await apiRequest(`market-data/latest`, "GET");
-            if(!resp.data){
-                throw new Error("failed to get market data");
-            }
-            return resp.data;
-        } 
-
-        //fetch points data
-        const pointsData = async () => {
-            const resp = await apiRequest(`users/${username}`, "GET");
-            if(!resp.data){
-                throw new Error("failed to get points data");
-            }
-            return resp.data;
-        } 
+        //fetch market and points data
+        const marketData = apiRequestData(`market-data/latest`);
+        const pointsData = apiRequestData(`users/${username}`);
 
         //fetch engine assets
-        const engineData = fetchEngineTokensWithBalance(username); 
+        const engineData = fetchEngineTokensWithBalance(username);
 
         //fetch spk assets
         const spkData = fetchSpkData(username);
