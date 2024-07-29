@@ -3,8 +3,8 @@ import express from "express";
 import { baseApiRequest, pipe } from "../util";
 import { fetchGlobalProps, getAccount } from "./hive-explorer";
 import { apiRequest } from "../helper";
-import { EngineContracts, EngineIds, EngineMetric, EngineRequestPayload, EngineTables, JSON_RPC, Methods, Token, TokenBalance } from "../../models/hiveEngine.types";
-import { convertEngineToken } from "../../models/converters";
+import { EngineContracts, EngineIds, EngineMetric, EngineRequestPayload, EngineTables, JSON_RPC, Methods, Token, TokenBalance, TokenStatus } from "../../models/hiveEngine.types";
+import { convertEngineToken, convertRewardsStatus } from "../../models/converters";
 
 //docs: https://hive-engine.github.io/engine-docs/
 const BASE_ENGINE_URL = 'https://api2.hive-engine.com';//'https://api2.hive-engine.com';
@@ -30,11 +30,7 @@ export const eapi = async (req: express.Request, res: express.Response) => {
 export const erewardapi = async (req: express.Request, res: express.Response) => {
     const { username } = req.params;
     const params = req.query;
-
-    const url = `${ENGINE_REWARDS_URL}@${username}`;
-    const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency' };
-
-    pipe(baseApiRequest(url, "GET", headers, undefined, params), res);
+    pipe(engineRewardsRequest(username, params), res);
 }
 
 export const echartapi = async (req: express.Request, res: express.Response) => {
@@ -56,12 +52,20 @@ export const engineAccountHistory = (req: express.Request, res: express.Response
 }
 
 
-//raw engine api calls
+//raw engine api call
 const engineContractsRequest = (data: EngineRequestPayload) => {
     const url = `${BASE_ENGINE_URL}/${PATH_RPC}/${PATH_CONTRACTS}`;
     const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency' };
 
     return baseApiRequest(url, "POST", headers, data)
+}
+
+//raw engine rewards api call
+const engineRewardsRequest = (username:string, params:any) => {
+    const url = `${ENGINE_REWARDS_URL}/@${username}`;
+    const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency' };
+
+    return baseApiRequest(url, "GET", headers, undefined, params)
 }
 
 
@@ -140,6 +144,27 @@ export const fetchEngineMetics = async (tokens: string[]): Promise<EngineMetric[
 }
 
 
+export const fetchEngineRewards = async (username: string): Promise<TokenStatus[]> => {
+    try {
+        const response = await engineRewardsRequest(username, {hive : 1});
+
+        const rawData:TokenStatus[] = Object.values(response.data);
+        if (!rawData || rawData.length === 0) {
+          throw new Error('No rewards data returned');
+        }
+    
+        const data = rawData.map(convertRewardsStatus);
+        const filteredData = data.filter((item) => item && item.pendingToken > 0);
+    
+        console.log('unclaimed engine rewards data', filteredData);
+        return filteredData;
+      } catch (err) {
+        console.warn('failed ot get unclaimed engine rewards', err);
+        return [];
+      }
+}
+
+
 
 //portfolio compilation methods
 const fetchEngineTokensWithBalance = async (username: string) => {
@@ -148,28 +173,28 @@ const fetchEngineTokensWithBalance = async (username: string) => {
         const balances = await fetchEngineBalances(username);
 
         if (!balances) {
-            throw new Error("failed to fetch engine balances");
+             throw new Error("failed to fetch engine balances");
         }
 
         const symbols = balances.map((t) => t.symbol);
 
         const promiseTokens = fetchEngineTokens(symbols);
         const promiseMmetrices = fetchEngineMetics(symbols);
+        const promiseUnclaimed = fetchEngineRewards(username)
 
-        const [tokens, metrices] = await Promise.all([promiseTokens, promiseMmetrices])
-
-        // const unclaimed = await fetchUnclaimedRewards(username); //TODO: handle rewards later
+        const [tokens, metrices, unclaimed] = 
+            await Promise.all([promiseTokens, promiseMmetrices, promiseUnclaimed])
 
         return balances.map((balance: any) => {
             const token = tokens.find((t: any) => t.symbol == balance.symbol);
             const metrics = metrices.find((t: any) => t.symbol == balance.symbol);
-            // const pendingRewards = unclaimed.find((t: any) => t.symbol == balance.symbol); //TODO: handle rewards later
-            return convertEngineToken(balance, token, metrics);
+            const pendingRewards = unclaimed.find((t: any) => t.symbol == balance.symbol);
+            return convertEngineToken(balance, token, metrics, pendingRewards);
         });
 
     } catch (err) {
         console.warn("Engine data fetch failed", err);
-        // instead of throwing error, handle to skip spk data addition
+        // instead of throwing error, handle to skip engine data addition
         return null;
     }
 }
