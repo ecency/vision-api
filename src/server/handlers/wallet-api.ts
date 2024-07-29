@@ -7,7 +7,19 @@ import { EngineContracts, EngineIds, EngineMetric, EngineRequestPayload, EngineT
 import { convertEngineToken, convertRewardsStatus } from "../../models/converters";
 
 //docs: https://hive-engine.github.io/engine-docs/
-const BASE_ENGINE_URL = 'https://api2.hive-engine.com';//'https://api2.hive-engine.com';
+//available nodes: https://beacon.peakd.com/ select tab 'Hive Engine'
+const ENGINE_NODES = [
+    "https://engine.rishipanthee.com",
+    "https://herpc.dtools.dev",
+    "https://api.hive-engine.com/rpc/",
+    "https://ha.herpc.dtools.dev",
+    "https://herpc.kanibot.com",
+    "https://he.sourov.dev",
+    "https://herpc.actifit.io",
+    "https://api2.hive-engine.com/rpc/"
+  ];
+
+const BASE_ENGINE_URL = ENGINE_NODES[2];
 const BASE_SPK_URL = 'https://spk.good-karma.xyz';
 
 const ENGINE_REWARDS_URL = 'https://scot-api.hive-engine.com/';
@@ -16,7 +28,6 @@ const ENGINE_CHART_URL = 'https://info-api.tribaldex.com/market/ohlcv';
 //docs: https://github.com/hive-engine/ssc_tokens_history/tree/hive#api-usage
 const ENGINE_ACCOUNT_HISTORY_URL = 'https://history.hive-engine.com/accountHistory';
 
-const PATH_RPC = 'rpc';
 export const PATH_CONTRACTS = 'contracts';
 
 
@@ -54,7 +65,7 @@ export const engineAccountHistory = (req: express.Request, res: express.Response
 
 //raw engine api call
 const engineContractsRequest = (data: EngineRequestPayload) => {
-    const url = `${BASE_ENGINE_URL}/${PATH_RPC}/${PATH_CONTRACTS}`;
+    const url = `${BASE_ENGINE_URL}/${PATH_CONTRACTS}`;
     const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency' };
 
     return baseApiRequest(url, "POST", headers, data)
