@@ -15,7 +15,8 @@ const ENGINE_NODES = [
     "https://ha.herpc.dtools.dev",
     "https://herpc.kanibot.com",
     "https://he.sourov.dev",
-    "https://herpc.actifit.io"
+    "https://herpc.actifit.io",
+    "https://api2.hive-engine.com/rpc/"
   ];
 
 const BASE_ENGINE_URL = ENGINE_NODES[2];
