@@ -269,11 +269,11 @@ export const portfolio = async (req: express.Request, res: express.Response) => 
             }
         })
 
-        res.send(respObj)
+        return res.send(respObj)
 
     } catch (err: any) {
         console.warn("failed to compile portfolio", err);
-        res.status(500).send(err.message)
+        return res.status(500).send(err.message)
     }
 
 }
