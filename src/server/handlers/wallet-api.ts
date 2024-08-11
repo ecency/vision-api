@@ -48,7 +48,7 @@ export const echartapi = async (req: express.Request, res: express.Response) => 
     const params = req.query;
 
     const url = `${ENGINE_CHART_URL}`;
-    const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency' };
+    const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency', 'Accept-Encoding': '*' };
 
     pipe(baseApiRequest(url, "GET", headers, undefined, params), res);
 }
@@ -57,7 +57,7 @@ export const engineAccountHistory = (req: express.Request, res: express.Response
     const params = req.query;
 
     const url = `${ENGINE_ACCOUNT_HISTORY_URL}`;
-    const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency Apps' };
+    const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency', 'Accept-Encoding': '*' };
 
     pipe(baseApiRequest(url, "GET", headers, undefined, params), res);
 }
@@ -66,7 +66,7 @@ export const engineAccountHistory = (req: express.Request, res: express.Response
 //raw engine api call
 const engineContractsRequest = (data: EngineRequestPayload) => {
     const url = `${BASE_ENGINE_URL}/${PATH_CONTRACTS}`;
-    const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency' };
+    const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency', 'Accept-Encoding': '*' };
 
     return baseApiRequest(url, "POST", headers, data)
 }
@@ -74,7 +74,7 @@ const engineContractsRequest = (data: EngineRequestPayload) => {
 //raw engine rewards api call
 const engineRewardsRequest = (username:string, params:any) => {
     const url = `${ENGINE_REWARDS_URL}/@${username}`;
-    const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency' };
+    const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency', 'Accept-Encoding': '*' };
 
     return baseApiRequest(url, "GET", headers, undefined, params)
 }
@@ -163,10 +163,10 @@ export const fetchEngineRewards = async (username: string): Promise<TokenStatus[
         if (!rawData || rawData.length === 0) {
           throw new Error('No rewards data returned');
         }
-    
+
         const data = rawData.map(convertRewardsStatus);
         const filteredData = data.filter((item) => item && item.pendingToken > 0);
-    
+
         console.log('unclaimed engine rewards data', filteredData);
         return filteredData;
       } catch (err) {
@@ -193,7 +193,7 @@ const fetchEngineTokensWithBalance = async (username: string) => {
         const promiseMmetrices = fetchEngineMetics(symbols);
         const promiseUnclaimed = fetchEngineRewards(username)
 
-        const [tokens, metrices, unclaimed] = 
+        const [tokens, metrices, unclaimed] =
             await Promise.all([promiseTokens, promiseMmetrices, promiseUnclaimed])
 
         return balances.map((balance: any) => {
