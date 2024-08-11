@@ -11,15 +11,15 @@ import { convertEngineToken, convertRewardsStatus } from "../../models/converter
 const ENGINE_NODES = [
     "https://engine.rishipanthee.com",
     "https://herpc.dtools.dev",
-    "https://api.hive-engine.com/rpc/",
+    "https://api.hive-engine.com/rpc",
     "https://ha.herpc.dtools.dev",
     "https://herpc.kanibot.com",
     "https://he.sourov.dev",
     "https://herpc.actifit.io",
-    "https://api2.hive-engine.com/rpc/"
+    "https://api2.hive-engine.com/rpc"
   ];
 
-const BASE_ENGINE_URL = ENGINE_NODES[2];
+const BASE_ENGINE_URL = ENGINE_NODES[0];
 const BASE_SPK_URL = 'https://spk.good-karma.xyz';
 
 const ENGINE_REWARDS_URL = 'https://scot-api.hive-engine.com/';
