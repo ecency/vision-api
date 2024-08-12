@@ -19,7 +19,12 @@ const ENGINE_NODES = [
     "https://api2.hive-engine.com/rpc"
   ];
 
-const BASE_ENGINE_URL = ENGINE_NODES[0];
+// min and max included
+const randomIntFromInterval = (min: number, max: number) => {
+    return Math.floor(Math.random() * (max - min + 1) + min);
+}
+
+let BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0,6)]}/contracts`;
 const BASE_SPK_URL = 'https://spk.good-karma.xyz';
 
 const ENGINE_REWARDS_URL = 'https://scot-api.hive-engine.com/';
@@ -34,7 +39,7 @@ export const PATH_CONTRACTS = 'contracts';
 //client engine api requests
 export const eapi = async (req: express.Request, res: express.Response) => {
     const data = req.body;
-    pipe(engineContractsRequest(data), res);
+    pipe(engineContractsRequest(data, BASE_ENGINE_URL), res);
 }
 
 
@@ -64,8 +69,7 @@ export const engineAccountHistory = (req: express.Request, res: express.Response
 
 
 //raw engine api call
-const engineContractsRequest = (data: EngineRequestPayload) => {
-    const url = `${BASE_ENGINE_URL}/${PATH_CONTRACTS}`;
+const engineContractsRequest = (data: EngineRequestPayload, url: string) => {
     const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency' };
 
     return baseApiRequest(url, "POST", headers, data)
@@ -78,8 +82,6 @@ const engineRewardsRequest = (username:string, params:any) => {
 
     return baseApiRequest(url, "GET", headers, undefined, params)
 }
-
-
 
 
 //engine contracts methods
@@ -96,14 +98,25 @@ export const fetchEngineBalances = async (account: string): Promise<TokenBalance
         },
         id: EngineIds.ONE,
     };
+    try {
+        const response = await engineContractsRequest(data, BASE_ENGINE_URL);
 
-    const response = await engineContractsRequest(data);
+        if (!response.data?.result) {
+            throw new Error("Failed to get engine balances")
+        }
 
-    if (!response.data?.result) {
-        throw new Error("Failed to get engine balances")
+        return response.data.result;
     }
+    catch (e) {
+        BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0,6)]}/contracts`;
+        const response = await engineContractsRequest(data, BASE_ENGINE_URL);
 
-    return response.data.result;
+        if (!response.data?.result) {
+            throw new Error("Failed to get engine balances")
+        }
+
+        return response.data.result;
+    }
 };
 
 
@@ -120,14 +133,24 @@ export const fetchEngineTokens = async (tokens: string[]): Promise<Token[]> => {
         },
         id: EngineIds.ONE,
     };
+    try {
+        const response = await engineContractsRequest(data, BASE_ENGINE_URL);
 
-    const response = await engineContractsRequest(data);
+        if (!response.data?.result) {
+            throw new Error("Failed to get engine tokens data")
+        }
 
-    if (!response.data?.result) {
-        throw new Error("Failed to get engine tokens data")
+        return response.data.result;
+    } catch(e) {
+        BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0,6)]}/contracts`;
+        const response = await engineContractsRequest(data, BASE_ENGINE_URL);
+
+        if (!response.data?.result) {
+            throw new Error("Failed to get engine tokens data")
+        }
+
+        return response.data.result;
     }
-
-    return response.data.result;
 }
 
 
@@ -144,14 +167,23 @@ export const fetchEngineMetics = async (tokens: string[]): Promise<EngineMetric[
         },
         id: EngineIds.ONE,
     };
+    try {
+        const response = await engineContractsRequest(data, BASE_ENGINE_URL);
 
-    const response = await engineContractsRequest(data);
+        if (!response.data?.result) {
+            throw new Error("Failed to get engine metrics data")
+        }
 
-    if (!response.data?.result) {
-        throw new Error("Failed to get engine metrics data")
+        return response.data.result;
+    } catch(e) {
+        BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0,6)]}/contracts`;
+        const response = await engineContractsRequest(data, BASE_ENGINE_URL);
+
+        if (!response.data?.result) {
+            throw new Error("Failed to get engine metrics data")
+        }
+        return response.data.result;
     }
-
-    return response.data.result;
 }
 
 
