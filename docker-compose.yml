@@ -6,7 +6,7 @@ services:
     environment:
       - PRIVATE_API_ADDR
       - PRIVATE_API_AUTH
-      - HIVESIGNER_CLIENT_SECRET
+      - HIVESIGNER_SECRET
       - SEARCH_API_ADDR
       - SEARCH_API_SECRET
     ports:

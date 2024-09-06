@@ -5,6 +5,7 @@ import { fetchGlobalProps, getAccount } from "./hive-explorer";
 import { apiRequest } from "../helper";
 import { EngineContracts, EngineIds, EngineMetric, EngineRequestPayload, EngineTables, JSON_RPC, Methods, Token, TokenBalance } from "../../models/hiveEngine.types";
 import { convertEngineToken } from "../../models/converters";
+import config from "../../config";
 
 //docs: https://hive-engine.github.io/engine-docs/
 const BASE_ENGINE_URL = 'https://api2.hive-engine.com';//'https://api2.hive-engine.com';
@@ -183,8 +184,6 @@ const fetchSpkData = async (username: string) => {
         //TODO: instead of throwing error, handle to skip spk data addition
     }
 }
-
-
 
 export const portfolio = async (req: express.Request, res: express.Response) => {
     try {

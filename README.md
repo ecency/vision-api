@@ -22,7 +22,7 @@
 
 * `PRIVATE_API_ADDR` - private api endpoint
 * `PRIVATE_API_AUTH` - private api auth
-* `HIVESIGNER_CLIENT_SECRET` -  hivesigner client secret
+* `HIVESIGNER_SECRET` -  hivesigner client secret
 * `SEARCH_API_ADDR` - hivesearcher api endpoint
 * `SEARCH_API_SECRET` - hivesearcher api auth token
 * `REVUE_TOKEN` - revue api auth token
@@ -48,7 +48,7 @@ Configure the instance using following environment variables:
 
  * `PRIVATE_API_ADDR`
  * `PRIVATE_API_AUTH`
- * `HIVESIGNER_CLIENT_SECRET`
+ * `HIVESIGNER_SECRET`
  * `SEARCH_API_ADDR`
  * `SEARCH_API_SECRET`
  * `REVUE_TOKEN`
