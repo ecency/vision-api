@@ -3,12 +3,30 @@ import express from "express";
 import { baseApiRequest, pipe } from "../util";
 import { fetchGlobalProps, getAccount } from "./hive-explorer";
 import { apiRequest } from "../helper";
-import { EngineContracts, EngineIds, EngineMetric, EngineRequestPayload, EngineTables, JSON_RPC, Methods, Token, TokenBalance } from "../../models/hiveEngine.types";
-import { convertEngineToken } from "../../models/converters";
-import config from "../../config";
+
+import { EngineContracts, EngineIds, EngineMetric, EngineRequestPayload, EngineTables, JSON_RPC, Methods, Token, TokenBalance, TokenStatus } from "../../models/hiveEngine.types";
+import { convertEngineToken, convertRewardsStatus } from "../../models/converters";
+
 
 //docs: https://hive-engine.github.io/engine-docs/
-const BASE_ENGINE_URL = 'https://api2.hive-engine.com';//'https://api2.hive-engine.com';
+//available nodes: https://beacon.peakd.com/ select tab 'Hive Engine'
+const ENGINE_NODES = [
+    "https://engine.rishipanthee.com",
+    "https://herpc.dtools.dev",
+    "https://api.hive-engine.com/rpc",
+    "https://ha.herpc.dtools.dev",
+    "https://herpc.kanibot.com",
+    "https://he.sourov.dev",
+    "https://herpc.actifit.io",
+    "https://api2.hive-engine.com/rpc"
+  ];
+
+// min and max included
+const randomIntFromInterval = (min: number, max: number) => {
+    return Math.floor(Math.random() * (max - min + 1) + min);
+}
+
+let BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0,6)]}/contracts`;
 const BASE_SPK_URL = 'https://spk.good-karma.xyz';
 
 const ENGINE_REWARDS_URL = 'https://scot-api.hive-engine.com/';
@@ -17,25 +35,20 @@ const ENGINE_CHART_URL = 'https://info-api.tribaldex.com/market/ohlcv';
 //docs: https://github.com/hive-engine/ssc_tokens_history/tree/hive#api-usage
 const ENGINE_ACCOUNT_HISTORY_URL = 'https://history.hive-engine.com/accountHistory';
 
-const PATH_RPC = 'rpc';
 export const PATH_CONTRACTS = 'contracts';
 
 
 //client engine api requests
 export const eapi = async (req: express.Request, res: express.Response) => {
     const data = req.body;
-    pipe(engineContractsRequest(data), res);
+    pipe(engineContractsRequest(data, BASE_ENGINE_URL), res);
 }
 
 
 export const erewardapi = async (req: express.Request, res: express.Response) => {
     const { username } = req.params;
     const params = req.query;
-
-    const url = `${ENGINE_REWARDS_URL}@${username}`;
-    const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency' };
-
-    pipe(baseApiRequest(url, "GET", headers, undefined, params), res);
+    pipe(engineRewardsRequest(username, params), res);
 }
 
 export const echartapi = async (req: express.Request, res: express.Response) => {
@@ -51,21 +64,26 @@ export const engineAccountHistory = (req: express.Request, res: express.Response
     const params = req.query;
 
     const url = `${ENGINE_ACCOUNT_HISTORY_URL}`;
-    const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency Apps' };
+    const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency' };
 
     pipe(baseApiRequest(url, "GET", headers, undefined, params), res);
 }
 
 
-//raw engine api calls
-const engineContractsRequest = (data: EngineRequestPayload) => {
-    const url = `${BASE_ENGINE_URL}/${PATH_RPC}/${PATH_CONTRACTS}`;
+//raw engine api call
+const engineContractsRequest = (data: EngineRequestPayload, url: string) => {
     const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency' };
 
     return baseApiRequest(url, "POST", headers, data)
 }
 
+//raw engine rewards api call
+const engineRewardsRequest = (username:string, params:any) => {
+    const url = `${ENGINE_REWARDS_URL}/@${username}`;
+    const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency' };
 
+    return baseApiRequest(url, "GET", headers, undefined, params)
+}
 
 
 //engine contracts methods
@@ -82,38 +100,59 @@ export const fetchEngineBalances = async (account: string): Promise<TokenBalance
         },
         id: EngineIds.ONE,
     };
+    try {
+        const response = await engineContractsRequest(data, BASE_ENGINE_URL);
 
-    const response = await engineContractsRequest(data);
+        if (!response.data?.result) {
+            throw new Error("Failed to get engine balances")
+        }
 
-    if (!response.data?.result) {
-        throw new Error("Failed to get engine balances")
+        return response.data.result;
     }
+    catch (e) {
+        BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0,6)]}/contracts`;
+        const response = await engineContractsRequest(data, BASE_ENGINE_URL);
 
-    return response.data.result;
+        if (!response.data?.result) {
+            throw new Error("Failed to get engine balances")
+        }
+
+        return response.data.result;
+    }
 };
 
 
 export const fetchEngineTokens = async (tokens: string[]): Promise<Token[]> => {
     const data: EngineRequestPayload = {
-      jsonrpc: JSON_RPC.RPC_2,
-      method: Methods.FIND,
-      params: {
-        contract: EngineContracts.TOKENS,
-        table: EngineTables.TOKENS,
-        query: {
-          symbol: { $in: tokens },
+        jsonrpc: JSON_RPC.RPC_2,
+        method: Methods.FIND,
+        params: {
+            contract: EngineContracts.TOKENS,
+            table: EngineTables.TOKENS,
+            query: {
+                symbol: { $in: tokens },
+            },
         },
-      },
-      id: EngineIds.ONE,
+        id: EngineIds.ONE,
     };
+    try {
+        const response = await engineContractsRequest(data, BASE_ENGINE_URL);
 
-    const response = await engineContractsRequest(data);
+        if (!response.data?.result) {
+            throw new Error("Failed to get engine tokens data")
+        }
 
-    if (!response.data?.result) {
-        throw new Error("Failed to get engine tokens data")
+        return response.data.result;
+    } catch(e) {
+        BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0,6)]}/contracts`;
+        const response = await engineContractsRequest(data, BASE_ENGINE_URL);
+
+        if (!response.data?.result) {
+            throw new Error("Failed to get engine tokens data")
+        }
+
+        return response.data.result;
     }
-
-    return response.data.result;
 }
 
 
@@ -122,22 +161,52 @@ export const fetchEngineMetics = async (tokens: string[]): Promise<EngineMetric[
         jsonrpc: JSON_RPC.RPC_2,
         method: Methods.FIND,
         params: {
-          contract: EngineContracts.MARKET,
-          table: EngineTables.METRICS,
-          query: {
-            symbol: { $in: tokens },
-          },
+            contract: EngineContracts.MARKET,
+            table: EngineTables.METRICS,
+            query: {
+                symbol: { $in: tokens },
+            },
         },
         id: EngineIds.ONE,
-      };
+    };
+    try {
+        const response = await engineContractsRequest(data, BASE_ENGINE_URL);
 
-    const response = await engineContractsRequest(data);
+        if (!response.data?.result) {
+            throw new Error("Failed to get engine metrics data")
+        }
 
-    if (!response.data?.result) {
-        throw new Error("Failed to get engine metrics data")
+        return response.data.result;
+    } catch(e) {
+        BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0,6)]}/contracts`;
+        const response = await engineContractsRequest(data, BASE_ENGINE_URL);
+
+        if (!response.data?.result) {
+            throw new Error("Failed to get engine metrics data")
+        }
+        return response.data.result;
     }
+}
 
-    return response.data.result;
+
+export const fetchEngineRewards = async (username: string): Promise<TokenStatus[]> => {
+    try {
+        const response = await engineRewardsRequest(username, {hive : 1});
+
+        const rawData:TokenStatus[] = Object.values(response.data);
+        if (!rawData || rawData.length === 0) {
+          throw new Error('No rewards data returned');
+        }
+
+        const data = rawData.map(convertRewardsStatus);
+        const filteredData = data.filter((item) => item && item.pendingToken > 0);
+
+        console.log('unclaimed engine rewards data', filteredData);
+        return filteredData;
+      } catch (err) {
+        console.warn('failed ot get unclaimed engine rewards', err);
+        return [];
+      }
 }
 
 
@@ -147,23 +216,31 @@ const fetchEngineTokensWithBalance = async (username: string) => {
     try {
 
         const balances = await fetchEngineBalances(username);
+
+        if (!balances) {
+             throw new Error("failed to fetch engine balances");
+        }
+
         const symbols = balances.map((t) => t.symbol);
 
-        const tokens = await fetchEngineTokens(symbols);
-        const metrices = await fetchEngineMetics(symbols);
-        // const unclaimed = await fetchUnclaimedRewards(username); //TODO: handle rewards later
+        const promiseTokens = fetchEngineTokens(symbols);
+        const promiseMmetrices = fetchEngineMetics(symbols);
+        const promiseUnclaimed = fetchEngineRewards(username)
+
+        const [tokens, metrices, unclaimed] =
+            await Promise.all([promiseTokens, promiseMmetrices, promiseUnclaimed])
 
         return balances.map((balance: any) => {
             const token = tokens.find((t: any) => t.symbol == balance.symbol);
             const metrics = metrices.find((t: any) => t.symbol == balance.symbol);
-            // const pendingRewards = unclaimed.find((t: any) => t.symbol == balance.symbol); //TODO: handle rewards later
-            return convertEngineToken(balance, token, metrics);
+            const pendingRewards = unclaimed.find((t: any) => t.symbol == balance.symbol);
+            return convertEngineToken(balance, token, metrics, pendingRewards);
         });
 
     } catch (err) {
-        console.warn("Spk data fetch failed", err);
-        //TODO: instead of throwing error, handle to skip spk data addition
-        return;
+        console.warn("Engine data fetch failed", err);
+        // instead of throwing error, handle to skip engine data addition
+        return null;
     }
 }
 
@@ -181,151 +258,54 @@ const fetchSpkData = async (username: string) => {
 
     } catch (err) {
         console.warn("Spk data fetch failed", err);
-        //TODO: instead of throwing error, handle to skip spk data addition
+        //instead of throwing error, handle to skip spk data addition
+        return null;
     }
+}
+
+
+const apiRequestData = async (endpoint: string) => {
+    const resp = await apiRequest(endpoint, "GET");
+
+    if (!resp.data) {
+        throw new Error("failed to get data");
+    }
+    return resp.data;
 }
 
 export const portfolio = async (req: express.Request, res: express.Response) => {
     try {
 
+        const respObj: { [key: string]: any } = {};
         const { username } = req.body;
 
         //fetch basic hive data
-        const _globalProps = await fetchGlobalProps();
-        const _userdata = await getAccount(username);
+        const globalProps = fetchGlobalProps();
+        const accountData = getAccount(username);
 
-        //fetch points data
-        //TODO: put back api request
-        // const _marketData = await apiRequest(`market-data/latest`, "GET");
-        const _marketData = await dummyMarketData()
+        //fetch market and points data
+        const marketData = apiRequestData(`market-data/latest`);
+        const pointsData = apiRequestData(`users/${username}`);
 
-        //TODO: put back api request
-        // const _pointsData =await apiRequest(`users/${username}`, "GET");
-        const _pointsData = await dummyPointSummary()
+        //fetch engine assets
+        const engineData = fetchEngineTokensWithBalance(username);
 
-        //TODO: fetch engine assets
-        const _engineData = await fetchEngineTokensWithBalance(username)
+        //fetch spk assets
+        const spkData = fetchSpkData(username);
 
-
-        //TODO: fetch spk assets
-        const _spkData = await fetchSpkData(username);
-
-        res.send({
-            globalProps: _globalProps,
-            marketData: _marketData,
-            accountData: _userdata,
-            pointsData: _pointsData,
-            engineData: _engineData,
-            spkData: _spkData,
+        const responses = await Promise.all([globalProps, marketData, accountData, pointsData, engineData, spkData]);
+        const responseKeys = ["globalProps", "marketData", "accountData", "pointsData", "engineData", "spkData"]
+        responses.forEach((response, index) => {
+            if (response) {
+                respObj[responseKeys[index]] = response;
+            }
         })
+
+        return res.send(respObj)
 
     } catch (err: any) {
         console.warn("failed to compile portfolio", err);
-        res.status(500).send(err.message)
+        return res.status(500).send(err.message)
     }
 
 }
-
-
-
-
-//TODO: remove before merging
-const dummyPointSummary = async () => {
-    return {
-        "username": "${username}",
-        "points": "5523.704",
-        "points_by_type": {
-            "10": "6750.500",
-            "20": "100.000",
-            "30": "7930.000",
-            "100": "862.500",
-            "110": "1075.105",
-            "120": "190.200",
-            "130": "70.400",
-            "150": "5089.637"
-        },
-        "unclaimed_points": "276.167",
-        "unclaimed_points_by_type": {
-            "10": "96.500",
-            "30": "160.000",
-            "110": "19.667"
-        }
-    }
-}
-
-//TOOD: remove before merging
-const dummyMarketData = async () => {
-    return {
-        "btc": {
-            "quotes": {
-                "btc": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0,
-                    "price": 1
-                },
-                "usd": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0.0060308,
-                    "price": 0.0001638804887141081
-                }
-            }
-        },
-        "estm": {
-            "quotes": {
-                "btc": {
-                    "last_updated": "2022-08-12T04:57:00.000Z",
-                    "percent_change": 0,
-                    "price": 8e-8
-                },
-                "usd": {
-                    "last_updated": "2022-08-12T04:57:00.000Z",
-                    "percent_change": 0,
-                    "price": 0.002
-                }
-            }
-        },
-        "eth": {
-            "quotes": {
-                "btc": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0,
-                    "price": 1.0797900018640657e-7
-                },
-                "usd": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0,
-                    "price": 0.007013003078153161
-                }
-            }
-        },
-        "hbd": {
-            "quotes": {
-                "btc": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0.28189758,
-                    "price": 0.00001531436662541532
-                },
-                "usd": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0.19563211,
-                    "price": 0.9947278858468801
-                }
-            }
-        },
-        "hive": {
-            "quotes": {
-                "btc": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0.50376444,
-                    "price": 0.0000034331098014452116
-                },
-                "usd": {
-                    "last_updated": "2024-07-18T06:43:00.000Z",
-                    "percent_change": 0.55258548,
-                    "price": 0.22308583979341057
-                }
-            }
-        }
-    }
-}
-
