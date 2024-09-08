@@ -23,6 +23,7 @@ export const bots = [
         "hk-gifts",
         "hug.bot",
         "indiaunited",
+        "indeedly",
         "kennybrown",
         "ladytoken",
         "lolzbot",
