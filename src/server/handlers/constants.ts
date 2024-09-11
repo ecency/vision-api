@@ -11,6 +11,7 @@ export const bots = [
         "c-squared",
         "dhedge",
         "discovery-it",
+        "dookbot",
         "dsc-r2cornell",
         "gifbot",
         "hive-177745",
