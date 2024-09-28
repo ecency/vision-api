@@ -54,11 +54,21 @@ export const announcements = [
         "button_link": "/proposals/283",
         "path": "/@.+/(blog|posts|wallet|points|engine|permissions|spk)",
         "auth": true
-    },*/
+    },
     {
         "id": 106,
         "title": "Vote New Proposal! ❤️",
         "description": "We still need your support. Every vote and support matters!",
+        "button_text": "Support now",
+        "button_link": "/proposals/283",
+        "path": "/@.+/(blog|posts|wallet|points|engine|permissions|spk)",
+        "auth": true,
+        "ops": "hive://sign/op/WyJ1cGRhdGVfcHJvcG9zYWxfdm90ZXMiLHsidm90ZXIiOiAiX19zaWduZXIiLCJwcm9wb3NhbF9pZHMiOiBbMjgzXSwiYXBwcm92ZSI6dHJ1ZSwiZXh0ZW5zaW9ucyI6IFtdfV0."
+    },*/
+    {
+        "id": 107,
+        "title": "Support Proposal! ❤️",
+        "description": "Your support is very important for future development of Ecency!",
         "button_text": "Support now",
         "button_link": "/proposals/283",
         "path": "/@.+/(blog|posts|wallet|points|engine|permissions|spk)",
