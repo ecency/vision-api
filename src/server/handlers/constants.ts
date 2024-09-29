@@ -19,6 +19,7 @@ export const bots = [
         "hivebuzz",
         "hivecurators",
         "hivegifbot",
+        "hivepakistan",
         "hive-lu",
         "hiq.smartbot",
         "hk-gifts",
