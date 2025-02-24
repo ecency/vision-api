@@ -66,13 +66,18 @@ server
     .post("^/private-api/request-delete$", privateApi.report)
     .post("^/private-api/post-reblogs$", privateApi.reblogs)
     .post("^/private-api/post-reblog-count$", privateApi.reblogCount)
-  
+
     .post("^/private-api/chats-get$", privateApi.chatsGet)
     .post("^/private-api/channels-get", privateApi.channelsGet)
     .post("^/private-api/channels-get", privateApi.channelsGet)
 
+    .post("^/private-api/wallets-add$", privateApi.walletsAdd)
 
     /* Login required private api endpoints */
+    .post("^/private-api/wallets", privateApi.wallets)
+    .post("^/private-api/wallets-update$", privateApi.walletsUpdate)
+    .post("^/private-api/wallets-delete$", privateApi.walletsDelete)
+
     .post("^/private-api/notifications/unread$", privateApi.unreadNotifications)
     .post("^/private-api/notifications/mark$", privateApi.markNotifications)
     .post("^/private-api/register-device$", privateApi.registerDevice)

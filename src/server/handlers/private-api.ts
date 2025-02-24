@@ -654,3 +654,30 @@ export const botsGet = async (req: express.Request, res: express.Response) => {
     res.send(bots)
 }
 
+export const wallets = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req, res);
+    if (!username) res.status(401).send("Unauthorized");
+    pipe(apiRequest(`wallets/${username}`, "GET"), res);
+}
+
+export const walletsAdd = async (req: express.Request, res: express.Response) => {
+    const {username, token, address, meta} = req.body;
+    const data = {username, token, address, meta};
+    pipe(apiRequest(`wallet`, "POST", {}, data), res);
+}
+
+export const walletsUpdate = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req, res);
+    if (!username) res.status(401).send("Unauthorized");
+    const {id, token, address, meta} = req.body;
+    const data = {username, token, address, meta};
+    pipe(apiRequest(`wallets/${username}/${id}`, "PUT", {}, data), res);
+}
+
+export const walletsDelete = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req, res);
+    if (!username) res.status(401).send("Unauthorized");
+    const {id} = req.body;
+    pipe(apiRequest(`wallets/${username}/${id}`, "DELETE"), res);
+}
+
