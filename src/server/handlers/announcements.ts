@@ -64,7 +64,7 @@ export const announcements = [
         "path": "/@.+/(blog|posts|wallet|points|engine|permissions|spk)",
         "auth": true,
         "ops": "hive://sign/op/WyJ1cGRhdGVfcHJvcG9zYWxfdm90ZXMiLHsidm90ZXIiOiAiX19zaWduZXIiLCJwcm9wb3NhbF9pZHMiOiBbMjgzXSwiYXBwcm92ZSI6dHJ1ZSwiZXh0ZW5zaW9ucyI6IFtdfV0."
-    },*/
+    },
     {
         "id": 107,
         "title": "Support Proposal! ❤️",
@@ -74,5 +74,15 @@ export const announcements = [
         "path": "/@.+/(blog|posts|wallet|points|engine|permissions|spk)",
         "auth": true,
         "ops": "hive://sign/op/WyJ1cGRhdGVfcHJvcG9zYWxfdm90ZXMiLHsidm90ZXIiOiAiX19zaWduZXIiLCJwcm9wb3NhbF9pZHMiOiBbMjgzXSwiYXBwcm92ZSI6dHJ1ZSwiZXh0ZW5zaW9ucyI6IFtdfV0."
+    }*/
+    {
+        "id": 108,
+        "title": "Support Ecency! ❤️",
+        "description": "New proposal to support Ecency and its future development!",
+        "button_text": "Support now",
+        "button_link": "/proposals/336",
+        "path": "/@.+/(blog|posts|wallet|points|engine|permissions|spk)",
+        "auth": true,
+        "ops": "hive://sign/op/WyJ1cGRhdGVfcHJvcG9zYWxfdm90ZXMiLHsidm90ZXIiOiJfX3NpZ25lciIsInByb3Bvc2FsX2lkcyI6IjMzNiIsImFwcHJvdmUiOnRydWUsImV4dGVuc2lvbnMiOltdfV0."
     }
 ]
