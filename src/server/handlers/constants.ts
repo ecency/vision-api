@@ -58,3 +58,8 @@ export const bots = [
         "wine.bot",
         "youarealive",
 ]
+
+
+export const ACTIVE_PROPOSAL_META = {
+        id: 283
+}
