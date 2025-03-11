@@ -61,5 +61,5 @@ export const bots = [
 
 
 export const ACTIVE_PROPOSAL_META = {
-        id: 283
+        id: 336
 }
