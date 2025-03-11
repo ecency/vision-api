@@ -1,17 +1,17 @@
 import express from "express";
 import hs from "hivesigner";
-import axios, {AxiosRequestConfig} from "axios";
+import axios, { AxiosRequestConfig } from "axios";
 
 import config from "../../config";
-import {announcements} from "./announcements";
-import {apiRequest, getPromotedEntries} from "../helper";
+import { announcements } from "./announcements";
+import { apiRequest, getPromotedEntries } from "../helper";
 
-import {pipe} from "../util";
+import { pipe } from "../util";
 import { cache } from '../cache';
-import {bots} from "./constants";
+import { ACTIVE_PROPOSAL_META, bots } from "./constants";
 
 const validateCode = async (req: express.Request, res: express.Response): Promise<string | false> => {
-    const {code} = req.body;
+    const { code } = req.body;
 
     if (!code) {
         res.status(400).send("Bad Request");
@@ -19,7 +19,7 @@ const validateCode = async (req: express.Request, res: express.Response): Promis
     }
 
     try {
-        return await (new hs.Client({accessToken: code}).me().then((r: { name: string }) => r.name));
+        return await (new hs.Client({ accessToken: code }).me().then((r: { name: string }) => r.name));
     } catch (e) {
         res.status(401).send("Unauthorized");
         return false;
@@ -27,12 +27,12 @@ const validateCode = async (req: express.Request, res: express.Response): Promis
 };
 
 export const receivedVesting = async (req: express.Request, res: express.Response) => {
-    const {username} = req.params;
+    const { username } = req.params;
     pipe(apiRequest(`delegatee_vesting_shares/${username}`, "GET"), res);
 };
 
 export const receivedRC = async (req: express.Request, res: express.Response) => {
-    const {username} = req.params;
+    const { username } = req.params;
     pipe(apiRequest(`delegatee_rc/${username}`, "GET"), res);
 };
 
@@ -41,7 +41,7 @@ export const rewardedCommunities = async (req: express.Request, res: express.Res
 };
 
 export const leaderboard = async (req: express.Request, res: express.Response) => {
-    const {duration} = req.params;
+    const { duration } = req.params;
     pipe(apiRequest(`leaderboard?duration=${duration}`, "GET"), res);
 };
 
@@ -50,8 +50,8 @@ export const getAnnouncement = async (req: express.Request, res: express.Respons
 }
 
 export const referrals = async (req: express.Request, res: express.Response) => {
-    const {username} = req.params;
-    const {max_id} = req.query;
+    const { username } = req.params;
+    const { max_id } = req.query;
     let u = `referrals/${username}?size=20`;
     if (max_id) {
         u += `&max_id=${max_id}`;
@@ -60,14 +60,14 @@ export const referrals = async (req: express.Request, res: express.Response) => 
 };
 
 export const referralsStats = async (req: express.Request, res: express.Response) => {
-    const {username} = req.params;
+    const { username } = req.params;
     let u = `referrals/${username}/stats`;
     pipe(apiRequest(u, "GET"), res);
 };
 
 
 export const curation = async (req: express.Request, res: express.Response) => {
-    const {duration} = req.params;
+    const { duration } = req.params;
     pipe(apiRequest(`curation?duration=${duration}`, "GET"), res);
 };
 
@@ -77,7 +77,7 @@ export const promotedEntries = async (req: express.Request, res: express.Respons
 };
 
 export const commentHistory = async (req: express.Request, res: express.Response) => {
-    const {author, permlink, onlyMeta} = req.body;
+    const { author, permlink, onlyMeta } = req.body;
 
     let u = `comment-history/${author}/${permlink}`;
     if (onlyMeta === '1') {
@@ -88,12 +88,12 @@ export const commentHistory = async (req: express.Request, res: express.Response
 };
 
 export const points = async (req: express.Request, res: express.Response) => {
-    const {username} = req.body;
+    const { username } = req.body;
     pipe(apiRequest(`users/${username}`, "GET"), res);
 };
 
 export const pointList = async (req: express.Request, res: express.Response) => {
-    const {username, type} = req.body;
+    const { username, type } = req.body;
     let u = `users/${username}/points?size=50`;
     if (type) {
         u += `&type=${type}`;
@@ -102,32 +102,32 @@ export const pointList = async (req: express.Request, res: express.Response) => 
 };
 
 export const portfolio = async (req: express.Request, res: express.Response) => {
-    const {username} = req.body;
+    const { username } = req.body;
     let u = `users/${username}/portfolio`;
     pipe(apiRequest(u, "GET"), res);
 };
 
 export const createAccount = async (req: express.Request, res: express.Response) => {
-    const {username, email, referral} = req.body;
+    const { username, email, referral } = req.body;
 
-    const headers = {'X-Real-IP-V': req.headers['x-forwarded-for'] || ''};
-    const payload = {username, email, referral};
+    const headers = { 'X-Real-IP-V': req.headers['x-forwarded-for'] || '' };
+    const payload = { username, email, referral };
 
     pipe(apiRequest(`signup/account-create`, "POST", headers, payload), res);
 };
 
 export const createAccountFriend = async (req: express.Request, res: express.Response) => {
-    const {username, email, friend} = req.body;
+    const { username, email, friend } = req.body;
 
-    const headers = {'X-Real-IP-V': req.headers['x-forwarded-for'] || ''};
-    const payload = {username, email, friend};
+    const headers = { 'X-Real-IP-V': req.headers['x-forwarded-for'] || '' };
+    const payload = { username, email, friend };
 
     pipe(apiRequest(`signup/account-create-friend`, "POST", headers, payload), res);
 };
 
 export const notifications = async (req: express.Request, res: express.Response) => {
     let username = await validateCode(req, res);
-    const {filter, since, limit, user} = req.body;
+    const { filter, since, limit, user } = req.body;
 
     if (!username) {
         if (!user) {
@@ -137,7 +137,7 @@ export const notifications = async (req: express.Request, res: express.Response)
         }
     }
     // if user defined but not same as user's code
-    if (user && username!==user) {
+    if (user && username !== user) {
         username = user;
     }
 
@@ -175,7 +175,7 @@ export const markNotifications = async (req: express.Request, res: express.Respo
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");;
 
-    const {id} = req.body;
+    const { id } = req.body;
     const data: { id?: string } = {};
 
     if (id) {
@@ -188,15 +188,15 @@ export const markNotifications = async (req: express.Request, res: express.Respo
 export const registerDevice = async (req: express.Request, res: express.Response) => {
     const _username = await validateCode(req, res);
     if (!_username) res.status(401).send("Unauthorized");
-    const {username, token, system, allows_notify, notify_types} = req.body;
-    const data = {username, token, system, allows_notify, notify_types};
+    const { username, token, system, allows_notify, notify_types } = req.body;
+    const data = { username, token, system, allows_notify, notify_types };
     pipe(apiRequest(`rgstrmbldvc/`, "POST", {}, data), res);
 };
 
 export const detailDevice = async (req: express.Request, res: express.Response) => {
     const _username = await validateCode(req, res);
     if (!_username) res.status(401).send("Unauthorized");
-    const {username, token} = req.body;
+    const { username, token } = req.body;
     pipe(apiRequest(`mbldvcdtl/${username}/${token}`, "GET"), res);
 };
 
@@ -210,15 +210,15 @@ export const images = async (req: express.Request, res: express.Response) => {
 export const imagesDelete = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {id} = req.body;
+    const { id } = req.body;
     pipe(apiRequest(`images/${username}/${id}`, "DELETE"), res);
 }
 
 export const imagesAdd = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {url} = req.body;
-    const data = {username, image_url: url};
+    const { url } = req.body;
+    const data = { username, image_url: url };
     pipe(apiRequest(`image`, "POST", {}, data), res);
 }
 
@@ -231,23 +231,23 @@ export const drafts = async (req: express.Request, res: express.Response) => {
 export const draftsAdd = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {title, body, tags, meta} = req.body;
-    const data = {username, title, body, tags, meta};
+    const { title, body, tags, meta } = req.body;
+    const data = { username, title, body, tags, meta };
     pipe(apiRequest(`draft`, "POST", {}, data), res);
 }
 
 export const draftsUpdate = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {id, title, body, tags, meta} = req.body;
-    const data = {username, title, body, tags, meta};
+    const { id, title, body, tags, meta } = req.body;
+    const data = { username, title, body, tags, meta };
     pipe(apiRequest(`drafts/${username}/${id}`, "PUT", {}, data), res);
 }
 
 export const draftsDelete = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {id} = req.body;
+    const { id } = req.body;
     pipe(apiRequest(`drafts/${username}/${id}`, "DELETE"), res);
 }
 
@@ -260,15 +260,15 @@ export const bookmarks = async (req: express.Request, res: express.Response) => 
 export const bookmarksAdd = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {author, permlink} = req.body;
-    const data = {username, author, permlink, chain: 'steem'};
+    const { author, permlink } = req.body;
+    const data = { username, author, permlink, chain: 'steem' };
     pipe(apiRequest(`bookmark`, "POST", {}, data), res);
 }
 
 export const bookmarksDelete = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {id} = req.body;
+    const { id } = req.body;
     pipe(apiRequest(`bookmarks/${username}/${id}`, "DELETE"), res);
 }
 
@@ -282,23 +282,23 @@ export const schedulesAdd = async (req: express.Request, res: express.Response) 
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
 
-    const {permlink, title, body, meta, options, schedule, reblog} = req.body;
+    const { permlink, title, body, meta, options, schedule, reblog } = req.body;
 
-    const data = {username, permlink, title, body, meta, options, schedule, reblog: reblog ? 1 : 0};
+    const data = { username, permlink, title, body, meta, options, schedule, reblog: reblog ? 1 : 0 };
     pipe(apiRequest(`schedules`, "POST", {}, data), res);
 }
 
 export const schedulesDelete = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {id} = req.body;
+    const { id } = req.body;
     pipe(apiRequest(`schedules/${username}/${id}`, "DELETE"), res);
 }
 
 export const schedulesMove = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {id} = req.body;
+    const { id } = req.body;
     pipe(apiRequest(`schedules/${username}/${id}`, "PUT"), res);
 }
 
@@ -311,22 +311,22 @@ export const favorites = async (req: express.Request, res: express.Response) => 
 export const favoritesCheck = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {account} = req.body;
+    const { account } = req.body;
     pipe(apiRequest(`isfavorite/${username}/${account}`, "GET"), res);
 }
 
 export const favoritesAdd = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {account} = req.body;
-    const data = {username, account};
+    const { account } = req.body;
+    const data = { username, account };
     pipe(apiRequest(`favorite`, "POST", {}, data), res);
 }
 
 export const favoritesDelete = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {account} = req.body;
+    const { account } = req.body;
     pipe(apiRequest(`favoriteUser/${username}/${account}`, "DELETE"), res);
 }
 
@@ -339,23 +339,23 @@ export const fragments = async (req: express.Request, res: express.Response) => 
 export const fragmentsAdd = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {title, body} = req.body;
-    const data = {username, title, body};
+    const { title, body } = req.body;
+    const data = { username, title, body };
     pipe(apiRequest(`fragment`, "POST", {}, data), res);
 }
 
 export const fragmentsUpdate = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {id, title, body} = req.body;
-    const data = {title, body};
+    const { id, title, body } = req.body;
+    const data = { title, body };
     pipe(apiRequest(`fragments/${username}/${id}`, "PUT", {}, data), res);
 }
 
 export const fragmentsDelete = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {id} = req.body;
+    const { id } = req.body;
     pipe(apiRequest(`fragments/${username}/${id}`, "DELETE"), res);
 }
 
@@ -368,23 +368,23 @@ export const decks = async (req: express.Request, res: express.Response) => {
 export const decksAdd = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {title, settings} = req.body;
-    const data = {username, title, settings};
+    const { title, settings } = req.body;
+    const data = { username, title, settings };
     pipe(apiRequest(`deck`, "POST", {}, data), res);
 }
 
 export const decksUpdate = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {id, title, settings} = req.body;
-    const data = {username, title, settings};
+    const { id, title, settings } = req.body;
+    const data = { username, title, settings };
     pipe(apiRequest(`decks/${username}/${id}`, "PUT", {}, data), res);
 }
 
 export const decksDelete = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {id} = req.body;
+    const { id } = req.body;
     pipe(apiRequest(`decks/${username}/${id}`, "DELETE"), res);
 }
 
@@ -397,37 +397,37 @@ export const recoveries = async (req: express.Request, res: express.Response) =>
 export const recoveriesAdd = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {email, public_keys} = req.body;
-    const data = {username, email, public_keys};
+    const { email, public_keys } = req.body;
+    const data = { username, email, public_keys };
     pipe(apiRequest(`recovery`, "POST", {}, data), res);
 }
 
 export const recoveriesUpdate = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {id, email, public_keys} = req.body;
-    const data = {username, email, public_keys};
+    const { id, email, public_keys } = req.body;
+    const data = { username, email, public_keys };
     pipe(apiRequest(`recoveries/${username}/${id}`, "PUT", {}, data), res);
 }
 
 export const recoveriesDelete = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {id} = req.body;
+    const { id } = req.body;
     pipe(apiRequest(`recoveries/${username}/${id}`, "DELETE"), res);
 }
 
 export const pointsClaim = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const data = {us: username};
+    const data = { us: username };
     pipe(apiRequest(`claim`, "PUT", {}, data), res);
 }
 
 export const pointsCalc = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {amount} = req.body;
+    const { amount } = req.body;
     pipe(apiRequest(`estm-calc?username=${username}&amount=${amount}`, "GET"), res);
 }
 
@@ -440,7 +440,7 @@ export const promotePrice = async (req: express.Request, res: express.Response) 
 export const promotedPost = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {author, permlink} = req.body;
+    const { author, permlink } = req.body;
     pipe(apiRequest(`promoted-posts/${author}/${permlink}`, "GET"), res);
 }
 
@@ -453,7 +453,7 @@ export const boostPlusPrice = async (req: express.Request, res: express.Response
 export const boostedPlusAccount = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {account} = req.body;
+    const { account } = req.body;
     pipe(apiRequest(`boosted-plus-accounts/${account}`, "GET"), res);
 }
 
@@ -466,14 +466,14 @@ export const boostOptions = async (req: express.Request, res: express.Response) 
 export const boostedPost = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {author, permlink} = req.body;
+    const { author, permlink } = req.body;
     pipe(apiRequest(`boosted-posts/${author}/${permlink}`, "GET"), res);
 }
 
 export const activities = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {ty, bl, tx} = req.body;
+    const { ty, bl, tx } = req.body;
 
     if (ty === 10) {
         const vip = req.headers['x-real-ip'] || req.connection.remoteAddress || req.headers['x-forwarded-for'] || '';
@@ -522,19 +522,19 @@ export const activities = async (req: express.Request, res: express.Response) =>
 }
 
 export const subscribeNewsletter = async (req: express.Request, res: express.Response) => {
-    const {email} = req.body;
-    const data = {email};
+    const { email } = req.body;
+    const data = { email };
     pipe(apiRequest(`newsletter/subscribe`, "POST", {}, data), res);
 }
 
 export const unSubscribeNewsletter = async (req: express.Request, res: express.Response) => {
-    const {id} = req.params;
+    const { id } = req.params;
     pipe(apiRequest(`newsletter/subscribe?id=${id}`, "PUT"), res);
 }
 
 export const marketData = async (req: express.Request, res: express.Response) => {
-    const {fiat, token} = req.params;
-    const {fixed} = req.query;
+    const { fiat, token } = req.params;
+    const { fixed } = req.query;
     pipe(apiRequest(`market-data/currency-rate/${fiat}/${token}?fixed=${fixed}`, "GET"), res);
 };
 
@@ -561,19 +561,19 @@ export const requestDelete = async (req: express.Request, res: express.Response)
 };
 
 export const reblogs = async (req: express.Request, res: express.Response) => {
-    const {author, permlink} = req.params;
+    const { author, permlink } = req.params;
     pipe(apiRequest(`post-reblogs/${author}/${permlink}`, "GET"), res);
 };
 
 export const reblogCount = async (req: express.Request, res: express.Response) => {
-    const {author, permlink} = req.params;
+    const { author, permlink } = req.params;
     pipe(apiRequest(`post-reblog-count/${author}/${permlink}`, "GET"), res);
 };
 
 export const gameGet = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {game_type} = req.body;
+    const { game_type } = req.body;
     pipe(apiRequest(`game/${username}?type=${game_type}`, "GET"), res);
 };
 
@@ -581,19 +581,19 @@ export const gamePost = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
 
-    const {key, game_type} = req.body;
-    const data = {key: key};
+    const { key, game_type } = req.body;
+    const data = { key: key };
     pipe(apiRequest(`game/${username}?type=${game_type}`, "POST", {}, data), res);
 };
 
 export const purchaseOrder = async (req: express.Request, res: express.Response) => {
-    const {platform, product, receipt, user, meta } = req.body;
+    const { platform, product, receipt, user, meta } = req.body;
     if (user !== 'ecency') {
         const username = await validateCode(req, res);
         if (!username) res.status(401).send("Unauthorized");
     }
 
-    const data = {platform, product, receipt, user, meta};
+    const data = { platform, product, receipt, user, meta };
     pipe(apiRequest(`purchase-order`, "POST", {}, data), res);
 };
 
@@ -606,21 +606,21 @@ export const chats = async (req: express.Request, res: express.Response) => {
 export const chatsAdd = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {key, pubkey, iv, meta} = req.body;
-    const data = {username, key, pubkey, iv, meta};
+    const { key, pubkey, iv, meta } = req.body;
+    const data = { username, key, pubkey, iv, meta };
     pipe(apiRequest(`chats`, "POST", {}, data), res);
 }
 
 export const chatsUpdate = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {id, key, pubkey, iv, meta} = req.body;
-    const data = {key, pubkey, iv, meta};
+    const { id, key, pubkey, iv, meta } = req.body;
+    const data = { key, pubkey, iv, meta };
     pipe(apiRequest(`chats/${username}/${id}`, "PUT", {}, data), res);
 }
 
 export const chatsPub = async (req: express.Request, res: express.Response) => {
-    const {username} = req.params;
+    const { username } = req.params;
     pipe(apiRequest(`chats/pub/${username}`, "GET"), res);
 }
 
@@ -628,25 +628,27 @@ export const channelAdd = async (req: express.Request, res: express.Response) =>
     const creator = await validateCode(req, res);
     if (!creator || creator !== 'ecency') res.status(401).send("Unauthorized");
 
-    const {username, channel_id, meta} = req.body;
-    const data = {creator, username, channel_id, meta};
+    const { username, channel_id, meta } = req.body;
+    const data = { creator, username, channel_id, meta };
     pipe(apiRequest(`channel`, "POST", {}, data), res);
 }
 
 export const channelGet = async (req: express.Request, res: express.Response) => {
-    const {username} = req.params;
+    const { username } = req.params;
     pipe(apiRequest(`channel/${username}`, "GET"), res);
 }
 
+
+
 export const channelsGet = async (req: express.Request, res: express.Response) => {
-    const {users} = req.body;
-    const data = {users};
+    const { users } = req.body;
+    const data = { users };
     pipe(apiRequest(`channels`, "POST", {}, data), res);
 }
 
 export const chatsGet = async (req: express.Request, res: express.Response) => {
-    const {users} = req.body;
-    const data = {users};
+    const { users } = req.body;
+    const data = { users };
     pipe(apiRequest(`chats/pubs`, "POST", {}, data), res);
 }
 
@@ -661,23 +663,27 @@ export const wallets = async (req: express.Request, res: express.Response) => {
 }
 
 export const walletsAdd = async (req: express.Request, res: express.Response) => {
-    const {username, token, address, meta} = req.body;
-    const data = {username, token, address, meta};
+    const { username, token, address, meta } = req.body;
+    const data = { username, token, address, meta };
     pipe(apiRequest(`wallet`, "POST", {}, data), res);
 }
 
 export const walletsUpdate = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {id, token, address, meta} = req.body;
-    const data = {username, token, address, meta};
+    const { id, token, address, meta } = req.body;
+    const data = { username, token, address, meta };
     pipe(apiRequest(`wallets/${username}/${id}`, "PUT", {}, data), res);
 }
 
 export const walletsDelete = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
     if (!username) res.status(401).send("Unauthorized");
-    const {id} = req.body;
+    const { id } = req.body;
     pipe(apiRequest(`wallets/${username}/${id}`, "DELETE"), res);
 }
 
+
+export const proposalActive = async (req: express.Request, res: express.Response) => {
+    res.send(ACTIVE_PROPOSAL_META);
+}
