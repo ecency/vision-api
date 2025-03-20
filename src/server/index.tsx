@@ -74,6 +74,7 @@ server
     .post("^/private-api/channels-get", privateApi.channelsGet)
 
     .post("^/private-api/wallets-add$", privateApi.walletsAdd)
+    .post("^/private-api/wallets-exist", privateApi.walletsExist)
 
     /* Login required private api endpoints */
     .post("^/private-api/wallets", privateApi.wallets)

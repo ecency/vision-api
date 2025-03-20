@@ -173,7 +173,7 @@ export const unreadNotifications = async (req: express.Request, res: express.Res
 
 export const markNotifications = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req, res);
-    if (!username) res.status(401).send("Unauthorized");;
+    if (!username) res.status(401).send("Unauthorized");
 
     const { id } = req.body;
     const data: { id?: string } = {};
@@ -683,6 +683,10 @@ export const walletsDelete = async (req: express.Request, res: express.Response)
     pipe(apiRequest(`wallets/${username}/${id}`, "DELETE"), res);
 }
 
+export const walletsExist = async (req: express.Request, res: express.Response) => {
+    const { address, token } = req.body;
+    pipe(apiRequest(`signup/exist-wallet-accounts?address=${address}&token=${token}`, "GET"), res);
+}
 
 export const proposalActive = async (req: express.Request, res: express.Response) => {
     res.send(ACTIVE_PROPOSAL_META);
