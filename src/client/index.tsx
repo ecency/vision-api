@@ -3,9 +3,6 @@ import {hydrate} from "react-dom";
 
 import App from "../common/app";
 
-import "../style/index.scss";
-
-
 hydrate(
     <App/>,
     document.getElementById("root")
