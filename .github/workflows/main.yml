@@ -5,7 +5,7 @@ on:
       - main
 jobs:
   deps:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     strategy:
       matrix:
         node-version: [14.20.0]
@@ -22,7 +22,7 @@ jobs:
         CI: true
   build:
     needs: deps
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
