@@ -688,6 +688,11 @@ export const walletsExist = async (req: express.Request, res: express.Response) 
     pipe(apiRequest(`signup/exist-wallet-accounts?address=${address}&token=${token}`, "GET"), res);
 }
 
+export const walletsChkUser = async (req: express.Request, res: express.Response) => {
+    const { username } = req.body;
+    pipe(apiRequest(`signup/exist-wallet-user?username=${username}`, "GET"), res);
+}
+
 export const proposalActive = async (req: express.Request, res: express.Response) => {
     res.send(ACTIVE_PROPOSAL_META);
 }

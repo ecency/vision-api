@@ -74,12 +74,14 @@ server
     .post("^/private-api/channels-get", privateApi.channelsGet)
 
     .post("^/private-api/wallets-add$", privateApi.walletsAdd)
-    .post("^/private-api/wallets-exist", privateApi.walletsExist)
+
+    .post("^/private-api/wallets-chkuser", privateApi.walletsChkUser)
 
     /* Login required private api endpoints */
     .post("^/private-api/wallets", privateApi.wallets)
     .post("^/private-api/wallets-update$", privateApi.walletsUpdate)
     .post("^/private-api/wallets-delete$", privateApi.walletsDelete)
+    .post("^/private-api/wallets-exist", privateApi.walletsExist)
 
     .post("^/private-api/notifications/unread$", privateApi.unreadNotifications)
     .post("^/private-api/notifications/mark$", privateApi.markNotifications)
