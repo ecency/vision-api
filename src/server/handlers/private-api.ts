@@ -663,8 +663,8 @@ export const wallets = async (req: express.Request, res: express.Response) => {
 }
 
 export const walletsAdd = async (req: express.Request, res: express.Response) => {
-    const { username, token, address, meta } = req.body;
-    const data = { username, token, address, meta };
+    const { username, token, address, meta, status } = req.body;
+    const data = { username, token, address, meta, status };
     pipe(apiRequest(`wallet`, "POST", {}, data), res);
 }
 
