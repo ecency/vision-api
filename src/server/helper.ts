@@ -39,9 +39,9 @@ interface Entry{
 
 }
 
-export const fetchPromotedEntries = async (): Promise<Entry[]> => {
+export const fetchPromotedEntries = async (limit=200,short_content=0): Promise<Entry[]> => {
     // fetch list from api
-    const list: { author: string, permlink: string, post_data?: Entry }[] = (await apiRequest('promoted-posts?limit=200', 'GET')).data;
+    const list: { author: string, permlink: string, post_data?: Entry }[] = (await apiRequest(`promoted-posts?limit=${limit}&short_content=${short_content}`, 'GET')).data;
 
     // random sort & random pick 18 (6*3)
     const promoted = list.sort(() => Math.random() - 0.5).filter((x, i) => i < 18);
@@ -49,12 +49,12 @@ export const fetchPromotedEntries = async (): Promise<Entry[]> => {
     return promoted.map(x => x.post_data).filter(x => x) as Entry[];
 }
 
-export const getPromotedEntries = async (): Promise<Entry[]> => {
-    let promoted: Entry[] | undefined = cache.get('promoted-entries');
+export const getPromotedEntries = async (limit: number, short_content: number): Promise<Entry[]> => {
+    let promoted: Entry[] | undefined = cache.get(`promoted-entries-${short_content}`);
     if (promoted === undefined) {
         try {
-            promoted = await fetchPromotedEntries();
-            cache.set("promoted-entries", promoted, 300);
+            promoted = await fetchPromotedEntries(limit, short_content);
+            cache.set(`promoted-entries-${short_content}`, promoted, 300);
         } catch (e) {
             promoted = [];
         }

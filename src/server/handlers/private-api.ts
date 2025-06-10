@@ -72,7 +72,8 @@ export const curation = async (req: express.Request, res: express.Response) => {
 };
 
 export const promotedEntries = async (req: express.Request, res: express.Response) => {
-    const posts = await getPromotedEntries();
+    const { limit, short_content } = req.params;
+    const posts = await getPromotedEntries(limit, short_content);
     res.send(posts);
 };
 
