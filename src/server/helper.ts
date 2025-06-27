@@ -49,7 +49,7 @@ export const fetchPromotedEntries = async (limit=200,short_content=0): Promise<E
     return promoted.map(x => x.post_data).filter(x => x) as Entry[];
 }
 
-export const getPromotedEntries = async (limit: number, short_content: number): Promise<Entry[]> => {
+export const getPromotedEntries = async (limit: number, short_content: number=0): Promise<Entry[]> => {
     let promoted: Entry[] | undefined = cache.get(`promoted-entries-${short_content}`);
     if (promoted === undefined) {
         try {
