@@ -51,7 +51,6 @@ export const fetchPromotedEntries = async (limit=200,short_content=0): Promise<E
 
 export const getPromotedEntries = async (limit: number, short_content: number=0): Promise<Entry[]> => {
     let promoted: Entry[] | undefined = cache.get(`promotedentries-${short_content}`);
-    console.log(promoted);
     if (promoted === undefined) {
         try {
             promoted = await fetchPromotedEntries(limit, short_content);
@@ -59,6 +58,7 @@ export const getPromotedEntries = async (limit: number, short_content: number=0)
                 cache.set(`promotedentries-${short_content}`, promoted, 300);
             }
         } catch (e) {
+            console.log('warn: failed to fetch promoted')
             promoted = [];
         }
     }
