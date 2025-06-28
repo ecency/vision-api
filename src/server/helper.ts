@@ -58,7 +58,7 @@ export const getPromotedEntries = async (limit: number, short_content: number): 
                 cache.set(`promotedentries-${short_content}`, promoted, 300);
             }
         } catch (e) {
-            console.log('warn: failed to fetch promoted')
+            console.log('warn: failed to fetch promoted', e)
             promoted = [];
         }
     }
