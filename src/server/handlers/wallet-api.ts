@@ -201,10 +201,9 @@ export const fetchEngineRewards = async (username: string): Promise<TokenStatus[
         const data = rawData.map(convertRewardsStatus);
         const filteredData = data.filter((item) => item && item.pendingToken > 0);
 
-        console.log('unclaimed engine rewards data', filteredData);
         return filteredData;
       } catch (err) {
-        console.warn('failed ot get unclaimed engine rewards', err);
+        console.warn('failed to get unclaimed engine rewards', err);
         return [];
       }
 }
