@@ -16,9 +16,7 @@ const ENGINE_NODES = [
     "https://api.hive-engine.com/rpc",
     "https://ha.herpc.dtools.dev",
     "https://herpc.kanibot.com",
-    "https://he.sourov.dev",
     "https://herpc.actifit.io",
-    "https://api2.hive-engine.com/rpc"
   ];
 
 // min and max included
@@ -26,7 +24,7 @@ const randomIntFromInterval = (min: number, max: number) => {
     return Math.floor(Math.random() * (max - min + 1) + min);
 }
 
-let BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0,6)]}/contracts`;
+let BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0,5)]}/contracts`;
 const BASE_SPK_URL = 'https://spk.good-karma.xyz';
 
 const ENGINE_REWARDS_URL = 'https://scot-api.hive-engine.com/';
