@@ -1,11 +1,28 @@
 import express from "express";
-import { call, Signature } from 'hive-tx'
+import { cryptoUtils, Signature, Client } from '@hiveio/dhive'
 import { announcements } from "./announcements";
 import { apiRequest, getPromotedEntries } from "../helper";
 
 import { pipe } from "../util";
 import { cache } from '../cache';
 import { ACTIVE_PROPOSAL_META, bots } from "./constants";
+
+const client = new Client([
+    "https://api.hive.blog",
+    "https://techcoderx.com",
+    "https://api.deathwing.me",
+    "https://rpc.mahdiyari.info",
+    "https://hive-api.arcange.eu",
+    "https://api.openhive.network",
+    "https://hiveapi.actifit.io",
+    "https://hive-api.3speak.tv",
+    "https://api.syncad.com",
+    "https://api.c0ff33a.uk"
+], {
+    timeout: 2000,
+    failoverThreshold: 2,
+    consoleOnFailover: false
+});
 
 interface DecodedToken {
     signed_message: {
@@ -43,15 +60,15 @@ const validateCode = async (req: express.Request, res: express.Response): Promis
         const message = JSON.stringify({ ...signed_message, authors, timestamp });
 
         // 3. Recover public key from signature
-        const signatureO = Signature.from(signature)
-        const recoveredPubKey = signatureO.getPublicKey(message)
+        const digest = cryptoUtils.sha256(message);
+        const recoveredPubKey = Signature.fromString(signature).recover(digest).toString();
 
         // 4. Load user account and get posting public keys
 
-        const [account] = await call('condenser_api.get_accounts', [[author]])
+        const [account] = await client.database.getAccounts([author]);
         if (!account) return false;
 
-        const postingPubKeys = account.posting.key_auths.map(([key]: [string, number]) => key);
+        const postingPubKeys = account.posting.key_auths.map((entry) => entry[0].toString());
         if (!postingPubKeys.includes(recoveredPubKey)) return false;
 
         return author;
