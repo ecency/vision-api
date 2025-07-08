@@ -1,4 +1,3 @@
-import {Asset, SMTAsset} from "@hiveio/dhive";
 import axios, {AxiosRequestConfig, AxiosResponse, Method} from "axios";
 
 import express from "express";

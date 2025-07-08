@@ -1,14 +1,21 @@
 import express from "express";
-import hs from "hivesigner";
-import axios, { AxiosRequestConfig } from "axios";
-
-import config from "../../config";
+import { call, Signature } from 'hive-tx'
 import { announcements } from "./announcements";
 import { apiRequest, getPromotedEntries } from "../helper";
 
 import { pipe } from "../util";
 import { cache } from '../cache';
 import { ACTIVE_PROPOSAL_META, bots } from "./constants";
+
+interface DecodedToken {
+    signed_message: {
+        type: string;
+        app: string;
+    };
+    authors: string[];
+    timestamp: number;
+    signatures: string[];
+}
 
 const validateCode = async (req: express.Request, res: express.Response): Promise<string | false> => {
     const { code } = req.body;
@@ -17,13 +24,49 @@ const validateCode = async (req: express.Request, res: express.Response): Promis
         res.status(400).send("Bad Request");
         return false;
     }
-
     try {
+        const decoded = JSON.parse(Buffer.from(code, 'base64').toString()) as DecodedToken;
+
+        const { signed_message, authors, timestamp, signatures } = decoded;
+        const author = authors[0];
+        const signature = signatures[0];
+
+        // 1. Reject tokens older than 30 days
+        const now = Math.floor(Date.now() / 1000);
+        const maxAgeSeconds = 30 * 24 * 60 * 60; // 30 days
+        if (now - timestamp > maxAgeSeconds) {
+            console.warn('Token expired', author, code);
+            return false;
+        }
+
+        // 2. Reconstruct message string exactly as signed
+        const message = JSON.stringify({ ...signed_message, authors, timestamp });
+
+        // 3. Recover public key from signature
+        const signatureO = Signature.from(signature)
+        const recoveredPubKey = signatureO.getPublicKey(message)
+
+        // 4. Load user account and get posting public keys
+
+        const [account] = await call('condenser_api.get_accounts', [[author]])
+        if (!account) return false;
+
+        const postingPubKeys = account.posting.key_auths.map(([key]: [string, number]) => key);
+        if (!postingPubKeys.includes(recoveredPubKey)) return false;
+
+        return author;
+    } catch (err) {
+        console.error("Token validation error", err);
+        res.status(401).send("Unauthorized");
+        return false;
+    }
+
+    /*try {
         return await (new hs.Client({ accessToken: code }).me().then((r: { name: string }) => r.name));
     } catch (e) {
         res.status(401).send("Unauthorized");
         return false;
-    }
+    }*/
 };
 
 export const receivedVesting = async (req: express.Request, res: express.Response) => {
