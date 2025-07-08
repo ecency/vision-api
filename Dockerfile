@@ -1,4 +1,4 @@
-FROM node:14.20.0 as base
+FROM node:16.16.0 as base
 
 WORKDIR /var/app
 
@@ -16,7 +16,7 @@ FROM base as dependencies
 RUN yarn install --non-interactive --frozen-lockfile --ignore-optional --production
 
 ### BUILD MINIFIED PRODUCTION ##
-FROM node:14.20-alpine as production
+FROM node:16.16-alpine as production
 
 # Add Tini
 ENV TINI_VERSION v0.18.0
