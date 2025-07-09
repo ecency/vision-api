@@ -38,7 +38,6 @@ const validateCode = async (req: express.Request, res: express.Response): Promis
     const { code } = req.body;
 
     if (!code) {
-        res.status(400).send("Bad Request");
         return false;
     }
     try {
@@ -74,7 +73,6 @@ const validateCode = async (req: express.Request, res: express.Response): Promis
         return author;
     } catch (err) {
         console.error("Token validation error", err);
-        res.status(401).send("Unauthorized");
         return false;
     }
 
