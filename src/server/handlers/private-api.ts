@@ -37,11 +37,11 @@ interface DecodedToken {
 
 const validateCode = async (req: express.Request): Promise<string | false> => {
     const { code } = req.body;
-
+    console.log(code);
     if (!code) {
         return false;
     }
-    try {
+    /*try {
         const decoded = JSON.parse(Buffer.from(code, 'base64').toString()) as DecodedToken;
 
         const { signed_message, authors, timestamp, signatures } = decoded;
@@ -49,12 +49,12 @@ const validateCode = async (req: express.Request): Promise<string | false> => {
         const signature = signatures[0];
 
         // 1. Reject tokens older than 30 days
-        /*const now = Math.floor(Date.now() / 1000);
+        const now = Math.floor(Date.now() / 1000);
         const maxAgeSeconds = 30 * 24 * 60 * 60; // 30 days
         if (now - timestamp > maxAgeSeconds) {
             console.warn('Token expired', author, code);
             return false;
-        }*/
+        }
 
         // 2. Reconstruct message string exactly as signed
         const rawMessage = JSON.stringify({
@@ -73,11 +73,6 @@ const validateCode = async (req: express.Request): Promise<string | false> => {
         if (!account) return false;
 
         const postingPubKeys = account.posting.key_auths.map((entry) => entry[0].toString());
-        const activePubKeys = account.active.key_auths.map((entry) => entry[0].toString());
-
-        if (activePubKeys.includes(recoveredPubKey)) {
-            console.warn("⚠️ Token was signed with ACTIVE key instead of POSTING key!", author);
-        }
 
         if (!postingPubKeys.includes(recoveredPubKey)) {
             return false;
@@ -87,14 +82,14 @@ const validateCode = async (req: express.Request): Promise<string | false> => {
     } catch (err) {
         console.error("Token validation error", err);
         return false;
-    }
+    }*/
 
-    /*try {
+    try {
         return await (new hs.Client({ accessToken: code }).me().then((r: { name: string }) => r.name));
     } catch (e) {
         //res.status(401).send("Unauthorized");
         return false;
-    }*/
+    }
 };
 
 export const receivedVesting = async (req: express.Request, res: express.Response) => {
