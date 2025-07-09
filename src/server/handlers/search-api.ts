@@ -15,7 +15,6 @@ export const search = async (req: express.Request, res: express.Response) => {
     if (since) payload.since = since;
     if (scroll_id) payload.scroll_id = scroll_id;
     if (votes) payload.votes = votes;
-    console.log('search', headers);
 
     pipe(baseApiRequest(url, "POST", headers, payload), res);
 }

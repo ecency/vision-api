@@ -11,7 +11,6 @@ import { convertEngineToken, convertRewardsStatus } from "../../models/converter
 //docs: https://hive-engine.github.io/engine-docs/
 //available nodes: https://beacon.peakd.com/ select tab 'Hive Engine'
 const ENGINE_NODES = [
-    "https://engine.rishipanthee.com",
     "https://herpc.dtools.dev",
     "https://api.hive-engine.com/rpc",
     "https://ha.herpc.dtools.dev",
@@ -24,7 +23,7 @@ const randomIntFromInterval = (min: number, max: number) => {
     return Math.floor(Math.random() * (max - min + 1) + min);
 }
 
-let BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0,5)]}/contracts`;
+let BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0,4)]}/contracts`;
 const BASE_SPK_URL = 'https://spk.good-karma.xyz';
 
 const ENGINE_REWARDS_URL = 'https://scot-api.hive-engine.com/';
