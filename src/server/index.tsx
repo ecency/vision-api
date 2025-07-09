@@ -14,9 +14,8 @@ const server = express();
 server
     .disable("x-powered-by")
     .use(express.static(process.env.RAZZLE_PUBLIC_DIR!))
-    .use(express.json())
-    .use(cors())
     .use(express.json({limit: '50mb'}))
+    .use(cors())
     .use(express.urlencoded({limit: '50mb'}))
 
     // Search Api

@@ -1,4 +1,5 @@
 import express from "express";
+import hs from "hivesigner";
 import { cryptoUtils, Signature, Client } from '@hiveio/dhive'
 import { announcements } from "./announcements";
 import { apiRequest, getPromotedEntries } from "../helper";
@@ -72,7 +73,15 @@ const validateCode = async (req: express.Request): Promise<string | false> => {
         if (!account) return false;
 
         const postingPubKeys = account.posting.key_auths.map((entry) => entry[0].toString());
-        if (!postingPubKeys.includes(recoveredPubKey)) return false;
+        const activePubKeys = account.active.key_auths.map((entry) => entry[0].toString());
+
+        if (activePubKeys.includes(recoveredPubKey)) {
+            console.warn("⚠️ Token was signed with ACTIVE key instead of POSTING key!", author);
+        }
+
+        if (!postingPubKeys.includes(recoveredPubKey)) {
+            return false;
+        }
 
         return author;
     } catch (err) {
@@ -83,7 +92,7 @@ const validateCode = async (req: express.Request): Promise<string | false> => {
     /*try {
         return await (new hs.Client({ accessToken: code }).me().then((r: { name: string }) => r.name));
     } catch (e) {
-        res.status(401).send("Unauthorized");
+        //res.status(401).send("Unauthorized");
         return false;
     }*/
 };
