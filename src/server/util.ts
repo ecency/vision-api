@@ -2,14 +2,28 @@ import axios, {AxiosRequestConfig, AxiosResponse, Method} from "axios";
 
 import express from "express";
 
-export const pipe = (promise: Promise<AxiosResponse>, res: express.Response) => {
-    promise.then(r => {
-        const ddata = typeof r.data === 'number' ? r.data.toString() : r.data;
-        res.status(r.status).send(ddata);
-    }).catch(() => {
-        res.status(500).send("Server Error");
-    });
+export const pipe = async (promise: Promise<AxiosResponse>, res: express.Response) => {
+    try {
+        const r = await promise;
+
+        if (!res.headersSent) {
+            const ddata = typeof r.data === 'number' ? r.data.toString() : r.data;
+            res.status(r.status).send(ddata);
+        } else {
+            console.warn("pipe(): headers already sent, skipping response");
+        }
+
+    } catch (e) {
+        console.error("pipe(): error while processing API call:", e);
+
+        if (!res.headersSent) {
+            res.status(500).send("Server Error");
+        } else {
+            console.warn("pipe(): headers already sent, cannot send error response");
+        }
+    }
 };
+
 
 export const baseApiRequest = (url: string, method: Method, headers: any = {}, payload: any = {}, params: any = {}): Promise<AxiosResponse> => {
     const requestConf: AxiosRequestConfig = {
