@@ -56,10 +56,14 @@ const validateCode = async (req: express.Request): Promise<string | false> => {
         }*/
 
         // 2. Reconstruct message string exactly as signed
-        const message = JSON.stringify({ ...signed_message, authors, timestamp });
+        const rawMessage = JSON.stringify({
+            signed_message,
+            authors,
+            timestamp
+        });
 
         // 3. Recover public key from signature
-        const digest = cryptoUtils.sha256(message);
+        const digest = cryptoUtils.sha256(rawMessage);
         const recoveredPubKey = Signature.fromString(signature).recover(digest).toString();
 
         // 4. Load user account and get posting public keys
