@@ -37,7 +37,6 @@ interface DecodedToken {
 
 const validateCode = async (req: express.Request): Promise<string | false> => {
     const { code } = req.body;
-    console.log(code);
     if (!code) {
         return false;
     }
