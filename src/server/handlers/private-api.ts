@@ -47,13 +47,13 @@ const validateCode = async (req: express.Request): Promise<string | false> => {
         const author = authors[0];
         const signature = signatures[0];
 
-        // 1. Reject tokens older than 90 days
-        const now = Math.floor(Date.now() / 1000);
-        const maxAgeSeconds = 90 * 24 * 60 * 60; // 90 days
+        // 1. Reject tokens older than 30 days
+        /*const now = Math.floor(Date.now() / 1000);
+        const maxAgeSeconds = 30 * 24 * 60 * 60; // 30 days
         if (now - timestamp > maxAgeSeconds) {
             console.warn('Token expired', author, code);
             return false;
-        }
+        }*/
 
         // 2. Reconstruct message string exactly as signed
         const message = JSON.stringify({ ...signed_message, authors, timestamp });
