@@ -186,10 +186,6 @@ export const createAccountFriend = async (req: express.Request, res: express.Res
 
 export const notifications = async (req: express.Request, res: express.Response) => {
     let username = await validateCode(req);
-    if (!username) {
-        res.status(401).send("Unauthorized");
-        return;
-    }
     const { filter, since, limit, user } = req.body;
 
     if (!username) {
