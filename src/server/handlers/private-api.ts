@@ -73,6 +73,7 @@ const validateCode = async (req: express.Request): Promise<string | false> => {
             authors,
             timestamp
         });
+        console.log(rawMessage);
 
         // 3. Recover public key from signature
         const digest = cryptoUtils.sha256(rawMessage);
