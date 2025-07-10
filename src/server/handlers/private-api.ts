@@ -36,15 +36,18 @@ interface DecodedToken {
     signatures: string[];
 }
 
+let hivesignerAccountCache: any | null = null;
+let hivesignerCacheTime = 0;
+const HIVE_SIGNER_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
 const validateCode = async (req: express.Request): Promise<string | false> => {
     const { code } = req.body;
-    if (!code) {
-        return false;
-    }
+    if (!code) return false;
+
     try {
         const decoded = JSON.parse(Buffer.from(code, 'base64').toString()) as DecodedToken;
-
         const { signed_message, authors, timestamp, signatures } = decoded;
+
         if (
             typeof signed_message !== "object" ||
             !Array.isArray(authors) ||
@@ -56,30 +59,25 @@ const validateCode = async (req: express.Request): Promise<string | false> => {
             console.warn("Invalid token structure", decoded);
             return false;
         }
+
         const author = authors[0];
         const signature = signatures[0];
+        const currentTime = Date.now();
 
-        // 1. Reject tokens older than 30 days
-        /*const now = Math.floor(Date.now() / 1000);
-        const maxAgeSeconds = 30 * 24 * 60 * 60; // 30 days
+        // Optional: reject tokens older than 30 days
+        /*
+        const now = Math.floor(currentTime / 1000);
+        const maxAgeSeconds = 30 * 24 * 60 * 60;
         if (now - timestamp > maxAgeSeconds) {
-            console.warn('Token expired', author, code);
+            console.warn("Token expired", author, code);
             return false;
-        }*/
+        }
+        */
 
-        // 2. Reconstruct message string exactly as signed
-        const rawMessage = JSON.stringify({
-            signed_message,
-            authors,
-            timestamp
-        });
-        console.log(rawMessage);
-
-        // 3. Recover public key from signature
+        const rawMessage = JSON.stringify({ signed_message, authors, timestamp });
         const digest = cryptoUtils.sha256(rawMessage);
         const recoveredPubKey = Signature.fromString(signature).recover(digest).toString();
 
-        // 4. Load user account and get posting public keys
 
         const [account] = await client.database.getAccounts([author]);
         if (!account) {
@@ -87,25 +85,43 @@ const validateCode = async (req: express.Request): Promise<string | false> => {
             return false;
         }
 
-        const postingPubKeys = account.posting.key_auths.map((entry) => entry[0].toString());
-        const activePubKeys = account.active.key_auths.map(k => k[0].toString());
-        if (!postingPubKeys.includes(recoveredPubKey)) {
-            console.log("Posting key mismatch", recoveredPubKey, postingPubKeys, activePubKeys);
-            return false;
+        const postingPubKeys = account.posting.key_auths.map(([key]) => key);
+        if (postingPubKeys.includes(recoveredPubKey)) {
+            return author;
         }
 
-        return author;
+        // Use cached hivesigner account, refresh every 24h
+        if (!hivesignerAccountCache || currentTime - hivesignerCacheTime > HIVE_SIGNER_CACHE_TTL) {
+            try {
+                const [hivesignerAccount] = await client.database.getAccounts(["hivesigner"]);
+                hivesignerAccountCache = hivesignerAccount;
+                hivesignerCacheTime = currentTime;
+            } catch (err) {
+                console.error("Failed to fetch hivesigner account", err);
+                return false;
+            }
+        }
+
+        const hsPostingKeys = hivesignerAccountCache?.posting?.key_auths?.map(([key]: [string, number]) => key) || [];
+        if (hsPostingKeys.includes(recoveredPubKey)) {
+            return author;
+        }
+
+        console.warn("Posting key mismatch", recoveredPubKey, postingPubKeys, hsPostingKeys);
+        return false;
     } catch (err) {
         console.error("Token validation error", err);
         return false;
     }
 
-    /*try {
-        return await (new hs.Client({ accessToken: code }).me().then((r: { name: string }) => r.name));
+    /*
+    // Fallback: validate using Hivesigner /me endpoint
+    try {
+        return await new hs.Client({ accessToken: code }).me().then((r: { name: string }) => r.name);
     } catch (e) {
-        //res.status(401).send("Unauthorized");
         return false;
-    }*/
+    }
+    */
 };
 
 export const receivedVesting = async (req: express.Request, res: express.Response) => {
