@@ -1,6 +1,7 @@
 import express from "express";
 import hs from "hivesigner";
 import { cryptoUtils, Signature, Client } from '@hiveio/dhive'
+
 import { announcements } from "./announcements";
 import { apiRequest, getPromotedEntries } from "../helper";
 
@@ -40,20 +41,31 @@ const validateCode = async (req: express.Request): Promise<string | false> => {
     if (!code) {
         return false;
     }
-    /*try {
+    try {
         const decoded = JSON.parse(Buffer.from(code, 'base64').toString()) as DecodedToken;
 
         const { signed_message, authors, timestamp, signatures } = decoded;
+        if (
+            typeof signed_message !== "object" ||
+            !Array.isArray(authors) ||
+            typeof authors[0] !== "string" ||
+            typeof timestamp !== "number" ||
+            !Array.isArray(signatures) ||
+            typeof signatures[0] !== "string"
+        ) {
+            console.warn("Invalid token structure", decoded);
+            return false;
+        }
         const author = authors[0];
         const signature = signatures[0];
 
         // 1. Reject tokens older than 30 days
-        const now = Math.floor(Date.now() / 1000);
+        /*const now = Math.floor(Date.now() / 1000);
         const maxAgeSeconds = 30 * 24 * 60 * 60; // 30 days
         if (now - timestamp > maxAgeSeconds) {
             console.warn('Token expired', author, code);
             return false;
-        }
+        }*/
 
         // 2. Reconstruct message string exactly as signed
         const rawMessage = JSON.stringify({
@@ -69,11 +81,15 @@ const validateCode = async (req: express.Request): Promise<string | false> => {
         // 4. Load user account and get posting public keys
 
         const [account] = await client.database.getAccounts([author]);
-        if (!account) return false;
+        if (!account) {
+            console.error("Fetching account error");
+            return false;
+        }
 
         const postingPubKeys = account.posting.key_auths.map((entry) => entry[0].toString());
-
+        const activePubKeys = account.active.key_auths.map(k => k[0].toString());
         if (!postingPubKeys.includes(recoveredPubKey)) {
+            console.log("Posting key mismatch", recoveredPubKey, postingPubKeys, activePubKeys);
             return false;
         }
 
@@ -81,14 +97,14 @@ const validateCode = async (req: express.Request): Promise<string | false> => {
     } catch (err) {
         console.error("Token validation error", err);
         return false;
-    }*/
+    }
 
-    try {
+    /*try {
         return await (new hs.Client({ accessToken: code }).me().then((r: { name: string }) => r.name));
     } catch (e) {
         //res.status(401).send("Unauthorized");
         return false;
-    }
+    }*/
 };
 
 export const receivedVesting = async (req: express.Request, res: express.Response) => {
