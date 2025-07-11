@@ -54,7 +54,7 @@ server
     .get("^/private-api/chats-pub/:username$", privateApi.chatsPub)
     .get("^/private-api/channel/:username$", privateApi.channelGet)
     .get("^/private-api/proposal/active$", privateApi.proposalActive)
-
+    .get("^/private-api/pub-notifications/:username", privateApi.publicUnreadNotifications)
 
     .post("^/private-api/comment-history$", privateApi.commentHistory)
     .post("^/private-api/points$", privateApi.points)

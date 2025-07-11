@@ -262,6 +262,17 @@ export const notifications = async (req: express.Request, res: express.Response)
     pipe(apiRequest(u, "GET"), res);
 };
 
+export const publicUnreadNotifications = async (req: express.Request, res: express.Response) => {
+    const { username } = req.params;
+
+    if (!username) {
+        res.status(400).send("Missing username");
+        return;
+    }
+
+    pipe(apiRequest(`activities/${username}/unread-count`, "GET"), res);
+};
+
 /* Login required endpoints */
 
 export const unreadNotifications = async (req: express.Request, res: express.Response) => {
