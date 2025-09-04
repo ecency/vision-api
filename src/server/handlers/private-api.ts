@@ -186,6 +186,30 @@ export const commentHistory = async (req: express.Request, res: express.Response
     pipe(apiRequest(u, "GET"), res);
 };
 
+export const wavesTags = async (req: express.Request, res: express.Response) => {
+    const { container, tag } = req.query;
+    const u = `waves/tags?container=${container}&tag=${tag}`;
+    pipe(apiRequest(u, "GET"), res);
+};
+
+export const wavesAccount = async (req: express.Request, res: express.Response) => {
+    const { container, username } = req.query;
+    const u = `waves/account?container=${container}&username=${username}`;
+    pipe(apiRequest(u, "GET"), res);
+};
+
+export const wavesTrendingTags = async (req: express.Request, res: express.Response) => {
+    const { container } = req.query;
+    const u = `waves/trending/tags?container=${container}`;
+    pipe(apiRequest(u, "GET"), res);
+};
+
+export const wavesTrendingAuthors = async (req: express.Request, res: express.Response) => {
+    const { container } = req.query;
+    const u = `waves/trending/authors?container=${container}`;
+    pipe(apiRequest(u, "GET"), res);
+};
+
 export const points = async (req: express.Request, res: express.Response) => {
     const { username } = req.body;
     pipe(apiRequest(`users/${username}`, "GET"), res);
