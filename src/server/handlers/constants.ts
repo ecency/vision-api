@@ -55,6 +55,7 @@ export const bots = [
         "visualbot",
         "warofclans",
         "weed.dispenser",
+        "worldmappin",
         "wine.bot",
         "youarealive",
 ]
