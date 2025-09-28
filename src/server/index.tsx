@@ -57,6 +57,7 @@ server
     .get("^/private-api/pub-notifications/:username", privateApi.publicUnreadNotifications)
     .get("^/private-api/waves/tags$", privateApi.wavesTags)
     .get("^/private-api/waves/account$", privateApi.wavesAccount)
+    .get("^/private-api/waves/following", privateApi.wavesFollowing)
     .get("^/private-api/waves/trending/tags$", privateApi.wavesTrendingTags)
     .get("^/private-api/waves/trending/authors$", privateApi.wavesTrendingAuthors)
 

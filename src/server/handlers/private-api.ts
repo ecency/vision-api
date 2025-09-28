@@ -198,6 +198,12 @@ export const wavesAccount = async (req: express.Request, res: express.Response) 
     pipe(apiRequest(u, "GET"), res);
 };
 
+export const wavesFollowing = async (req: express.Request, res: express.Response) => {
+    const { container, username } = req.query;
+    const u = `waves/following?container=${container}&username=${username}`;
+    pipe(apiRequest(u, "GET"), res);
+};
+
 export const wavesTrendingTags = async (req: express.Request, res: express.Response) => {
     const { container } = req.query;
     const u = `waves/trending/tags?container=${container}`;
