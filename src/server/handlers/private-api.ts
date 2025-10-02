@@ -419,7 +419,17 @@ const fetchTonBalance = async (node: ChainstackNode, address: string): Promise<N
         throw new Error(data?.error || "TON balance request failed");
     }
 
-    const balance = typeof data?.result === "string" ? data.result : null;
+    const balanceValue = data?.result;
+    const balance =
+        typeof balanceValue === "string"
+            ? balanceValue
+            : typeof balanceValue === "number"
+                ? balanceValue.toString()
+                : null;
+
+    if (balance === null) {
+        throw new Error("Invalid TON balance response");
+    }
 
     return {
         chain: "ton",
@@ -433,9 +443,10 @@ const fetchTonBalance = async (node: ChainstackNode, address: string): Promise<N
 const fetchAptosBalance = async (node: ChainstackNode, address: string): Promise<NormalizedBalanceResponse> => {
     const endpoint = ensureHttpsEndpoint(node);
     const config = buildNodeAxiosConfig(node);
+    const normalizedAddress = address.startsWith("0x") ? address : `0x${address}`;
     const resourceType = "0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>";
     const sanitizedEndpoint = endpoint.endsWith("/") ? endpoint.slice(0, -1) : endpoint;
-    const url = `${sanitizedEndpoint}/v1/accounts/${address}/resource/${encodeURIComponent(resourceType)}`;
+    const url = `${sanitizedEndpoint}/v1/accounts/${normalizedAddress}/resource/${encodeURIComponent(resourceType)}`;
 
     try {
         const response = await axios.get(url, config);
@@ -476,7 +487,7 @@ const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promi
         jsonrpc: "1.0",
         id: "balance",
         method: "scantxoutset",
-        params: ["start", [`addr(${address})`]],
+        params: ["start", [{ desc: `addr(${address})` }]],
     };
 
     const response = await axios.post(endpoint, payload, config);
@@ -528,7 +539,14 @@ const CHAIN_HANDLERS: Record<string, ChainHandler> = {
         fetchBalance: (node, address) => fetchTonBalance(node, address),
     },
     apt: {
-        validateAddress: (address) => /^0x[a-fA-F0-9]+$/.test(address),
+        validateAddress: (address) => {
+            if (!/^(0x)?[a-fA-F0-9]+$/.test(address)) {
+                return false;
+            }
+
+            const hex = address.startsWith("0x") ? address.slice(2) : address;
+            return hex.length % 2 === 0;
+        },
         selectNode: (nodes) => nodes.find((node) => endpointIncludes(node, "aptos")) ?? null,
         fetchBalance: (node, address) => fetchAptosBalance(node, address),
     },
