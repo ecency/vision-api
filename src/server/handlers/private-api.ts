@@ -272,14 +272,120 @@ const ensureHttpsEndpoint = (node: ChainstackNode): string => {
     return endpoint;
 };
 
+const stripLeadingZeros = (value: string): string => {
+    const stripped = value.replace(/^0+/, "");
+    return stripped === "" ? "0" : stripped;
+};
+
+const multiplyDecimalString = (value: string, multiplier: number): string => {
+    const normalized = stripLeadingZeros(value);
+
+    if (multiplier === 0 || normalized === "0") {
+        return "0";
+    }
+
+    if (!Number.isInteger(multiplier) || multiplier < 0) {
+        throw new Error("Invalid multiplier for decimal conversion");
+    }
+
+    let carry = 0;
+    let result = "";
+
+    for (let index = normalized.length - 1; index >= 0; index -= 1) {
+        const digit = normalized.charCodeAt(index) - 48;
+
+        if (digit < 0 || digit > 9) {
+            throw new Error("Invalid decimal value during multiplication");
+        }
+
+        const product = digit * multiplier + carry;
+        const remainder = product % 10;
+
+        result = remainder.toString() + result;
+        carry = Math.floor(product / 10);
+    }
+
+    while (carry > 0) {
+        result = (carry % 10).toString() + result;
+        carry = Math.floor(carry / 10);
+    }
+
+    return stripLeadingZeros(result);
+};
+
+const addSmallIntToDecimalString = (value: string, addend: number): string => {
+    const normalized = stripLeadingZeros(value);
+
+    if (addend === 0) {
+        return normalized;
+    }
+
+    if (!Number.isInteger(addend) || addend < 0) {
+        throw new Error("Invalid addend for decimal conversion");
+    }
+
+    let carry = addend;
+    let result = "";
+
+    for (let index = normalized.length - 1; index >= 0; index -= 1) {
+        const digit = normalized.charCodeAt(index) - 48;
+
+        if (digit < 0 || digit > 9) {
+            throw new Error("Invalid decimal value during addition");
+        }
+
+        const sum = digit + carry;
+        result = (sum % 10).toString() + result;
+        carry = Math.floor(sum / 10);
+    }
+
+    while (carry > 0) {
+        result = (carry % 10).toString() + result;
+        carry = Math.floor(carry / 10);
+    }
+
+    return stripLeadingZeros(result);
+};
+
+const hexToDecimalString = (value: string): string => {
+    const normalized = stripLeadingZeros(value.toLowerCase());
+
+    if (normalized === "0") {
+        return "0";
+    }
+
+    let result = "0";
+
+    for (const char of normalized) {
+        const digit = parseInt(char, 16);
+
+        if (Number.isNaN(digit)) {
+            throw new Error("Invalid hexadecimal balance response");
+        }
+
+        result = multiplyDecimalString(result, 16);
+
+        if (digit !== 0) {
+            result = addSmallIntToDecimalString(result, digit);
+        }
+    }
+
+    return stripLeadingZeros(result);
+};
+
 const parseHexBalance = (value: unknown): string => {
     if (typeof value !== "string") {
         throw new Error("Invalid hexadecimal balance response");
     }
 
     try {
-        const normalized = value.startsWith("0x") ? value : `0x${value}`;
-        return BigInt(normalized).toString(10);
+        const normalized = value.startsWith("0x") ? value.slice(2) : value;
+
+        if (normalized === "") {
+            return "0";
+        }
+
+        return hexToDecimalString(normalized);
     } catch (err) {
         throw new Error("Failed to parse hexadecimal balance");
     }
@@ -554,24 +660,43 @@ const fetchAptosBalance = async (node: ChainstackNode, address: string): Promise
     }
 };
 
-const formatBitcoinFromSats = (satoshis: bigint): string => {
-    const sign = satoshis < 0n ? "-" : "";
-    const absolute = satoshis < 0n ? -satoshis : satoshis;
-    const whole = absolute / 100000000n;
-    const fraction = absolute % 100000000n;
-
-    if (fraction === 0n) {
-        return `${sign}${whole.toString()}`;
+const formatBitcoinFromSats = (value: string): string => {
+    if (!/^-?\d+$/.test(value)) {
+        throw new Error("Invalid satoshi balance");
     }
 
-    const fractionString = fraction.toString().padStart(8, "0");
-    const trimmedFraction = fractionString.replace(/0+$/, "");
+    let sign = "";
+    let digits = value;
 
-    if (trimmedFraction.length === 0) {
-        return `${sign}${whole.toString()}`;
+    if (value.startsWith("-")) {
+        sign = "-";
+        digits = value.slice(1);
     }
 
-    return `${sign}${whole.toString()}.${trimmedFraction}`;
+    digits = stripLeadingZeros(digits);
+
+    if (digits === "0") {
+        return `${sign}0`;
+    }
+
+    if (digits.length <= 8) {
+        const fraction = digits.padStart(8, "0").replace(/0+$/, "");
+
+        if (fraction.length === 0) {
+            return `${sign}0`;
+        }
+
+        return `${sign}0.${fraction}`;
+    }
+
+    const whole = stripLeadingZeros(digits.slice(0, digits.length - 8));
+    const fraction = digits.slice(digits.length - 8).replace(/0+$/, "");
+
+    if (fraction.length === 0) {
+        return `${sign}${whole}`;
+    }
+
+    return `${sign}${whole}.${fraction}`;
 };
 
 const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promise<NormalizedBalanceResponse> => {
@@ -606,20 +731,24 @@ const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promi
                 throw new Error("Invalid Bitcoin balance response");
             }
 
-            let balanceBigInt: bigint;
+            let balanceString: string;
 
             if (typeof rawBalance === "number") {
                 if (!Number.isFinite(rawBalance) || !Number.isSafeInteger(rawBalance)) {
                     throw new Error("Bitcoin balance exceeds numeric precision");
                 }
 
-                balanceBigInt = BigInt(rawBalance);
+                balanceString = rawBalance.toString();
             } else {
-                balanceBigInt = BigInt(rawBalance);
+                if (!/^-?\d+$/.test(rawBalance)) {
+                    throw new Error("Invalid Bitcoin balance response");
+                }
+
+                balanceString = rawBalance;
             }
 
             return {
-                balance: formatBitcoinFromSats(balanceBigInt),
+                balance: formatBitcoinFromSats(balanceString),
                 raw: data,
             };
         } catch (error) {
