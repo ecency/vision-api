@@ -235,7 +235,7 @@ const fetchChainstackNodes = async (): Promise<ChainstackNode[]> => {
     try {
         const response = await axios.get<ChainstackNodeResponse>(CHAINSTACK_NODES_ENDPOINT, {
             headers: {
-                Authorization: `token ${apiKey}`,
+                Authorization: `Bearer ${apiKey}`,
             },
         });
 
