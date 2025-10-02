@@ -1034,9 +1034,14 @@ const formatBitcoinFromSats = (value: string): string => {
     return `${sign}${whole}.${fraction}`;
 };
 
+const BITCOIN_RPC_TIMEOUT_MS = 180_000;
+
 const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promise<NormalizedBalanceResponse> => {
     const endpoint = ensureHttpsEndpoint(node);
-    const config = buildNodeAxiosConfig(node);
+    const config: AxiosRequestConfig = {
+        ...buildNodeAxiosConfig(node),
+        timeout: BITCOIN_RPC_TIMEOUT_MS,
+    };
 
     const tryGetAddressBalance = async () => {
         const payload = {
