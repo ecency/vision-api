@@ -387,6 +387,28 @@ const fetchTronBalance = async (node: ChainstackNode, address: string): Promise<
     };
 };
 
+const requestToncenterBalance = async (
+    baseEndpoint: string,
+    address: string,
+    headers: Record<string, string>,
+    apiKey?: string,
+    useMethodParam = false,
+) => {
+    const sanitizedBase = baseEndpoint.replace(/\/+$, "");
+    const url = useMethodParam ? sanitizedBase : `${sanitizedBase}/getAddressBalance`;
+
+    const response = await axios.get(url, {
+        headers,
+        params: {
+            ...(useMethodParam ? { method: "getAddressBalance" } : {}),
+            address,
+            api_key: apiKey,
+        },
+    });
+
+    return response.data;
+};
+
 const fetchTonBalance = async (node: ChainstackNode, address: string): Promise<NormalizedBalanceResponse> => {
     const baseEndpoint = node.details?.toncenter_api_v3 || node.details?.toncenter_api_v2;
 
@@ -394,8 +416,6 @@ const fetchTonBalance = async (node: ChainstackNode, address: string): Promise<N
         throw new Error("TON node does not provide a Toncenter endpoint");
     }
 
-    const sanitizedBase = baseEndpoint.endsWith("/") ? baseEndpoint.slice(0, -1) : baseEndpoint;
-    const url = `${sanitizedBase}/getAddressBalance`;
     const headers: Record<string, string> = {};
 
     if (node.details?.auth_key) {
@@ -403,15 +423,17 @@ const fetchTonBalance = async (node: ChainstackNode, address: string): Promise<N
         headers["x-api-key"] = node.details.auth_key;
     }
 
-    const response = await axios.get(url, {
-        headers,
-        params: {
-            address,
-            api_key: node.details?.auth_key,
-        },
-    });
+    let data: any;
 
-    const data = response.data;
+    try {
+        data = await requestToncenterBalance(baseEndpoint, address, headers, node.details?.auth_key, false);
+    } catch (err) {
+        if (axios.isAxiosError(err) && err.response?.status === 404) {
+            data = await requestToncenterBalance(baseEndpoint, address, headers, node.details?.auth_key, true);
+        } else {
+            throw err;
+        }
+    }
 
     const ok = typeof data?.ok === "boolean" ? data.ok : true;
 
@@ -440,12 +462,32 @@ const fetchTonBalance = async (node: ChainstackNode, address: string): Promise<N
     };
 };
 
+const normalizeAptosAddress = (address: string): string => {
+    const trimmed = address.trim();
+    const withoutPrefix = trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed;
+
+    if (!/^[0-9a-fA-F]*$/.test(withoutPrefix)) {
+        throw new Error("Invalid Aptos address provided");
+    }
+
+    const normalizedHex = withoutPrefix.replace(/^0+/, "");
+    const evenLengthHex = normalizedHex.length % 2 === 0 ? normalizedHex : `0${normalizedHex}`;
+
+    if (evenLengthHex.length > 64) {
+        throw new Error("Aptos address length exceeds 32 bytes");
+    }
+
+    const padded = evenLengthHex.padStart(64, "0");
+
+    return `0x${padded.toLowerCase()}`;
+};
+
 const fetchAptosBalance = async (node: ChainstackNode, address: string): Promise<NormalizedBalanceResponse> => {
     const endpoint = ensureHttpsEndpoint(node);
     const config = buildNodeAxiosConfig(node);
-    const normalizedAddress = address.startsWith("0x") ? address : `0x${address}`;
+    const normalizedAddress = normalizeAptosAddress(address);
     const resourceType = "0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>";
-    const sanitizedEndpoint = endpoint.endsWith("/") ? endpoint.slice(0, -1) : endpoint;
+    const sanitizedEndpoint = endpoint.replace(/\/+$, "");
     const url = `${sanitizedEndpoint}/v1/accounts/${normalizedAddress}/resource/${encodeURIComponent(resourceType)}`;
 
     try {
@@ -466,11 +508,44 @@ const fetchAptosBalance = async (node: ChainstackNode, address: string): Promise
         };
     } catch (err) {
         if (axios.isAxiosError(err) && err.response?.status === 404) {
+            try {
+                const viewUrl = `${sanitizedEndpoint}/v1/view`;
+                const viewPayload = {
+                    function: "0x1::coin::balance",
+                    type_arguments: ["0x1::aptos_coin::AptosCoin"],
+                    arguments: [normalizedAddress],
+                };
+
+                const viewResponse = await axios.post(viewUrl, viewPayload, config);
+                const viewData = viewResponse.data;
+                const [viewBalance] = Array.isArray(viewData) ? viewData : [];
+                const balance =
+                    typeof viewBalance === "string"
+                        ? viewBalance
+                        : typeof viewBalance === "number"
+                            ? viewBalance.toString()
+                            : null;
+
+                if (balance !== null) {
+                    return {
+                        chain: "apt",
+                        balance,
+                        unit: "octas",
+                        raw: viewData,
+                        nodeId: node.id,
+                    };
+                }
+            } catch (viewError) {
+                if (!axios.isAxiosError(viewError) || viewError.response?.status !== 404) {
+                    throw viewError;
+                }
+            }
+
             return {
                 chain: "apt",
                 balance: "0",
                 unit: "octas",
-                raw: err.response.data,
+                raw: err.response?.data,
                 nodeId: node.id,
             };
         }
@@ -479,9 +554,100 @@ const fetchAptosBalance = async (node: ChainstackNode, address: string): Promise
     }
 };
 
+const formatBitcoinFromSats = (satoshis: bigint): string => {
+    const sign = satoshis < 0n ? "-" : "";
+    const absolute = satoshis < 0n ? -satoshis : satoshis;
+    const whole = absolute / 100000000n;
+    const fraction = absolute % 100000000n;
+
+    if (fraction === 0n) {
+        return `${sign}${whole.toString()}`;
+    }
+
+    const fractionString = fraction.toString().padStart(8, "0");
+    const trimmedFraction = fractionString.replace(/0+$/, "");
+
+    if (trimmedFraction.length === 0) {
+        return `${sign}${whole.toString()}`;
+    }
+
+    return `${sign}${whole.toString()}.${trimmedFraction}`;
+};
+
 const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promise<NormalizedBalanceResponse> => {
     const endpoint = ensureHttpsEndpoint(node);
     const config = buildNodeAxiosConfig(node);
+
+    const tryGetAddressBalance = async () => {
+        const payload = {
+            jsonrpc: "1.0",
+            id: "balance",
+            method: "getaddressbalance",
+            params: [{ addresses: [address] }],
+        };
+
+        try {
+            const response = await axios.post(endpoint, payload, config);
+            const data = response.data;
+
+            if (data?.error) {
+                const message = data.error?.message || "Bitcoin getaddressbalance failed";
+
+                if (message.toLowerCase().includes("method not found")) {
+                    return null;
+                }
+
+                throw new Error(message);
+            }
+
+            const rawBalance = data?.result?.balance;
+
+            if (typeof rawBalance !== "number" && typeof rawBalance !== "string") {
+                throw new Error("Invalid Bitcoin balance response");
+            }
+
+            let balanceBigInt: bigint;
+
+            if (typeof rawBalance === "number") {
+                if (!Number.isFinite(rawBalance) || !Number.isSafeInteger(rawBalance)) {
+                    throw new Error("Bitcoin balance exceeds numeric precision");
+                }
+
+                balanceBigInt = BigInt(rawBalance);
+            } else {
+                balanceBigInt = BigInt(rawBalance);
+            }
+
+            return {
+                balance: formatBitcoinFromSats(balanceBigInt),
+                raw: data,
+            };
+        } catch (error) {
+            if (axios.isAxiosError(error) && error.response?.data?.error) {
+                const message = error.response.data.error?.message || "Bitcoin getaddressbalance failed";
+
+                if (message.toLowerCase().includes("method not found")) {
+                    return null;
+                }
+
+                throw new Error(message);
+            }
+
+            throw error;
+        }
+    };
+
+    const directBalance = await tryGetAddressBalance();
+
+    if (directBalance) {
+        return {
+            chain: "btc",
+            balance: directBalance.balance,
+            unit: "btc",
+            raw: directBalance.raw,
+            nodeId: node.id,
+        };
+    }
 
     const payload = {
         jsonrpc: "1.0",
@@ -498,7 +664,6 @@ const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promi
     }
 
     const amount = data?.result?.total_amount;
-
     const balance = typeof amount === "number" ? amount.toString() : null;
 
     return {
