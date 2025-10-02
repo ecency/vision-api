@@ -1,6 +1,6 @@
 import express from "express";
 import hs from "hivesigner";
-import axios from "axios";
+import axios, { AxiosRequestConfig } from "axios";
 import { cryptoUtils, Signature, Client } from '@hiveio/dhive'
 
 import { announcements } from "./announcements";
@@ -44,11 +44,30 @@ let hivesignerCacheTime = 0;
 const HIVE_SIGNER_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
 const validateCode = async (req: express.Request): Promise<string | false> => {
-    const { code } = req.body;
-    if (!code) return false;
+    const { code } = req.body as { code?: unknown };
+
+    if (typeof code !== "string") {
+        if (code !== undefined && code !== null) {
+            console.warn("validateCode(): received non-string code payload");
+        }
+
+        return false;
+    }
+
+    const trimmedCode = code.trim();
+
+    if (!trimmedCode) {
+        return false;
+    }
 
     try {
-        const decoded = JSON.parse(Buffer.from(code, 'base64').toString()) as DecodedToken;
+        const buffer = Buffer.from(trimmedCode, "base64");
+
+        if (buffer.length === 0) {
+            return false;
+        }
+
+        const decoded = JSON.parse(buffer.toString("utf-8")) as DecodedToken;
         const { signed_message, authors, timestamp, signatures } = decoded;
 
         if (
@@ -497,22 +516,151 @@ const requestToncenterBalance = async (
     baseEndpoint: string,
     address: string,
     headers: Record<string, string>,
+    auth?: AxiosAuthConfig,
     apiKey?: string,
-    useMethodParam = false,
 ) => {
     const sanitizedBase = baseEndpoint.replace(/\/+$/, "");
-    const url = useMethodParam ? sanitizedBase : `${sanitizedBase}/getAddressBalance`;
-
-    const response = await axios.get(url, {
+    const baseConfig: AxiosRequestConfig = {
         headers,
+        auth,
+    };
+
+    const queryParams = {
+        address,
+        ...(apiKey ? { api_key: apiKey } : {}),
+    };
+
+    const attempts: Array<() => Promise<any>> = [];
+
+    const buildGetConfig = (extraParams?: Record<string, string>): AxiosRequestConfig => ({
+        ...baseConfig,
         params: {
-            ...(useMethodParam ? { method: "getAddressBalance" } : {}),
-            address,
-            api_key: apiKey,
+            ...queryParams,
+            ...(extraParams || {}),
         },
     });
 
-    return response.data;
+    attempts.push(() => axios.get(`${sanitizedBase}/getAddressBalance`, buildGetConfig()));
+    attempts.push(() => axios.get(sanitizedBase, buildGetConfig({ method: "getAddressBalance" })));
+
+    if (baseEndpoint.toLowerCase().includes("/api/v3")) {
+        const postConfig: AxiosRequestConfig = {
+            ...baseConfig,
+            headers: {
+                ...headers,
+                "Content-Type": "application/json",
+            },
+        };
+
+        if (apiKey) {
+            postConfig.params = { api_key: apiKey };
+        }
+
+        attempts.unshift(() =>
+            axios.post(
+                sanitizedBase,
+                {
+                    id: "balance",
+                    jsonrpc: "2.0",
+                    method: "getAddressBalance",
+                    params: [{ address }],
+                },
+                postConfig,
+            ),
+        );
+    }
+
+    let lastError: unknown = null;
+
+    for (const attempt of attempts) {
+        try {
+            const response = await attempt();
+            return response.data;
+        } catch (error) {
+            if (
+                axios.isAxiosError(error) &&
+                (error.response?.status === 404 || error.response?.status === 405)
+            ) {
+                lastError = error;
+                continue;
+            }
+
+            throw error;
+        }
+    }
+
+    if (lastError) {
+        throw lastError;
+    }
+
+    throw new Error("Unable to fetch TON balance from Toncenter endpoint");
+};
+
+const extractTonBalanceValue = (value: unknown, seen: Set<unknown> = new Set()): string | null => {
+    if (typeof value === "string") {
+        return value;
+    }
+
+    if (typeof value === "number") {
+        if (!Number.isFinite(value)) {
+            return null;
+        }
+
+        return value.toString();
+    }
+
+    if (Array.isArray(value)) {
+        for (const entry of value) {
+            const extracted = extractTonBalanceValue(entry, seen);
+
+            if (extracted !== null) {
+                return extracted;
+            }
+        }
+
+        return null;
+    }
+
+    if (value && typeof value === "object") {
+        if (seen.has(value)) {
+            return null;
+        }
+
+        seen.add(value);
+
+        const record = value as Record<string, unknown>;
+        const candidateKeys = [
+            "balance",
+            "result",
+            "address_balance",
+            "account_balance",
+        ];
+
+        for (const key of candidateKeys) {
+            if (key in record) {
+                const extracted = extractTonBalanceValue(record[key], seen);
+
+                if (extracted !== null) {
+                    return extracted;
+                }
+            }
+        }
+
+        const nestedAddress = record.address;
+
+        if (nestedAddress && typeof nestedAddress === "object") {
+            const extracted = extractTonBalanceValue(
+                (nestedAddress as Record<string, unknown>).balance,
+                seen,
+            );
+
+            if (extracted !== null) {
+                return extracted;
+            }
+        }
+    }
+
+    return null;
 };
 
 const fetchTonBalance = async (node: ChainstackNode, address: string): Promise<NormalizedBalanceResponse> => {
@@ -529,31 +677,47 @@ const fetchTonBalance = async (node: ChainstackNode, address: string): Promise<N
         headers["x-api-key"] = node.details.auth_key;
     }
 
-    let data: any;
+    const auth =
+        node.details?.auth_username && node.details?.auth_password
+            ? {
+                  username: node.details.auth_username as string,
+                  password: node.details.auth_password as string,
+              }
+            : undefined;
 
-    try {
-        data = await requestToncenterBalance(baseEndpoint, address, headers, node.details?.auth_key, false);
-    } catch (err) {
-        if (axios.isAxiosError(err) && err.response?.status === 404) {
-            data = await requestToncenterBalance(baseEndpoint, address, headers, node.details?.auth_key, true);
-        } else {
-            throw err;
-        }
-    }
+    const data = await requestToncenterBalance(
+        baseEndpoint,
+        address,
+        headers,
+        auth,
+        node.details?.auth_key,
+    );
 
     const ok = typeof data?.ok === "boolean" ? data.ok : true;
 
     if (!ok) {
-        throw new Error(data?.error || "TON balance request failed");
+        const errorMessage =
+            typeof data?.error === "string"
+                ? data.error
+                : typeof data?.error?.message === "string"
+                    ? data.error.message
+                    : "TON balance request failed";
+
+        throw new Error(errorMessage);
     }
 
-    const balanceValue = data?.result;
-    const balance =
-        typeof balanceValue === "string"
-            ? balanceValue
-            : typeof balanceValue === "number"
-                ? balanceValue.toString()
-                : null;
+    if (data?.error) {
+        const errorMessage =
+            typeof data.error === "string"
+                ? data.error
+                : typeof data.error?.message === "string"
+                    ? data.error.message
+                    : "TON balance request failed";
+
+        throw new Error(errorMessage);
+    }
+
+    const balance = extractTonBalanceValue(data?.result ?? data);
 
     if (balance === null) {
         throw new Error("Invalid TON balance response");

@@ -7,9 +7,31 @@ import config from "../config";
 import {baseApiRequest} from "./util";
 
 const makeApiAuth = () => {
+    if (typeof config.privateApiAuth !== "string") {
+        return null;
+    }
+
+    const encoded = config.privateApiAuth.trim();
+
+    if (!encoded) {
+        return null;
+    }
+
     try {
-        const auth = new Buffer(config.privateApiAuth, "base64").toString("utf-8");
-        return JSON.parse(auth);
+        const buffer = Buffer.from(encoded, "base64");
+
+        if (buffer.length === 0) {
+            return null;
+        }
+
+        const decoded = buffer.toString("utf-8");
+        const parsed = JSON.parse(decoded);
+
+        if (!parsed || typeof parsed !== "object") {
+            return null;
+        }
+
+        return parsed;
     } catch (e) {
         return null;
     }
