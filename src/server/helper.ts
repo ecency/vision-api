@@ -17,7 +17,7 @@ export interface ChainBalanceResponse {
     provider: BalanceProvider;
 }
 
-const BITQUERY_ENDPOINT = "https://graphql.bitquery.io";
+const BITQUERY_ENDPOINT = "https://streaming.bitquery.io/graphql";
 
 interface BitqueryResponse {
     data?: unknown;
@@ -227,25 +227,31 @@ export const fetchBitqueryBalance = async (
         throw new Error("Requested chain is not supported by Bitquery provider");
     }
 
-    const apiKey = process.env.BITQUERY_API_KEY ?? process.env.BITQUERY_ACCESS_TOKEN;
+    const apiKey = process.env.BITQUERY_API_KEY?.trim();
+    const accessToken = process.env.BITQUERY_ACCESS_TOKEN?.trim();
 
-    if (!apiKey) {
+    if (!apiKey && !accessToken) {
         throw new Error("Bitquery API key/access token is not configured");
     }
 
     try {
+        const headers: Record<string, string> = {
+            "Content-Type": "application/json",
+        };
+
+        if (accessToken) {
+            headers.Authorization = `Bearer ${accessToken}`;
+        } else if (apiKey) {
+            headers["X-API-KEY"] = apiKey;
+        }
+
         const response = await axios.post<BitqueryResponse>(
             BITQUERY_ENDPOINT,
             {
                 query: config.query,
                 variables: { address },
             },
-            {
-                headers: {
-                    "Content-Type": "application/json",
-                    "X-API-KEY": apiKey,
-                },
-            },
+            { headers },
         );
 
         if (response.data?.errors?.length) {
