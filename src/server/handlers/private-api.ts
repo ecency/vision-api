@@ -394,7 +394,7 @@ const requestToncenterBalance = async (
     apiKey?: string,
     useMethodParam = false,
 ) => {
-    const sanitizedBase = baseEndpoint.replace(/\/+$, "");
+    const sanitizedBase = baseEndpoint.replace(/\/+$/, "");
     const url = useMethodParam ? sanitizedBase : `${sanitizedBase}/getAddressBalance`;
 
     const response = await axios.get(url, {
@@ -487,7 +487,7 @@ const fetchAptosBalance = async (node: ChainstackNode, address: string): Promise
     const config = buildNodeAxiosConfig(node);
     const normalizedAddress = normalizeAptosAddress(address);
     const resourceType = "0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>";
-    const sanitizedEndpoint = endpoint.replace(/\/+$, "");
+    const sanitizedEndpoint = endpoint.replace(/\/+$/, "");
     const url = `${sanitizedEndpoint}/v1/accounts/${normalizedAddress}/resource/${encodeURIComponent(resourceType)}`;
 
     try {
