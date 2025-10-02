@@ -25,7 +25,7 @@
 * `HIVESIGNER_SECRET` -  hivesigner client secret
 * `SEARCH_API_ADDR` - hivesearcher api endpoint
 * `SEARCH_API_SECRET` - hivesearcher api auth token
-* `REVUE_TOKEN` - revue api auth token
+* `CHAINSTACK_API_KEY` - Chainstack API key used to enumerate nodes and request balances directly from each network-specific endpoint.
 
 ##### Start api in dev
 `$ yarn start`
@@ -51,7 +51,7 @@ Configure the instance using following environment variables:
  * `HIVESIGNER_SECRET`
  * `SEARCH_API_ADDR`
  * `SEARCH_API_SECRET`
- * `REVUE_TOKEN`
+ * `CHAINSTACK_API_KEY`
 
 ```bash
 docker run -it --rm -p 3000:3000 -e PRIVATE_API_ADDR=https://api.example.com -e PRIVATE_API_AUTH=verysecretpassword ecency/api:latest

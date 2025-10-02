@@ -12,6 +12,7 @@
   "dependencies": {
     "@hiveio/dhive": "^1.2.7",
     "axios": "^1.7.3",
+    "bs58check": "^4.0.0",
     "cors": "^2.8.5",
     "express": "^4.17.1",
     "hivesigner": "^3.2.5",
