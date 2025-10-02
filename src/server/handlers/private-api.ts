@@ -145,7 +145,7 @@ const CHAIN_PARAM_REGEX = /^[a-z0-9-]+$/i;
 
 const CHAINSTACK_API_BASE = "https://api.chainstack.com/v1";
 const CHAINSTACK_NODES_ENDPOINT = `${CHAINSTACK_API_BASE}/nodes`;
-const CHAINSTACK_NODE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CHAINSTACK_NODE_CACHE_TTL_MS = 300 * 60 * 1000; // 5 hours
 
 interface ChainstackNodeDetails {
     https_endpoint?: string;
@@ -501,34 +501,35 @@ const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promi
 
 const CHAIN_HANDLERS: Record<string, ChainHandler> = {
     btc: {
-        selectNode: (nodes) => nodes.find((node) => endpointIncludes(node, "bitcoin")),
+        selectNode: (nodes) => nodes.find((node) => endpointIncludes(node, "bitcoin")) ?? null,
         fetchBalance: (node, address) => fetchBitcoinBalance(node, address),
     },
     eth: {
         validateAddress: (address) => /^0x[a-fA-F0-9]{40}$/.test(address),
-        selectNode: (nodes) => nodes.find((node) => endpointIncludes(node, "ethereum")),
+        selectNode: (nodes) => nodes.find((node) => endpointIncludes(node, "ethereum")) ?? null,
         fetchBalance: (node, address) => fetchEvmBalance("eth", node, address),
     },
     bnb: {
         validateAddress: (address) => /^0x[a-fA-F0-9]{40}$/.test(address),
-        selectNode: (nodes) => nodes.find((node) => endpointIncludes(node, "bsc")),
+        selectNode: (nodes) => nodes.find((node) => endpointIncludes(node, "bsc")) ?? null,
         fetchBalance: (node, address) => fetchEvmBalance("bnb", node, address),
     },
     sol: {
-        selectNode: (nodes) => nodes.find((node) => endpointIncludes(node, "solana")),
+        selectNode: (nodes) => nodes.find((node) => endpointIncludes(node, "solana")) ?? null,
         fetchBalance: (node, address) => fetchSolanaBalance(node, address),
     },
     tron: {
-        selectNode: (nodes) => nodes.find((node) => endpointIncludes(node, "tron")),
+        selectNode: (nodes) => nodes.find((node) => endpointIncludes(node, "tron")) ?? null,
         fetchBalance: (node, address) => fetchTronBalance(node, address),
     },
     ton: {
-        selectNode: (nodes) => nodes.find((node) => node.details?.toncenter_api_v2 || node.details?.toncenter_api_v3),
+        selectNode: (nodes) =>
+            nodes.find((node) => node.details?.toncenter_api_v2 || node.details?.toncenter_api_v3) ?? null,
         fetchBalance: (node, address) => fetchTonBalance(node, address),
     },
     apt: {
         validateAddress: (address) => /^0x[a-fA-F0-9]+$/.test(address),
-        selectNode: (nodes) => nodes.find((node) => endpointIncludes(node, "aptos")),
+        selectNode: (nodes) => nodes.find((node) => endpointIncludes(node, "aptos")) ?? null,
         fetchBalance: (node, address) => fetchAptosBalance(node, address),
     },
 };
