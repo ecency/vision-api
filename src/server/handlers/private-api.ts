@@ -520,6 +520,11 @@ const requestToncenterBalance = async (
     apiKey?: string,
 ) => {
     const sanitizedBase = baseEndpoint.replace(/\/+$/, "");
+    const baseLower = sanitizedBase.toLowerCase();
+    const restBase = baseLower.endsWith("/jsonrpc")
+        ? sanitizedBase.slice(0, -"/jsonrpc".length)
+        : sanitizedBase;
+
     const baseConfig: AxiosRequestConfig = {
         headers,
         auth,
@@ -540,25 +545,36 @@ const requestToncenterBalance = async (
         },
     });
 
-    attempts.push(() => axios.get(`${sanitizedBase}/getAddressBalance`, buildGetConfig()));
-    attempts.push(() => axios.get(sanitizedBase, buildGetConfig({ method: "getAddressBalance" })));
+    if (restBase) {
+        attempts.push(() => axios.get(`${restBase}/getAddressBalance`, buildGetConfig()));
+        attempts.push(() => axios.get(restBase, buildGetConfig({ method: "getAddressBalance" })));
+    }
 
-    if (baseEndpoint.toLowerCase().includes("/api/v3")) {
-        const postConfig: AxiosRequestConfig = {
-            ...baseConfig,
-            headers: {
-                ...headers,
-                "Content-Type": "application/json",
-            },
-        };
+    const postConfig: AxiosRequestConfig = {
+        ...baseConfig,
+        headers: {
+            ...headers,
+            "Content-Type": "application/json",
+        },
+    };
 
-        if (apiKey) {
-            postConfig.params = { api_key: apiKey };
-        }
+    if (apiKey) {
+        postConfig.params = { api_key: apiKey };
+    }
 
+    const postEndpoints = new Set<string>();
+    postEndpoints.add(sanitizedBase);
+
+    if (!baseLower.endsWith("/jsonrpc")) {
+        postEndpoints.add(`${sanitizedBase}/jsonRPC`);
+    } else if (restBase) {
+        postEndpoints.add(restBase);
+    }
+
+    for (const endpoint of Array.from(postEndpoints).reverse()) {
         attempts.unshift(() =>
             axios.post(
-                sanitizedBase,
+                endpoint,
                 {
                     id: "balance",
                     jsonrpc: "2.0",
@@ -663,10 +679,39 @@ const extractTonBalanceValue = (value: unknown, seen: Set<unknown> = new Set()):
     return null;
 };
 
-const fetchTonBalance = async (node: ChainstackNode, address: string): Promise<NormalizedBalanceResponse> => {
-    const baseEndpoint = node.details?.toncenter_api_v3 || node.details?.toncenter_api_v2;
+const ensureTonAuthKeyInEndpoint = (endpoint: string, authKey?: string): string => {
+    if (!authKey) {
+        return endpoint;
+    }
 
-    if (!baseEndpoint) {
+    try {
+        const url = new URL(endpoint);
+
+        if (!url.hostname.endsWith(".chainstack.com")) {
+            return endpoint;
+        }
+
+        const segments = url.pathname.split("/").filter(Boolean);
+
+        if (segments[0] === authKey) {
+            return endpoint;
+        }
+
+        url.pathname = `/${[authKey, ...segments].join("/")}`;
+
+        return url.toString();
+    } catch (err) {
+        return endpoint;
+    }
+};
+
+const fetchTonBalance = async (node: ChainstackNode, address: string): Promise<NormalizedBalanceResponse> => {
+    const endpointCandidates = [node.details?.toncenter_api_v3, node.details?.toncenter_api_v2]
+        .filter((endpoint): endpoint is string => Boolean(endpoint))
+        .map((endpoint) => ensureTonAuthKeyInEndpoint(endpoint, node.details?.auth_key))
+        .filter((endpoint, index, array) => array.indexOf(endpoint) === index);
+
+    if (endpointCandidates.length === 0) {
         throw new Error("TON node does not provide a Toncenter endpoint");
     }
 
@@ -685,13 +730,39 @@ const fetchTonBalance = async (node: ChainstackNode, address: string): Promise<N
               }
             : undefined;
 
-    const data = await requestToncenterBalance(
-        baseEndpoint,
-        address,
-        headers,
-        auth,
-        node.details?.auth_key,
-    );
+    let data: any = null;
+    let lastError: unknown = null;
+
+    for (const endpoint of endpointCandidates) {
+        try {
+            data = await requestToncenterBalance(
+                endpoint,
+                address,
+                headers,
+                auth,
+                node.details?.auth_key,
+            );
+            break;
+        } catch (error) {
+            if (
+                axios.isAxiosError(error) &&
+                (error.response?.status === 404 || error.response?.status === 405)
+            ) {
+                lastError = error;
+                continue;
+            }
+
+            throw error;
+        }
+    }
+
+    if (!data) {
+        if (lastError) {
+            throw lastError;
+        }
+
+        throw new Error("Unable to fetch TON balance from Toncenter endpoint");
+    }
 
     const ok = typeof data?.ok === "boolean" ? data.ok : true;
 
@@ -824,6 +895,106 @@ const fetchAptosBalance = async (node: ChainstackNode, address: string): Promise
     }
 };
 
+const BITCOIN_SATOSHI_PRECISION = 8;
+
+const normalizeBitcoinDecimalToSats = (value: string): string => {
+    const trimmed = value.trim();
+
+    if (trimmed === "") {
+        throw new Error("Invalid Bitcoin balance response");
+    }
+
+    let digits = trimmed;
+    let sign = "";
+
+    if (digits.startsWith("+")) {
+        digits = digits.slice(1);
+    } else if (digits.startsWith("-")) {
+        sign = "-";
+        digits = digits.slice(1);
+    }
+
+    if (digits === "" || digits === ".") {
+        throw new Error("Invalid Bitcoin balance response");
+    }
+
+    const [wholePartRaw, fractionalPartRaw = ""] = digits.split(".");
+    const wholePart = wholePartRaw === "" ? "0" : wholePartRaw;
+
+    if (!/^\d+$/.test(wholePart) || !/^\d*$/.test(fractionalPartRaw)) {
+        throw new Error("Invalid Bitcoin balance response");
+    }
+
+    let fractionalPart = fractionalPartRaw;
+
+    if (fractionalPart.length > BITCOIN_SATOSHI_PRECISION) {
+        const extra = fractionalPart.slice(BITCOIN_SATOSHI_PRECISION);
+
+        if (/[^0]/.test(extra)) {
+            throw new Error("Bitcoin balance exceeds satoshi precision");
+        }
+
+        fractionalPart = fractionalPart.slice(0, BITCOIN_SATOSHI_PRECISION);
+    }
+
+    const paddedFraction = fractionalPart.padEnd(BITCOIN_SATOSHI_PRECISION, "0");
+    const combined = stripLeadingZeros(`${wholePart}${paddedFraction}`);
+
+    if (combined === "0") {
+        return "0";
+    }
+
+    return sign === "-" ? `-${combined}` : combined;
+};
+
+const normalizeBitcoinBalanceToSats = (value: unknown): string => {
+    if (typeof value === "number") {
+        if (!Number.isFinite(value)) {
+            throw new Error("Invalid Bitcoin balance response");
+        }
+
+        if (Number.isInteger(value)) {
+            if (!Number.isSafeInteger(value)) {
+                throw new Error("Bitcoin balance exceeds numeric precision");
+            }
+
+            return value.toString();
+        }
+
+        return normalizeBitcoinDecimalToSats(value.toFixed(BITCOIN_SATOSHI_PRECISION));
+    }
+
+    if (typeof value === "string") {
+        const trimmed = value.trim();
+
+        if (trimmed === "") {
+            throw new Error("Invalid Bitcoin balance response");
+        }
+
+        if (/^-?\d+$/.test(trimmed)) {
+            return trimmed;
+        }
+
+        if (/^-?(?:\d+)?(?:\.\d+)?$/.test(trimmed)) {
+            return normalizeBitcoinDecimalToSats(trimmed);
+        }
+
+        if (/^-?(?:\d+)?(?:\.\d+)?e[-+]?\d+$/i.test(trimmed)) {
+            const numeric = Number(trimmed);
+
+            if (!Number.isFinite(numeric)) {
+                throw new Error("Invalid Bitcoin balance response");
+            }
+
+            return normalizeBitcoinBalanceToSats(numeric);
+        }
+
+        throw new Error("Invalid Bitcoin balance response");
+    }
+
+    throw new Error("Invalid Bitcoin balance response");
+};
+
 const formatBitcoinFromSats = (value: string): string => {
     if (!/^-?\d+$/.test(value)) {
         throw new Error("Invalid satoshi balance");
@@ -891,39 +1062,31 @@ const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promi
 
             const rawBalance = data?.result?.balance;
 
-            if (typeof rawBalance !== "number" && typeof rawBalance !== "string") {
+            if (rawBalance === null || rawBalance === undefined) {
                 throw new Error("Invalid Bitcoin balance response");
             }
 
-            let balanceString: string;
-
-            if (typeof rawBalance === "number") {
-                if (!Number.isFinite(rawBalance) || !Number.isSafeInteger(rawBalance)) {
-                    throw new Error("Bitcoin balance exceeds numeric precision");
-                }
-
-                balanceString = rawBalance.toString();
-            } else {
-                if (!/^-?\d+$/.test(rawBalance)) {
-                    throw new Error("Invalid Bitcoin balance response");
-                }
-
-                balanceString = rawBalance;
-            }
+            const satoshis = normalizeBitcoinBalanceToSats(rawBalance);
 
             return {
-                balance: formatBitcoinFromSats(balanceString),
+                balance: formatBitcoinFromSats(satoshis),
                 raw: data,
             };
         } catch (error) {
-            if (axios.isAxiosError(error) && error.response?.data?.error) {
-                const message = error.response.data.error?.message || "Bitcoin getaddressbalance failed";
+            if (axios.isAxiosError(error)) {
+                if (error.response?.data?.error) {
+                    const message = error.response.data.error?.message || "Bitcoin getaddressbalance failed";
 
-                if (message.toLowerCase().includes("method not found")) {
-                    return null;
+                    if (message.toLowerCase().includes("method not found")) {
+                        return null;
+                    }
+
+                    throw new Error(message);
                 }
 
-                throw new Error(message);
+                if (error.response?.status && [404, 405, 501].includes(error.response.status)) {
+                    return null;
+                }
             }
 
             throw error;
@@ -957,7 +1120,12 @@ const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promi
     }
 
     const amount = data?.result?.total_amount;
-    const balance = typeof amount === "number" ? amount.toString() : null;
+    const balance =
+        typeof amount === "number"
+            ? amount.toString()
+            : typeof amount === "string"
+                ? amount
+                : null;
 
     return {
         chain: "btc",
