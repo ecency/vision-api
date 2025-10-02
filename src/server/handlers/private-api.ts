@@ -1043,6 +1043,67 @@ const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promi
         timeout: BITCOIN_RPC_TIMEOUT_MS,
     };
 
+    const tryScanTxOutSet = async () => {
+        const payload = {
+            jsonrpc: "1.0",
+            id: "balance",
+            method: "scantxoutset",
+            params: ["start", [{ desc: `addr(${address})` }]],
+        };
+
+        try {
+            const response = await axios.post(endpoint, payload, config);
+            const data = response.data;
+
+            if (data?.error) {
+                const message = data.error?.message || "Bitcoin scantxoutset failed";
+                const lowered = message.toLowerCase();
+
+                if (lowered.includes("method not found") || lowered.includes("scantxoutset is disabled")) {
+                    return null;
+                }
+
+                throw new Error(message);
+            }
+
+            const amount = data?.result?.total_amount;
+            const balance =
+                typeof amount === "number"
+                    ? amount.toString()
+                    : typeof amount === "string"
+                        ? amount
+                        : null;
+
+            if (!balance) {
+                throw new Error("Invalid Bitcoin balance response");
+            }
+
+            return {
+                balance,
+                raw: data,
+            };
+        } catch (error) {
+            if (axios.isAxiosError(error)) {
+                if (error.response?.data?.error) {
+                    const message = error.response.data.error?.message || "Bitcoin scantxoutset failed";
+                    const lowered = message.toLowerCase();
+
+                    if (lowered.includes("method not found") || lowered.includes("scantxoutset is disabled")) {
+                        return null;
+                    }
+
+                    throw new Error(message);
+                }
+
+                if (error.response?.status && [404, 405, 501].includes(error.response.status)) {
+                    return null;
+                }
+            }
+
+            throw error;
+        }
+    };
+
     const tryGetAddressBalance = async () => {
         const payload = {
             jsonrpc: "1.0",
@@ -1098,6 +1159,18 @@ const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promi
         }
     };
 
+    const scannedBalance = await tryScanTxOutSet();
+
+    if (scannedBalance) {
+        return {
+            chain: "btc",
+            balance: scannedBalance.balance,
+            unit: "btc",
+            raw: scannedBalance.raw,
+            nodeId: node.id,
+        };
+    }
+
     const directBalance = await tryGetAddressBalance();
 
     if (directBalance) {
@@ -1110,35 +1183,7 @@ const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promi
         };
     }
 
-    const payload = {
-        jsonrpc: "1.0",
-        id: "balance",
-        method: "scantxoutset",
-        params: ["start", [{ desc: `addr(${address})` }]],
-    };
-
-    const response = await axios.post(endpoint, payload, config);
-    const data = response.data;
-
-    if (data?.error) {
-        throw new Error(data.error?.message || "Bitcoin balance request failed");
-    }
-
-    const amount = data?.result?.total_amount;
-    const balance =
-        typeof amount === "number"
-            ? amount.toString()
-            : typeof amount === "string"
-                ? amount
-                : null;
-
-    return {
-        chain: "btc",
-        balance,
-        unit: "btc",
-        raw: data,
-        nodeId: node.id,
-    };
+    throw new Error("Bitcoin balance request failed");
 };
 
 const CHAIN_HANDLERS: Record<string, ChainHandler> = {
@@ -1202,6 +1247,18 @@ export const balance = async (req: express.Request, res: express.Response) => {
     if (!handler) {
         res.status(400).send("Unsupported chain");
         return;
+    }
+
+    if (normalizedChain === "btc") {
+        const extendedTimeout = BITCOIN_RPC_TIMEOUT_MS + 30_000;
+
+        if (typeof req.setTimeout === "function") {
+            req.setTimeout(extendedTimeout);
+        }
+
+        if (typeof res.setTimeout === "function") {
+            res.setTimeout(extendedTimeout);
+        }
     }
 
     try {
