@@ -4,7 +4,13 @@ import axios, { AxiosRequestConfig } from "axios";
 import { cryptoUtils, Signature, Client } from '@hiveio/dhive'
 
 import { announcements } from "./announcements";
-import { apiRequest, getPromotedEntries } from "../helper";
+import {
+    apiRequest,
+    getPromotedEntries,
+    ChainBalanceResponse,
+    parseBalanceProvider,
+    fetchBitqueryBalance,
+} from "../helper";
 
 import { pipe } from "../util";
 import { cache } from '../cache';
@@ -201,18 +207,10 @@ interface AxiosNodeConfig {
     auth?: AxiosAuthConfig;
 }
 
-interface NormalizedBalanceResponse {
-    chain: string;
-    balance: string | null;
-    unit: string;
-    raw: unknown;
-    nodeId: string;
-}
-
 interface ChainHandler {
     validateAddress?: (address: string) => boolean;
     selectNode: (nodes: ChainstackNode[]) => ChainstackNode | null;
-    fetchBalance: (node: ChainstackNode, address: string) => Promise<NormalizedBalanceResponse>;
+    fetchBalance: (node: ChainstackNode, address: string) => Promise<ChainBalanceResponse>;
 }
 
 let cachedNodes: ChainstackNode[] | null = null;
@@ -410,7 +408,7 @@ const parseHexBalance = (value: unknown): string => {
     }
 };
 
-const fetchEvmBalance = async (chain: string, node: ChainstackNode, address: string): Promise<NormalizedBalanceResponse> => {
+const fetchEvmBalance = async (chain: string, node: ChainstackNode, address: string): Promise<ChainBalanceResponse> => {
     const endpoint = ensureHttpsEndpoint(node);
     const config = buildNodeAxiosConfig(node);
 
@@ -436,10 +434,11 @@ const fetchEvmBalance = async (chain: string, node: ChainstackNode, address: str
         unit: "wei",
         raw: data,
         nodeId: node.id,
+        provider: "chainstack",
     };
 };
 
-const fetchSolanaBalance = async (node: ChainstackNode, address: string): Promise<NormalizedBalanceResponse> => {
+const fetchSolanaBalance = async (node: ChainstackNode, address: string): Promise<ChainBalanceResponse> => {
     const endpoint = ensureHttpsEndpoint(node);
     const config = buildNodeAxiosConfig(node);
 
@@ -469,10 +468,11 @@ const fetchSolanaBalance = async (node: ChainstackNode, address: string): Promis
         unit: "lamports",
         raw: data,
         nodeId: node.id,
+        provider: "chainstack",
     };
 };
 
-const fetchTronBalance = async (node: ChainstackNode, address: string): Promise<NormalizedBalanceResponse> => {
+const fetchTronBalance = async (node: ChainstackNode, address: string): Promise<ChainBalanceResponse> => {
     const endpoint = ensureHttpsEndpoint(node);
     const config = buildNodeAxiosConfig(node);
 
@@ -509,6 +509,7 @@ const fetchTronBalance = async (node: ChainstackNode, address: string): Promise<
         unit: "sun",
         raw: data,
         nodeId: node.id,
+        provider: "chainstack",
     };
 };
 
@@ -705,7 +706,7 @@ const ensureTonAuthKeyInEndpoint = (endpoint: string, authKey?: string): string 
     }
 };
 
-const fetchTonBalance = async (node: ChainstackNode, address: string): Promise<NormalizedBalanceResponse> => {
+const fetchTonBalance = async (node: ChainstackNode, address: string): Promise<ChainBalanceResponse> => {
     const endpointCandidates = [node.details?.toncenter_api_v3, node.details?.toncenter_api_v2]
         .filter((endpoint): endpoint is string => Boolean(endpoint))
         .map((endpoint) => ensureTonAuthKeyInEndpoint(endpoint, node.details?.auth_key))
@@ -800,6 +801,7 @@ const fetchTonBalance = async (node: ChainstackNode, address: string): Promise<N
         unit: "nanotons",
         raw: data,
         nodeId: node.id,
+        provider: "chainstack",
     };
 };
 
@@ -823,7 +825,7 @@ const normalizeAptosAddress = (address: string): string => {
     return `0x${padded.toLowerCase()}`;
 };
 
-const fetchAptosBalance = async (node: ChainstackNode, address: string): Promise<NormalizedBalanceResponse> => {
+const fetchAptosBalance = async (node: ChainstackNode, address: string): Promise<ChainBalanceResponse> => {
     const endpoint = ensureHttpsEndpoint(node);
     const config = buildNodeAxiosConfig(node);
     const normalizedAddress = normalizeAptosAddress(address);
@@ -846,6 +848,7 @@ const fetchAptosBalance = async (node: ChainstackNode, address: string): Promise
             unit: "octas",
             raw: data,
             nodeId: node.id,
+            provider: "chainstack",
         };
     } catch (err) {
         if (axios.isAxiosError(err) && err.response?.status === 404) {
@@ -874,6 +877,7 @@ const fetchAptosBalance = async (node: ChainstackNode, address: string): Promise
                         unit: "octas",
                         raw: viewData,
                         nodeId: node.id,
+                        provider: "chainstack",
                     };
                 }
             } catch (viewError) {
@@ -888,6 +892,7 @@ const fetchAptosBalance = async (node: ChainstackNode, address: string): Promise
                 unit: "octas",
                 raw: err.response?.data,
                 nodeId: node.id,
+                provider: "chainstack",
             };
         }
 
@@ -1036,7 +1041,7 @@ const formatBitcoinFromSats = (value: string): string => {
 
 const BITCOIN_RPC_TIMEOUT_MS = 180_000;
 
-const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promise<NormalizedBalanceResponse> => {
+const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promise<ChainBalanceResponse> => {
     const endpoint = ensureHttpsEndpoint(node);
     const config: AxiosRequestConfig = {
         ...buildNodeAxiosConfig(node),
@@ -1168,6 +1173,7 @@ const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promi
             unit: "btc",
             raw: scannedBalance.raw,
             nodeId: node.id,
+            provider: "chainstack",
         };
     }
 
@@ -1180,6 +1186,7 @@ const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promi
             unit: "btc",
             raw: directBalance.raw,
             nodeId: node.id,
+            provider: "chainstack",
         };
     }
 
@@ -1249,6 +1256,8 @@ export const balance = async (req: express.Request, res: express.Response) => {
         return;
     }
 
+    const provider = parseBalanceProvider(req.query.provider);
+
     if (normalizedChain === "btc") {
         const extendedTimeout = BITCOIN_RPC_TIMEOUT_MS + 30_000;
 
@@ -1264,6 +1273,13 @@ export const balance = async (req: express.Request, res: express.Response) => {
     try {
         if (handler.validateAddress && !handler.validateAddress(address)) {
             res.status(400).send("Invalid address format");
+            return;
+        }
+
+        if (provider === "bitquery") {
+            const balanceResponse = await fetchBitqueryBalance(normalizedChain, address);
+
+            res.status(200).json(balanceResponse);
             return;
         }
 
@@ -1292,7 +1308,12 @@ export const balance = async (req: express.Request, res: express.Response) => {
             return;
         }
 
-        res.status(502).send("Failed to fetch balance from Chainstack");
+        const failureMessage =
+            provider === "bitquery"
+                ? "Failed to fetch balance from Bitquery"
+                : "Failed to fetch balance from Chainstack";
+
+        res.status(502).send(failureMessage);
     }
 };
 
