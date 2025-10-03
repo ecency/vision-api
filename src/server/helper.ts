@@ -80,6 +80,54 @@ const convertDecimalToIntegerString = (value: string, decimals: number): string 
     return normalized;
 };
 
+const normalizeChainzBalance = (value: string): string => {
+    const trimmed = value.trim();
+
+    if (trimmed === "") {
+        throw new Error("Chainz returned balance in unexpected format");
+    }
+
+    if (/^[+-]?\d+(\.\d+)?$/.test(trimmed)) {
+        return trimmed;
+    }
+
+    const scientificMatch = trimmed.match(/^([+-]?)(\d+(?:\.\d+)?)[eE]([+-]?\d+)$/);
+
+    if (!scientificMatch) {
+        throw new Error("Chainz returned balance in unexpected format");
+    }
+
+    const [, sign = "", significand, exponentRaw] = scientificMatch;
+    const exponent = Number(exponentRaw);
+
+    if (!Number.isFinite(exponent)) {
+        throw new Error("Chainz returned balance in unexpected format");
+    }
+
+    const [wholePartRaw, fractionalPartRaw = ""] = significand.split(".");
+    const digits = `${wholePartRaw}${fractionalPartRaw}`;
+    const decimalIndex = wholePartRaw.length + exponent;
+
+    if (decimalIndex >= digits.length) {
+        const zeros = "0".repeat(decimalIndex - digits.length);
+        return `${sign}${digits}${zeros}`;
+    }
+
+    if (decimalIndex <= 0) {
+        const zeros = "0".repeat(Math.abs(decimalIndex));
+        return `${sign}0.${zeros}${digits}`;
+    }
+
+    const whole = digits.slice(0, decimalIndex);
+    const fraction = digits.slice(decimalIndex);
+
+    if (fraction === "") {
+        return `${sign}${whole}`;
+    }
+
+    return `${sign}${whole}.${fraction}`;
+};
+
 const CHAINZ_CHAIN_CONFIG: Record<string, ChainzChainConfig> = {
     apt: {
         coin: "apt",
@@ -158,11 +206,7 @@ export const fetchChainzBalance = async (
         });
 
         const rawData = response.data;
-        const rawBalanceString = typeof rawData === "number" ? rawData.toString() : String(rawData).trim();
-
-        if (!/^-?\d+(\.\d+)?$/.test(rawBalanceString)) {
-            throw new Error("Chainz returned balance in unexpected format");
-        }
+        const rawBalanceString = normalizeChainzBalance(String(rawData));
 
         const normalizedBalance = convertDecimalToIntegerString(rawBalanceString, config.decimals);
 
