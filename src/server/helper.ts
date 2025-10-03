@@ -81,25 +81,40 @@ const convertDecimalToIntegerString = (value: string, decimals: number): string 
 };
 
 const CHAINZ_CHAIN_CONFIG: Record<string, ChainzChainConfig> = {
+    apt: {
+        coin: "apt",
+        decimals: 8,
+        unit: "octa",
+    },
     btc: {
         coin: "btc",
         decimals: 8,
         unit: "satoshi",
     },
-    ltc: {
-        coin: "ltc",
-        decimals: 8,
-        unit: "photon",
+    bnb: {
+        coin: "bnb",
+        decimals: 18,
+        unit: "wei",
     },
-    doge: {
-        coin: "doge",
-        decimals: 8,
-        unit: "koinu",
+    eth: {
+        coin: "eth",
+        decimals: 18,
+        unit: "wei",
     },
-    dash: {
-        coin: "dash",
-        decimals: 8,
-        unit: "duff",
+    sol: {
+        coin: "sol",
+        decimals: 9,
+        unit: "lamport",
+    },
+    tron: {
+        coin: "tron",
+        decimals: 6,
+        unit: "sun",
+    },
+    ton: {
+        coin: "ton",
+        decimals: 9,
+        unit: "nanoton",
     },
 };
 
