@@ -6,7 +6,7 @@ import config from "../config";
 
 import {baseApiRequest} from "./util";
 
-export type BalanceProvider = "chainstack" | "bitquery";
+export type BalanceProvider = "chainstack" | "chainz";
 
 export interface ChainBalanceResponse {
     chain: string;
@@ -17,17 +17,10 @@ export interface ChainBalanceResponse {
     provider: BalanceProvider;
 }
 
-const BITQUERY_ENDPOINT = "https://streaming.bitquery.io/graphql";
+const CHAINZ_ENDPOINT = "https://chainz.cryptoid.info/api.dws";
 
-interface BitqueryResponse {
-    data?: unknown;
-    errors?: { message?: string }[];
-}
-
-interface BitqueryChainConfig {
-    query: string;
-    datasetKey: string;
-    balancePath: string[];
+interface ChainzChainConfig {
+    coin: string;
     decimals: number;
     unit: string;
 }
@@ -87,214 +80,87 @@ const convertDecimalToIntegerString = (value: string, decimals: number): string 
     return normalized;
 };
 
-const BITQUERY_CHAIN_CONFIG: Record<string, BitqueryChainConfig> = {
-    eth: {
-        query: `query ($address: String!) {
-    ethereum(network: ethereum) {
-        address(address: {is: $address}) {
-            balance
-        }
-    }
-}`,
-        datasetKey: "ethereum",
-        balancePath: ["address", "0", "balance"],
-        decimals: 18,
-        unit: "wei",
-    },
-    bnb: {
-        query: `query ($address: String!) {
-    ethereum(network: bsc) {
-        address(address: {is: $address}) {
-            balance
-        }
-    }
-}`,
-        datasetKey: "ethereum",
-        balancePath: ["address", "0", "balance"],
-        decimals: 18,
-        unit: "wei",
-    },
-    sol: {
-        query: `query ($address: String!) {
-    solana(network: mainnet) {
-        address(address: {is: $address}) {
-            balance
-        }
-    }
-}`,
-        datasetKey: "solana",
-        balancePath: ["address", "0", "balance"],
-        decimals: 9,
-        unit: "lamports",
-    },
-    tron: {
-        query: `query ($address: String!) {
-    tron(network: mainnet) {
-        address(address: {is: $address}) {
-            balance
-        }
-    }
-}`,
-        datasetKey: "tron",
-        balancePath: ["address", "0", "balance"],
-        decimals: 6,
-        unit: "sun",
-    },
+const CHAINZ_CHAIN_CONFIG: Record<string, ChainzChainConfig> = {
     btc: {
-        query: `query ($address: String!) {
-    bitcoin(network: bitcoin) {
-        address(address: {is: $address}) {
-            balance
-        }
-    }
-}`,
-        datasetKey: "bitcoin",
-        balancePath: ["address", "0", "balance"],
+        coin: "btc",
         decimals: 8,
         unit: "satoshi",
     },
-    ton: {
-        query: `query ($address: String!) {
-    ton(network: mainnet) {
-        address(address: {is: $address}) {
-            balance
-        }
-    }
-}`,
-        datasetKey: "ton",
-        balancePath: ["address", "0", "balance"],
-        decimals: 9,
-        unit: "nanotons",
-    },
-    apt: {
-        query: `query ($address: String!) {
-    aptos(network: mainnet) {
-        account(address: {is: $address}) {
-            balance
-        }
-    }
-}`,
-        datasetKey: "aptos",
-        balancePath: ["account", "0", "balance"],
+    ltc: {
+        coin: "ltc",
         decimals: 8,
-        unit: "octas",
+        unit: "photon",
     },
-};
-
-const dig = (obj: any, path: string[]): unknown => {
-    if (!obj) {
-        return undefined;
-    }
-
-    let current: any = obj;
-
-    for (const segment of path) {
-        if (current === null || current === undefined) {
-            return undefined;
-        }
-
-        if (Array.isArray(current)) {
-            const index = Number(segment);
-
-            if (Number.isNaN(index) || index < 0 || index >= current.length) {
-                return undefined;
-            }
-
-            current = current[index];
-        } else {
-            current = current[segment];
-        }
-    }
-
-    return current;
+    doge: {
+        coin: "doge",
+        decimals: 8,
+        unit: "koinu",
+    },
+    dash: {
+        coin: "dash",
+        decimals: 8,
+        unit: "duff",
+    },
 };
 
 export const parseBalanceProvider = (value: unknown): BalanceProvider => {
-    if (typeof value === "string" && value.trim().toLowerCase() === "bitquery") {
-        return "bitquery";
+    if (typeof value === "string" && value.trim().toLowerCase() === "chainz") {
+        return "chainz";
     }
 
     return "chainstack";
 };
 
-export const fetchBitqueryBalance = async (
+export const fetchChainzBalance = async (
     chain: string,
     address: string,
 ): Promise<ChainBalanceResponse> => {
-    const config = BITQUERY_CHAIN_CONFIG[chain];
+    const config = CHAINZ_CHAIN_CONFIG[chain];
 
     if (!config) {
-        throw new Error("Requested chain is not supported by Bitquery provider");
+        throw new Error("Requested chain is not supported by Chainz provider");
     }
 
-    const apiKey = process.env.BITQUERY_API_KEY?.trim();
-    const accessToken = process.env.BITQUERY_ACCESS_TOKEN?.trim();
+    const params = new URLSearchParams({
+        q: "addressbalance",
+        coin: config.coin,
+        a: address,
+    });
 
-    if (!apiKey && !accessToken) {
-        throw new Error("Bitquery API key/access token is not configured");
+    const apiKey = process.env.CHAINZ_API_KEY?.trim();
+
+    if (apiKey) {
+        params.set("key", apiKey);
     }
+
+    const url = `${CHAINZ_ENDPOINT}?${params.toString()}`;
 
     try {
-        const headers: Record<string, string> = {
-            "Content-Type": "application/json",
-        };
-
-        if (accessToken) {
-            headers.Authorization = `Bearer ${accessToken}`;
-        } else if (apiKey) {
-            headers["X-API-KEY"] = apiKey;
-        }
-
-        const response = await axios.post<BitqueryResponse>(
-            BITQUERY_ENDPOINT,
-            {
-                query: config.query,
-                variables: { address },
+        const response = await axios.get<string | number>(url, {
+            headers: {
+                Accept: "text/plain, application/json;q=0.9, */*;q=0.8",
             },
-            { headers },
-        );
+        });
 
-        if (response.data?.errors?.length) {
-            const [firstError] = response.data.errors;
-            throw new Error(firstError?.message || "Bitquery query failed");
+        const rawData = response.data;
+        const rawBalanceString = typeof rawData === "number" ? rawData.toString() : String(rawData).trim();
+
+        if (!/^-?\d+(\.\d+)?$/.test(rawBalanceString)) {
+            throw new Error("Chainz returned balance in unexpected format");
         }
 
-        const dataset: any = (response.data?.data as Record<string, unknown>)?.[config.datasetKey];
-
-        if (!dataset) {
-            throw new Error("Bitquery response did not include expected dataset");
-        }
-
-        const rawBalance = dig(dataset, config.balancePath);
-
-        const normalizedBalance = (() => {
-            if (rawBalance === null || rawBalance === undefined) {
-                return null;
-            }
-
-            if (typeof rawBalance === "number" || typeof rawBalance === "string") {
-                const rawString = rawBalance.toString();
-
-                if (rawString.includes(".") || rawString.toLowerCase().includes("e")) {
-                    return convertDecimalToIntegerString(rawString, config.decimals);
-                }
-
-                return stripLeadingZeros(rawString);
-            }
-
-            throw new Error("Bitquery returned balance in unexpected format");
-        })();
+        const normalizedBalance = convertDecimalToIntegerString(rawBalanceString, config.decimals);
 
         return {
             chain,
             balance: normalizedBalance,
             unit: config.unit,
-            raw: response.data?.data,
-            provider: "bitquery",
+            raw: rawData,
+            provider: "chainz",
         };
     } catch (error) {
         if (axios.isAxiosError(error)) {
-            const message = error.response?.data?.error?.message || error.response?.data?.message;
+            const message = typeof error.response?.data === "string" ? error.response.data : error.message;
 
             if (message) {
                 throw new Error(message);

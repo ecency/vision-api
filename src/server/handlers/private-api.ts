@@ -9,7 +9,7 @@ import {
     getPromotedEntries,
     ChainBalanceResponse,
     parseBalanceProvider,
-    fetchBitqueryBalance,
+    fetchChainzBalance,
 } from "../helper";
 
 import { pipe } from "../util";
@@ -1276,8 +1276,8 @@ export const balance = async (req: express.Request, res: express.Response) => {
             return;
         }
 
-        if (provider === "bitquery") {
-            const balanceResponse = await fetchBitqueryBalance(normalizedChain, address);
+        if (provider === "chainz") {
+            const balanceResponse = await fetchChainzBalance(normalizedChain, address);
 
             res.status(200).json(balanceResponse);
             return;
@@ -1309,8 +1309,8 @@ export const balance = async (req: express.Request, res: express.Response) => {
         }
 
         const failureMessage =
-            provider === "bitquery"
-                ? "Failed to fetch balance from Bitquery"
+            provider === "chainz"
+                ? "Failed to fetch balance from Chainz"
                 : "Failed to fetch balance from Chainstack";
 
         res.status(502).send(failureMessage);

@@ -26,7 +26,7 @@
 * `SEARCH_API_ADDR` - hivesearcher api endpoint
 * `SEARCH_API_SECRET` - hivesearcher api auth token
 * `CHAINSTACK_API_KEY` - Chainstack API key used to enumerate nodes and request balances directly from each network-specific endpoint.
-* `BITQUERY_API_KEY` - Bitquery API key (a.k.a. access token) that enables balance lookups when the Bitquery provider is requested. You can also set it via `BITQUERY_ACCESS_TOKEN`.
+* `CHAINZ_API_KEY` - Chainz API key used to perform balance lookups when the Chainz provider is requested.
 
 ##### Start api in dev
 `$ yarn start`
@@ -53,7 +53,7 @@ Configure the instance using following environment variables:
  * `SEARCH_API_ADDR`
  * `SEARCH_API_SECRET`
  * `CHAINSTACK_API_KEY`
- * `BITQUERY_API_KEY` (or `BITQUERY_ACCESS_TOKEN`)
+ * `CHAINZ_API_KEY`
 
 ```bash
 docker run -it --rm -p 3000:3000 -e PRIVATE_API_ADDR=https://api.example.com -e PRIVATE_API_AUTH=verysecretpassword ecency/api:latest
