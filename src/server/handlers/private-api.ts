@@ -1299,12 +1299,22 @@ export const balance = async (req: express.Request, res: express.Response) => {
         console.error("balance(): error while fetching chain balance", err);
 
         if (axios.isAxiosError(err) && err.response) {
-            res.status(err.response.status).send(err.response.data);
+            const { status, data } = err.response;
+
+            if (data !== undefined) {
+                if (data !== null && typeof data === "object") {
+                    res.status(status).json(data);
+                } else {
+                    res.status(status).json({ error: String(data) });
+                }
+            } else {
+                res.sendStatus(status);
+            }
             return;
         }
 
         if (err instanceof Error) {
-            res.status(502).send(err.message);
+            res.status(502).json({ error: err.message });
             return;
         }
 
@@ -1313,7 +1323,7 @@ export const balance = async (req: express.Request, res: express.Response) => {
                 ? "Failed to fetch balance from Chainz"
                 : "Failed to fetch balance from Chainstack";
 
-        res.status(502).send(failureMessage);
+        res.status(502).json({ error: failureMessage });
     }
 };
 
