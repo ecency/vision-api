@@ -1039,7 +1039,20 @@ const formatBitcoinFromSats = (value: string): string => {
     return `${sign}${whole}.${fraction}`;
 };
 
-const BITCOIN_RPC_TIMEOUT_MS = 180_000;
+const btcCache = new Map<string, { bestblock: string; balance: string; at: number }>();
+const BTC_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+// De-duplicate concurrent scans per address
+const inFlightBtc = new Map<string, Promise<{ balance: string; raw: unknown }>>();
+
+const getBestBlockHash = async (endpoint: string, config: AxiosRequestConfig) => {
+    const payload = { jsonrpc: "1.0", id: "tip", method: "getbestblockhash", params: [] };
+    const { data } = await axios.post(endpoint, payload, config);
+    if (data?.error) throw new Error(data.error?.message || "getbestblockhash failed");
+    return data.result as string;
+};
+
+const BITCOIN_RPC_TIMEOUT_MS = 15_000;
 
 const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promise<ChainBalanceResponse> => {
     const endpoint = ensureHttpsEndpoint(node);
@@ -1048,7 +1061,15 @@ const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promi
         timeout: BITCOIN_RPC_TIMEOUT_MS,
     };
 
-    const tryScanTxOutSet = async () => {
+    // fast tip check + cache
+    const tryScanTxOutSet = async (): Promise<{ balance: string; raw: unknown }> => {
+        const tip = await getBestBlockHash(endpoint, config);
+
+        const cached = btcCache.get(address);
+        if (cached && cached.bestblock === tip && Date.now() - cached.at < BTC_CACHE_TTL_MS) {
+            return { balance: cached.balance, raw: { cached: true, bestblock: tip } };
+        }
+
         const payload = {
             jsonrpc: "1.0",
             id: "balance",
@@ -1056,141 +1077,68 @@ const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promi
             params: ["start", [{ desc: `addr(${address})` }]],
         };
 
-        try {
-            const response = await axios.post(endpoint, payload, config);
-            const data = response.data;
+        const response = await axios.post(endpoint, payload, config);
+        const data = response.data;
 
-            if (data?.error) {
-                const message = data.error?.message || "Bitcoin scantxoutset failed";
-                const lowered = message.toLowerCase();
-
-                if (lowered.includes("method not found") || lowered.includes("scantxoutset is disabled")) {
-                    return null;
-                }
-
-                throw new Error(message);
+        if (data?.error) {
+            const message = data.error?.message || "Bitcoin scantxoutset failed";
+            const lowered = String(message).toLowerCase();
+            // Most shared nodes either disable or don’t have this; we bubble up so caller can fallback.
+            if (
+                lowered.includes("method not found") ||
+                lowered.includes("is disabled") ||
+                lowered.includes("not enabled")
+            ) {
+                const err = new Error("BTC_SCAN_UNAVAILABLE");
+                (err as any).code = "BTC_SCAN_UNAVAILABLE";
+                throw err;
             }
-
-            const amount = data?.result?.total_amount;
-            const balance =
-                typeof amount === "number"
-                    ? amount.toString()
-                    : typeof amount === "string"
-                        ? amount
-                        : null;
-
-            if (!balance) {
-                throw new Error("Invalid Bitcoin balance response");
-            }
-
-            return {
-                balance,
-                raw: data,
-            };
-        } catch (error) {
-            if (axios.isAxiosError(error)) {
-                if (error.response?.data?.error) {
-                    const message = error.response.data.error?.message || "Bitcoin scantxoutset failed";
-                    const lowered = message.toLowerCase();
-
-                    if (lowered.includes("method not found") || lowered.includes("scantxoutset is disabled")) {
-                        return null;
-                    }
-
-                    throw new Error(message);
-                }
-
-                if (error.response?.status && [404, 405, 501].includes(error.response.status)) {
-                    return null;
-                }
-            }
-
-            throw error;
+            throw new Error(message);
         }
+
+        const amount = data?.result?.total_amount;
+        const bestblock = data?.result?.bestblock;
+
+        const balance =
+            typeof amount === "number" ? amount.toString() :
+                typeof amount === "string" ? amount :
+                    null;
+
+        if (!balance || !bestblock) {
+            throw new Error("Invalid Bitcoin balance response");
+        }
+
+        btcCache.set(address, { bestblock, balance, at: Date.now() });
+        return { balance, raw: data };
     };
 
-    const tryGetAddressBalance = async () => {
-        const payload = {
-            jsonrpc: "1.0",
-            id: "balance",
-            method: "getaddressbalance",
-            params: [{ addresses: [address] }],
-        };
-
-        try {
-            const response = await axios.post(endpoint, payload, config);
-            const data = response.data;
-
-            if (data?.error) {
-                const message = data.error?.message || "Bitcoin getaddressbalance failed";
-
-                if (message.toLowerCase().includes("method not found")) {
-                    return null;
-                }
-
-                throw new Error(message);
-            }
-
-            const rawBalance = data?.result?.balance;
-
-            if (rawBalance === null || rawBalance === undefined) {
-                throw new Error("Invalid Bitcoin balance response");
-            }
-
-            const satoshis = normalizeBitcoinBalanceToSats(rawBalance);
-
-            return {
-                balance: formatBitcoinFromSats(satoshis),
-                raw: data,
-            };
-        } catch (error) {
-            if (axios.isAxiosError(error)) {
-                if (error.response?.data?.error) {
-                    const message = error.response.data.error?.message || "Bitcoin getaddressbalance failed";
-
-                    if (message.toLowerCase().includes("method not found")) {
-                        return null;
-                    }
-
-                    throw new Error(message);
-                }
-
-                if (error.response?.status && [404, 405, 501].includes(error.response.status)) {
-                    return null;
-                }
-            }
-
-            throw error;
-        }
-    };
-
-    const scannedBalance = await tryScanTxOutSet();
-
-    if (scannedBalance) {
+    // De-dupe concurrent scans for the same address
+    const key = address;
+    const existing = inFlightBtc.get(key);
+    if (existing) {
+        const result = await existing;
         return {
             chain: "btc",
-            balance: scannedBalance.balance,
+            balance: result.balance,
             unit: "btc",
-            raw: scannedBalance.raw,
+            raw: result.raw,
             nodeId: node.id,
             provider: "chainstack",
         };
     }
 
-    const directBalance = await tryGetAddressBalance();
+    const p = tryScanTxOutSet().finally(() => inFlightBtc.delete(key));
+    inFlightBtc.set(key, p);
 
-    if (directBalance) {
-        return {
-            chain: "btc",
-            balance: directBalance.balance,
-            unit: "btc",
-            raw: directBalance.raw,
-            nodeId: node.id,
-            provider: "chainstack",
-        };
-    }
-
-    throw new Error("Bitcoin balance request failed");
+    const scanned = await p; // may throw (timeout, unavailable, etc.)
+    return {
+        chain: "btc",
+        balance: scanned.balance,
+        unit: "btc",
+        raw: scanned.raw,
+        nodeId: node.id,
+        provider: "chainstack",
+    };
 };
 
 const CHAIN_HANDLERS: Record<string, ChainHandler> = {
@@ -1258,16 +1206,11 @@ export const balance = async (req: express.Request, res: express.Response) => {
 
     const provider = parseBalanceProvider(req.query.provider);
 
+    // shorter server timeouts for overall request
     if (normalizedChain === "btc") {
-        const extendedTimeout = BITCOIN_RPC_TIMEOUT_MS + 30_000;
-
-        if (typeof req.setTimeout === "function") {
-            req.setTimeout(extendedTimeout);
-        }
-
-        if (typeof res.setTimeout === "function") {
-            res.setTimeout(extendedTimeout);
-        }
+        const extendedTimeout = BITCOIN_RPC_TIMEOUT_MS + 10_000; // give a bit extra for response wrapping
+        if (typeof req.setTimeout === "function") req.setTimeout(extendedTimeout);
+        if (typeof res.setTimeout === "function") res.setTimeout(extendedTimeout);
     }
 
     try {
@@ -1276,31 +1219,76 @@ export const balance = async (req: express.Request, res: express.Response) => {
             return;
         }
 
-        if (provider === "chainz") {
+        // If client *explicitly* asks for Chainz, go straight there.
+        if (normalizedChain === "btc" && provider === "chainz") {
             const balanceResponse = await fetchChainzBalance(normalizedChain, address);
-
+            res.setHeader("x-provider", "chainz");
             res.status(200).json(balanceResponse);
             return;
         }
 
+        // Otherwise: try Chainstack first for all chains.
+        if (provider === "chainstack" || normalizedChain !== "btc") {
+            const nodes = await fetchChainstackNodes();
+            const node = handler.selectNode(nodes);
+
+            if (!node) {
+                // No node? If BTC, try Chainz fallback; otherwise 502.
+                if (normalizedChain === "btc") {
+                    const balanceResponse = await fetchChainzBalance(normalizedChain, address);
+                    res.setHeader("x-provider", "chainz");
+                    res.status(200).json(balanceResponse);
+                    return;
+                }
+                console.error(`No Chainstack node available for ${normalizedChain}`);
+                res.status(502).send("No Chainstack node available for requested chain");
+                return;
+            }
+
+            try {
+                const balanceResponse = await handler.fetchBalance(node, address);
+                res.setHeader("x-provider", "chainstack");
+                res.status(200).json(balanceResponse);
+                return;
+            } catch (err: any) {
+                // BTC ONLY: fallback on timeout/scan unavailable
+                if (normalizedChain === "btc") {
+                    const isTimeout =
+                        (axios.isAxiosError(err) && err.code === "ECONNABORTED") ||
+                        (axios.isAxiosError(err) && err.message?.toLowerCase().includes("timeout")) ||
+                        err?.code === "BTC_SCAN_UNAVAILABLE";
+
+                    if (isTimeout) {
+                        try {
+                            const balanceResponse = await fetchChainzBalance(normalizedChain, address);
+                            res.setHeader("x-provider", "chainz");
+                            res.status(200).json(balanceResponse);
+                            return;
+                        } catch (fallbackErr) {
+                            console.error("BTC fallback to Chainz failed", fallbackErr);
+                            // fall through to existing error handling below
+                        }
+                    }
+                }
+                throw err; // non-BTC or other errors -> handled by catch below
+            }
+        }
+
+        // Provider is not explicitly chainstack and we’re not BTC? (very rare path)
         const nodes = await fetchChainstackNodes();
         const node = handler.selectNode(nodes);
-
         if (!node) {
-            console.error(`No Chainstack node available for ${normalizedChain}`);
             res.status(502).send("No Chainstack node available for requested chain");
             return;
         }
-
         const balanceResponse = await handler.fetchBalance(node, address);
-
+        res.setHeader("x-provider", "chainstack");
         res.status(200).json(balanceResponse);
     } catch (err) {
         console.error("balance(): error while fetching chain balance", err);
 
         if (axios.isAxiosError(err) && err.response) {
             const { status, data } = err.response;
-
             if (data !== undefined) {
                 if (data !== null && typeof data === "object") {
                     res.status(status).json(data);
