@@ -621,69 +621,32 @@ const requestToncenterBalance = async (
 };
 
 const extractTonBalanceValue = (value: unknown, seen: Set<unknown> = new Set()): string | null => {
-    if (typeof value === "string") {
-        return value;
-    }
-
-    if (typeof value === "number") {
-        if (!Number.isFinite(value)) {
-            return null;
-        }
-
-        return value.toString();
-    }
-
+    if (typeof value === "string") return value;
+    if (typeof value === "number") return Number.isFinite(value) ? String(value) : null;
     if (Array.isArray(value)) {
         for (const entry of value) {
-            const extracted = extractTonBalanceValue(entry, seen);
-
-            if (extracted !== null) {
-                return extracted;
-            }
+            const got = extractTonBalanceValue(entry, seen);
+            if (got !== null) return got;
         }
-
         return null;
     }
-
     if (value && typeof value === "object") {
-        if (seen.has(value)) {
-            return null;
-        }
-
+        if (seen.has(value)) return null;
         seen.add(value);
-
-        const record = value as Record<string, unknown>;
-        const candidateKeys = [
-            "balance",
-            "result",
-            "address_balance",
-            "account_balance",
-        ];
-
-        for (const key of candidateKeys) {
-            if (key in record) {
-                const extracted = extractTonBalanceValue(record[key], seen);
-
-                if (extracted !== null) {
-                    return extracted;
-                }
+        const obj = value as Record<string, unknown>;
+        // common toncenter / tonapi fields
+        for (const k of ["balance", "result", "address_balance", "account_balance", "available_balance"]) {
+            if (k in obj) {
+                const got = extractTonBalanceValue(obj[k], seen);
+                if (got !== null) return got;
             }
         }
-
-        const nestedAddress = record.address;
-
-        if (nestedAddress && typeof nestedAddress === "object") {
-            const extracted = extractTonBalanceValue(
-                (nestedAddress as Record<string, unknown>).balance,
-                seen,
-            );
-
-            if (extracted !== null) {
-                return extracted;
-            }
+        // nested address forms
+        if (obj.address && typeof obj.address === "object") {
+            const got = extractTonBalanceValue((obj.address as any).balance, seen);
+            if (got !== null) return got;
         }
     }
-
     return null;
 };
 
@@ -713,104 +676,190 @@ const ensureTonAuthKeyInEndpoint = (endpoint: string, authKey?: string): string 
     }
 };
 
+const TON_TIMEOUT_MS = 10000;
+
 const fetchTonBalance = async (node: ChainstackNode, address: string): Promise<ChainBalanceResponse> => {
+    // Build candidate endpoints (v3 first), inject path auth key if needed
     const endpointCandidates = [node.details?.toncenter_api_v3, node.details?.toncenter_api_v2]
-        .filter((endpoint): endpoint is string => Boolean(endpoint))
-        .map((endpoint) => ensureTonAuthKeyInEndpoint(endpoint, node.details?.auth_key))
-        .filter((endpoint, index, array) => array.indexOf(endpoint) === index);
+        .filter((e): e is string => Boolean(e))
+        .map((e) => ensureAuthKeyInPath(e, node.details?.auth_key));
 
     if (endpointCandidates.length === 0) {
         throw new Error("TON node does not provide a Toncenter endpoint");
     }
 
-    const headers: Record<string, string> = {};
+    // Common headers (avoid only-header auth; toncenter prefers api_key query)
+    const headers: Record<string, string> = {
+        Accept: "application/json, text/plain;q=0.9, */*;q=0.8",
+        "Content-Type": "application/json",
+        "User-Agent": "EcencyBalanceBot/1.0 (+https://ecency.com)",
+    };
 
-    if (node.details?.auth_key) {
-        headers["X-API-KEY"] = node.details.auth_key;
-        headers["x-api-key"] = node.details.auth_key;
-    }
-
+    // Basic auth if present
     const auth =
         node.details?.auth_username && node.details?.auth_password
             ? {
-                  username: node.details.auth_username as string,
-                  password: node.details.auth_password as string,
-              }
+                username: node.details.auth_username as string,
+                password: node.details.auth_password as string,
+            }
             : undefined;
 
-    let data: any = null;
-    let lastError: unknown = null;
+    const apiKey = node.details?.auth_key; // chainstack toncenter often wants this as ?api_key=
 
-    for (const endpoint of endpointCandidates) {
-        try {
-            data = await requestToncenterBalance(
-                endpoint,
-                address,
-                headers,
-                auth,
-                node.details?.auth_key,
-            );
-            break;
-        } catch (error) {
-            if (
-                axios.isAxiosError(error) &&
-                (error.response?.status === 404 || error.response?.status === 405)
-            ) {
-                lastError = error;
+    const doJsonRpc = async (base: string) => {
+        // v3: many endpoints expose /jsonrpc; support both base and /jsonrpc
+        const postTargets = new Set<string>();
+        const baseSanitized = base.replace(/\/+$/, "");
+        const lower = baseSanitized.toLowerCase();
+        if (lower.endsWith("/jsonrpc")) {
+            postTargets.add(baseSanitized);
+        } else {
+            postTargets.add(`${baseSanitized}/jsonrpc`);
+            postTargets.add(baseSanitized); // some setups accept JSON-RPC at root
+        }
+
+        const body = {
+            id: "balance",
+            jsonrpc: "2.0",
+            method: "getAddressBalance",
+            params: [{ address }],
+        };
+
+        for (const url of postTargets) {
+            try {
+                const cfg: AxiosRequestConfig = {
+                    headers,
+                    auth,
+                    timeout: TON_TIMEOUT_MS,
+                    params: apiKey ? { api_key: apiKey } : undefined,
+                    validateStatus: (s) => s >= 200 && s < 500,
+                };
+                const { data, status } = await axios.post(url, body, cfg);
+
+                // reject HTML/text
+                if (typeof data === "string" && /<[^>]+>/.test(data)) {
+                    throw new Error(`HTML from toncenter (JSON-RPC) status=${status}`);
+                }
+
+                if (data?.error) {
+                    // common errors: invalid address, not initialized
+                    const msg = data.error?.message || data.error;
+                    throw new Error(String(msg || "toncenter JSON-RPC error"));
+                }
+
+                const bal = extractTonBalanceValue(data?.result ?? data);
+                if (bal === null) throw new Error("Invalid TON balance response (JSON-RPC)");
+                return { raw: data, balance: String(bal) };
+            } catch (e) {
+                // try next post target
                 continue;
             }
-
-            throw error;
         }
-    }
-
-    if (!data) {
-        if (lastError) {
-            throw lastError;
-        }
-
-        throw new Error("Unable to fetch TON balance from Toncenter endpoint");
-    }
-
-    const ok = typeof data?.ok === "boolean" ? data.ok : true;
-
-    if (!ok) {
-        const errorMessage =
-            typeof data?.error === "string"
-                ? data.error
-                : typeof data?.error?.message === "string"
-                    ? data.error.message
-                    : "TON balance request failed";
-
-        throw new Error(errorMessage);
-    }
-
-    if (data?.error) {
-        const errorMessage =
-            typeof data.error === "string"
-                ? data.error
-                : typeof data.error?.message === "string"
-                    ? data.error.message
-                    : "TON balance request failed";
-
-        throw new Error(errorMessage);
-    }
-
-    const balance = extractTonBalanceValue(data?.result ?? data);
-
-    if (balance === null) {
-        throw new Error("Invalid TON balance response");
-    }
-
-    return {
-        chain: "ton",
-        balance,
-        unit: "nanotons",
-        raw: data,
-        nodeId: node.id,
-        provider: "chainstack",
+        throw new Error("toncenter JSON-RPC attempts failed");
     };
+
+    const doRest = async (base: string) => {
+        const baseSanitized = base.replace(/\/+$/, "");
+        const baseLower = baseSanitized.toLowerCase();
+        // Try canonical REST path first
+        const rest = baseLower.endsWith("/jsonrpc") ? baseSanitized.slice(0, -"/jsonrpc".length) : baseSanitized;
+
+        const mkCfg = (extra: Record<string, string> = {}) =>
+            ({
+                headers,
+                auth,
+                timeout: TON_TIMEOUT_MS,
+                params: apiKey ? { api_key: apiKey, ...extra } : extra,
+                validateStatus: (s: number) => s >= 200 && s < 500,
+            } as AxiosRequestConfig);
+
+        // (1) /getAddressBalance?address=...
+        try {
+            const { data, status } = await axios.get(`${rest}/getAddressBalance`, mkCfg({ address }));
+            if (typeof data === "string" && /<[^>]+>/.test(data)) {
+                throw new Error(`HTML from toncenter (REST) status=${status}`);
+            }
+            const bal = extractTonBalanceValue(data);
+            if (bal !== null) return { raw: data, balance: String(bal) };
+        } catch (_) { /* pass */ }
+
+        // (2) GET rest?method=getAddressBalance&address=...
+        try {
+            const { data, status } = await axios.get(rest, mkCfg({ method: "getAddressBalance", address }));
+            if (typeof data === "string" && /<[^>]+>/.test(data)) {
+                throw new Error(`HTML from toncenter (REST-query) status=${status}`);
+            }
+            const bal = extractTonBalanceValue(data);
+            if (bal !== null) return { raw: data, balance: String(bal) };
+        } catch (_) { /* pass */ }
+
+        throw new Error("toncenter REST attempts failed");
+    };
+
+    // Try v3 JSON-RPC first, then REST, across all provided endpoints
+    let lastErr: unknown = null;
+    for (const ep of endpointCandidates) {
+        try {
+            const r = await doJsonRpc(ep);
+            return {
+                chain: "ton",
+                balance: r.balance,
+                unit: "nanotons",
+                raw: r.raw,
+                nodeId: node.id,
+                provider: "chainstack",
+            };
+        } catch (e) {
+            lastErr = e;
+            // try REST for same endpoint
+            try {
+                const r2 = await doRest(ep);
+                return {
+                    chain: "ton",
+                    balance: r2.balance,
+                    unit: "nanotons",
+                    raw: r2.raw,
+                    nodeId: node.id,
+                    provider: "chainstack",
+                };
+            } catch (e2) {
+                lastErr = e2;
+                // move on to next candidate
+            }
+        }
+    }
+
+    // Optional: public TONAPI fallback (best-effort)
+    try {
+        const tonapiKey = process.env.TONAPI_KEY?.trim();
+        const { data } = await axios.get(
+            `https://tonapi.io/v2/accounts/${encodeURIComponent(address)}`,
+            {
+                timeout: TON_TIMEOUT_MS,
+                headers: tonapiKey ? { Authorization: `Bearer ${tonapiKey}` } : undefined,
+                validateStatus: (s) => s >= 200 && s < 500,
+            }
+        );
+        const bal = extractTonBalanceValue(data);
+        if (bal !== null) {
+            return {
+                chain: "ton",
+                balance: String(bal),
+                unit: "nanotons",
+                raw: data,
+                nodeId: node.id,
+                provider: "tonapi",
+            };
+        }
+    } catch (e3) {
+        lastErr = e3;
+    }
+
+    // If we got here, everything failed
+    if (lastErr instanceof Error) throw lastErr;
+    throw new Error("Unable to fetch TON balance from any endpoint");
 };
+
 
 const normalizeAptosAddress = (address: string): string => {
     const trimmed = address.trim();
