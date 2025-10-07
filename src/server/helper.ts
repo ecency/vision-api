@@ -6,7 +6,7 @@ import config from "../config";
 
 import {baseApiRequest} from "./util";
 
-export type BalanceProvider = "chainstack" | "chainz";
+export type BalanceProvider = "chainstack" | "chainz" | "tonapi";
 
 export interface ChainBalanceResponse {
     chain: string;
