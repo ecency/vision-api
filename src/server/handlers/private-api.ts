@@ -848,7 +848,7 @@ const fetchTonBalance = async (node: ChainstackNode, address: string): Promise<C
                 unit: "nanotons",
                 raw: data,
                 nodeId: node.id,
-                provider: "tonapi",
+                provider: "other",
             };
         }
     } catch (e3) {
