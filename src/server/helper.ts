@@ -134,41 +134,11 @@ const normalizeChainzBalance = (value: string): string => {
 };
 
 const CHAINZ_CHAIN_CONFIG: Record<string, ChainzChainConfig> = {
-    apt: {
-        coin: "apt",
-        decimals: 8,
-        unit: "octa",
-    },
     btc: {
         coin: "btc",
         decimals: 8,
         unit: "satoshi",
-    },
-    bnb: {
-        coin: "bnb",
-        decimals: 18,
-        unit: "wei",
-    },
-    eth: {
-        coin: "eth",
-        decimals: 18,
-        unit: "wei",
-    },
-    sol: {
-        coin: "sol",
-        decimals: 9,
-        unit: "lamport",
-    },
-    tron: {
-        coin: "tron",
-        decimals: 6,
-        unit: "sun",
-    },
-    ton: {
-        coin: "ton",
-        decimals: 9,
-        unit: "nanoton",
-    },
+    }
 };
 
 export const parseBalanceProvider = (value: unknown): BalanceProvider => {
@@ -189,77 +159,46 @@ export const fetchChainzBalance = async (
     }
 
     const apiKey = process.env.CHAINZ_API_KEY?.trim();
-
-    // Use coin subdomain per Chainz convention
-    const endpoint = chainzEndpointFor(config.coin);
+    const endpoint = chainzEndpointFor(config.coin);  // <— use per-coin subdomain
 
     const params = new URLSearchParams({
         q: "addressbalance",
         a: address,
     });
-
     if (apiKey) params.set("key", apiKey);
-
-    // Optional: plain format reduces chance of HTML wrappers
-    // (Chainz usually returns plain number already; harmless to include)
-    // params.set("format", "plain");
 
     const url = `${endpoint}?${params.toString()}`;
 
-    try {
-        const response = await axios.get<string | number>(url, {
-            timeout: 8000,
-            // Present as a normal browser-ish client; some CDNs dislike generic UA
-            headers: {
-                "Accept": "text/plain, application/json;q=0.9, */*;q=0.8",
-                "User-Agent": "EcencyBalanceBot/1.0 (+https://ecency.com)",
-                "Cache-Control": "no-cache",
-                "Pragma": "no-cache",
-            },
-            validateStatus: (s) => s >= 200 && s < 500, // we’ll inspect body on 4xx
-        });
+    const response = await axios.get<string | number>(url, {
+        timeout: 8000,
+        headers: {
+            "Accept": "text/plain, application/json;q=0.9, */*;q=0.8",
+            "User-Agent": "EcencyBalanceBot/1.0 (+https://ecency.com)",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+        },
+        validateStatus: (s) => s >= 200 && s < 500,
+    });
 
-        const rawData = response.data;
-        const text = String(rawData).trim();
+    const rawData = response.data;
+    const text = String(rawData).trim();
 
-        // Detect HTML/cloudflare/rate-limit pages early
-        // e.g. 403/429 pages render HTML
-        if (/[<][a-z!/]/i.test(text)) {
-            throw new Error("Chainz returned HTML (likely error or rate limit)");
-        }
-
-        // Chainz should return a number, possibly scientific; normalize it
-        const rawBalanceString = normalizeChainzBalance(text);
-
-        // Convert coin units to integer smallest unit (sats)
-        const normalizedBalance = convertDecimalToIntegerString(rawBalanceString, config.decimals);
-
-        return {
-            chain,
-            balance: normalizedBalance,
-            unit: config.unit,
-            raw: rawData,
-            provider: "chainz",
-        };
-    } catch (error) {
-        if (axios.isAxiosError(error)) {
-            // Improve logging: surface status + first bytes when not numeric
-            const status = error.response?.status;
-            const body = typeof error.response?.data === "string"
-                ? error.response.data.slice(0, 200)
-                : JSON.stringify(error.response?.data)?.slice(0, 200);
-
-            const msg =
-                status
-                    ? `Chainz HTTP ${status}: ${body}`
-                    : error.message;
-
-            throw new Error(msg || "Chainz request failed");
-        }
-        throw error;
+    // Keep your HTML/rate-limit guard
+    if (/[<][a-z!/]/i.test(text)) {
+        throw new Error("Chainz returned HTML (likely error or rate limit)");
     }
-};
 
+    const rawBalanceString = normalizeChainzBalance(text);
+    const normalizedBalance = convertDecimalToIntegerString(rawBalanceString, config.decimals);
+
+    return {
+        chain,
+        balance: normalizedBalance,
+        unit: config.unit,
+        raw: rawData,
+        provider: "chainz",
+    };
+};
 
 // Ensures the Chainstack auth_key is present as the first path segment.
 // e.g. https://bitcoin-mainnet.core.chainstack.com -> https://bitcoin-mainnet.core.chainstack.com/<AUTH_KEY>

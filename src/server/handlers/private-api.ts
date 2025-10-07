@@ -1227,20 +1227,27 @@ export const balance = async (req: express.Request, res: express.Response) => {
 
     const provider = parseBalanceProvider(req.query.provider);
 
-    // Slightly extend to cover our BTC JSON-RPC + response write
+    // Ignore provider=chainz for non-BTC (but surface it for observability)
+    if (provider === "chainz" && normalizedChain !== "btc") {
+        console.warn(`provider=chainz ignored for chain=${normalizedChain}`);
+        res.setHeader("x-provider-override-ignored", "true");
+    }
+
+    // Slightly extend server timeouts for BTC path
     if (normalizedChain === "btc") {
-        const extendedTimeout = BITCOIN_RPC_TIMEOUT_MS + 10_000;
+        const extendedTimeout = BITCOIN_RPC_TIMEOUT_MS + 30_000;
         if (typeof req.setTimeout === "function") req.setTimeout(extendedTimeout);
         if (typeof res.setTimeout === "function") res.setTimeout(extendedTimeout);
     }
 
     try {
+        // Per-chain address validation (when provided)
         if (handler.validateAddress && !handler.validateAddress(address)) {
             res.status(400).send("Invalid address format");
             return;
         }
 
-        // If client explicitly asks for Chainz, go straight there for BTC
+        // If client explicitly asks for Chainz and it's BTC → go straight there
         if (normalizedChain === "btc" && provider === "chainz") {
             const balanceResponse = await fetchChainzBalance(normalizedChain, address);
             res.setHeader("x-provider", "chainz");
@@ -1248,15 +1255,28 @@ export const balance = async (req: express.Request, res: express.Response) => {
             return;
         }
 
-        // Default path: Chainstack
-        const nodes = await fetchChainstackNodes();
-        const node = handler.selectNode(nodes);
+        // Default path: Chainstack (wrap node discovery in try/catch)
+        let node: ChainstackNode | null = null;
+        try {
+            const nodes = await fetchChainstackNodes();
+            node = handler.selectNode(nodes);
+        } catch (fetchErr) {
+            if (normalizedChain === "btc") {
+                console.error("Fetching Chainstack nodes failed; falling back to Chainz:", fetchErr);
+                const balanceResponse = await fetchChainzBalance(normalizedChain, address);
+                res.setHeader("x-provider", "chainz");
+                res.setHeader("x-fallback-reason", "nodes-fetch-failed");
+                res.status(200).json(balanceResponse);
+                return;
+            }
+            throw fetchErr;
+        }
 
         if (!node) {
             if (normalizedChain === "btc") {
-                // Fallback if no node
                 const balanceResponse = await fetchChainzBalance(normalizedChain, address);
                 res.setHeader("x-provider", "chainz");
+                res.setHeader("x-fallback-reason", "no-node");
                 res.status(200).json(balanceResponse);
                 return;
             }
@@ -1265,19 +1285,19 @@ export const balance = async (req: express.Request, res: express.Response) => {
             return;
         }
 
+        // Try Chainstack balance
         try {
             const balanceResponse = await handler.fetchBalance(node, address);
             res.setHeader("x-provider", "chainstack");
             res.status(200).json(balanceResponse);
             return;
         } catch (err: any) {
-            // BTC: fallback on ANY error, not only timeout/unavailable
+            // BTC: fallback on ANY error (timeout, unsupported RPC, etc.)
             if (normalizedChain === "btc") {
                 console.error("BTC Chainstack path failed, falling back to Chainz:", {
                     code: err?.code,
                     message: err?.message,
                 });
-
                 try {
                     const balanceResponse = await fetchChainzBalance(normalizedChain, address);
                     res.setHeader("x-provider", "chainz");
@@ -1286,7 +1306,7 @@ export const balance = async (req: express.Request, res: express.Response) => {
                     return;
                 } catch (fallbackErr) {
                     console.error("BTC fallback to Chainz failed:", fallbackErr);
-                    // fall through to generic error handling
+                    // Fall through to generic error handling below
                 }
             }
             throw err;
