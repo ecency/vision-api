@@ -153,51 +153,58 @@ export const fetchChainzBalance = async (
     chain: string,
     address: string,
 ): Promise<ChainBalanceResponse> => {
-    const config = CHAINZ_CHAIN_CONFIG[chain];
-    if (!config) {
-        throw new Error("Requested chain is not supported by Chainz provider");
-    }
+    const cfg = CHAINZ_CHAIN_CONFIG[chain];
+    if (!cfg) throw new Error("Requested chain is not supported by Chainz provider");
 
+    const endpoint = chainzEndpointFor(cfg.coin);
     const apiKey = process.env.CHAINZ_API_KEY?.trim();
-    const endpoint = chainzEndpointFor(config.coin);  // <— use per-coin subdomain
 
-    const params = new URLSearchParams({
-        q: "addressbalance",
-        a: address,
-    });
-    if (apiKey) params.set("key", apiKey);
+    const attempt = async (queryName: "getbalance" | "addressbalance") => {
+        const params = new URLSearchParams({ q: queryName, a: address });
+        if (apiKey) params.set("key", apiKey);
+        // You can uncomment this if needed:
+        // params.set("format", "plain");
 
-    const url = `${endpoint}?${params.toString()}`;
+        const url = `${endpoint}?${params.toString()}`;
+        const resp = await axios.get<string | number>(url, {
+            timeout: 8000,
+            headers: {
+                "Accept": "text/plain, application/json;q=0.9, */*;q=0.8",
+                "User-Agent": "EcencyBalanceBot/1.0 (+https://ecency.com)",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
+            },
+            validateStatus: (s) => s >= 200 && s < 500,
+        });
 
-    const response = await axios.get<string | number>(url, {
-        timeout: 8000,
-        headers: {
-            "Accept": "text/plain, application/json;q=0.9, */*;q=0.8",
-            "User-Agent": "EcencyBalanceBot/1.0 (+https://ecency.com)",
-            "Cache-Control": "no-cache",
-            "Pragma": "no-cache",
-        },
-        validateStatus: (s) => s >= 200 && s < 500,
-    });
+        const text = String(resp.data ?? "").trim();
 
-    const rawData = response.data;
-    const text = String(rawData).trim();
+        // bail if HTML or empty
+        if (!text || /[<][a-z!/]/i.test(text)) {
+            const status = resp.status;
+            const first = text.slice(0, 120);
+            throw new Error(`Chainz non-numeric response (${status}): ${first || "<empty>"}`);
+        }
 
-    // Keep your HTML/rate-limit guard
-    if (/[<][a-z!/]/i.test(text)) {
-        throw new Error("Chainz returned HTML (likely error or rate limit)");
-    }
+        // normalize number (supports scientific notation)
+        const raw = normalizeChainzBalance(text);
+        const normalized = convertDecimalToIntegerString(raw, cfg.decimals);
 
-    const rawBalanceString = normalizeChainzBalance(text);
-    const normalizedBalance = convertDecimalToIntegerString(rawBalanceString, config.decimals);
-
-    return {
-        chain,
-        balance: normalizedBalance,
-        unit: config.unit,
-        raw: rawData,
-        provider: "chainz",
+        return {
+            chain,
+            balance: normalized,
+            unit: cfg.unit,
+            raw: text,
+            provider: "chainz" as const,
+        };
     };
+
+    try {
+        return await attempt("getbalance");
+    } catch (_) {
+        // fall through to the second query name
+    }
+    return await attempt("addressbalance");
 };
 
 // Ensures the Chainstack auth_key is present as the first path segment.

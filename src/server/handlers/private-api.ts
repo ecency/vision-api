@@ -1107,11 +1107,21 @@ const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promi
         if (data?.error) {
             const message = data.error?.message || "Bitcoin scantxoutset failed";
             const lowered = String(message).toLowerCase();
+
+            // Existing checks...
             if (lowered.includes("method not found") || lowered.includes("disabled") || lowered.includes("not enabled")) {
                 const err = new Error("BTC_SCAN_UNAVAILABLE");
                 (err as any).code = "BTC_SCAN_UNAVAILABLE";
                 throw err;
             }
+
+            // NEW: global lock contention on shared node
+            if (lowered.includes("scan already in progress")) {
+                const err = new Error('BTC_SCAN_IN_PROGRESS');
+                (err as any).code = "BTC_SCAN_IN_PROGRESS";
+                throw err;
+            }
+
             const err = new Error(`BTC_SCAN_FAILED: ${message}`);
             (err as any).code = "BTC_SCAN_FAILED";
             throw err;
