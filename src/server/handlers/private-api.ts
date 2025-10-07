@@ -216,25 +216,32 @@ interface ChainHandler {
 let cachedNodes: ChainstackNode[] | null = null;
 let nodesCacheExpiry = 0;
 
-const buildNodeAxiosConfig = (node: ChainstackNode): AxiosNodeConfig => {
+const buildNodeAxiosConfig = (
+    node: ChainstackNode,
+    opts?: { noAuthHeaders?: boolean }
+): AxiosNodeConfig => {
     const headers: Record<string, string> = {
         "Content-Type": "application/json",
     };
 
-    if (node.details?.auth_key) {
-        headers["x-api-key"] = node.details.auth_key;
-    }
+    let auth: AxiosAuthConfig | undefined;
 
-    const hasBasicAuth = node.details?.auth_username && node.details?.auth_password;
-    const auth = hasBasicAuth
-        ? {
-            username: node.details!.auth_username as string,
-            password: node.details!.auth_password as string,
+    if (!opts?.noAuthHeaders) {
+        if (node.details?.auth_key) {
+            headers["x-api-key"] = node.details.auth_key;
         }
-        : undefined;
+        const hasBasicAuth = node.details?.auth_username && node.details?.auth_password;
+        if (hasBasicAuth) {
+            auth = {
+                username: node.details!.auth_username as string,
+                password: node.details!.auth_password as string,
+            };
+        }
+    }
 
     return { headers, auth };
 };
+
 
 const fetchChainstackNodes = async (): Promise<ChainstackNode[]> => {
     const apiKey = process.env.CHAINSTACK_API_KEY;
@@ -1056,19 +1063,33 @@ const getBestBlockHash = async (endpoint: string, config: AxiosRequestConfig) =>
 const BITCOIN_RPC_TIMEOUT_MS = 15_000;
 
 const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promise<ChainBalanceResponse> => {
-    const endpoint = ensureHttpsEndpoint(node);
+    // IMPORTANT: BTC wants the auth key in the URL path, not in headers or basic auth.
+    const baseEndpoint = ensureHttpsEndpoint(node);
+    const btcEndpoint = ensureAuthKeyInPath(baseEndpoint, node.details?.auth_key);
+
     const config: AxiosRequestConfig = {
-        ...buildNodeAxiosConfig(node),
-        timeout: BITCOIN_RPC_TIMEOUT_MS,
+        ...buildNodeAxiosConfig(node, { noAuthHeaders: true }),
+        timeout: BITCOIN_RPC_TIMEOUT_MS, // e.g. 15000
+    };
+
+    const getBestBlockHash = async (endpoint: string, cfg: AxiosRequestConfig) => {
+        try {
+            const payload = { jsonrpc: "1.0", id: "tip", method: "getbestblockhash", params: [] };
+            const { data } = await axios.post(endpoint, payload, cfg);
+            if (data?.error) throw new Error(data.error?.message || "getbestblockhash failed");
+            return data.result as string;
+        } catch (e: any) {
+            if (axios.isAxiosError(e) && (e.response?.status === 499 || e.code === "ECONNABORTED")) {
+                const err = new Error("BTC_TIP_TIMEOUT");
+                (err as any).code = "BTC_TIP_TIMEOUT";
+                throw err;
+            }
+            throw e;
+        }
     };
 
     const tryScanTxOutSet = async (): Promise<{ balance: string; raw: unknown }> => {
-        const tip = await getBestBlockHash(endpoint, config).catch((e: any) => {
-            // Let caller decide fallback; include the reason for logs.
-            const err = new Error(`BTC_TIP_FAILED: ${e?.message || e}`);
-            (err as any).code = "BTC_TIP_FAILED";
-            throw err;
-        });
+        const tip = await getBestBlockHash(btcEndpoint, config);
 
         const cached = btcCache.get(address);
         if (cached && cached.bestblock === tip && Date.now() - cached.at < BTC_CACHE_TTL_MS) {
@@ -1082,16 +1103,11 @@ const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promi
             params: ["start", [{ desc: `addr(${address})` }]],
         };
 
-        const { data } = await axios.post(endpoint, payload, config);
+        const { data } = await axios.post(btcEndpoint, payload, config);
         if (data?.error) {
             const message = data.error?.message || "Bitcoin scantxoutset failed";
             const lowered = String(message).toLowerCase();
-            // Treat these as "unsupported" so we can fallback quickly
-            if (
-                lowered.includes("method not found") ||
-                lowered.includes("disabled") ||
-                lowered.includes("not enabled")
-            ) {
+            if (lowered.includes("method not found") || lowered.includes("disabled") || lowered.includes("not enabled")) {
                 const err = new Error("BTC_SCAN_UNAVAILABLE");
                 (err as any).code = "BTC_SCAN_UNAVAILABLE";
                 throw err;
@@ -1105,9 +1121,8 @@ const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promi
         const bestblock = data?.result?.bestblock;
 
         const balance =
-            typeof amount === "number" ? amount.toString()
-                : typeof amount === "string" ? amount
-                    : null;
+            typeof amount === "number" ? amount.toString() :
+                typeof amount === "string" ? amount : null;
 
         if (!balance || !bestblock) {
             const err = new Error("BTC_INVALID_RESPONSE");
@@ -1119,11 +1134,11 @@ const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promi
         return { balance, raw: data };
     };
 
-    // De-dupe concurrent scans for same address
+    // de-dup concurrent scans
     const key = address;
     const existing = inFlightBtc.get(key);
     if (existing) {
-        const result = await existing; // will throw if the first one failed
+        const result = await existing;
         return {
             chain: "btc",
             balance: result.balance,

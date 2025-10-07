@@ -83,6 +83,11 @@ const convertDecimalToIntegerString = (value: string, decimals: number): string 
 const normalizeChainzBalance = (value: string): string => {
     const trimmed = value.trim();
 
+    // Guard: HTML or not-a-number responses → throw a clearer error
+    if (/[<][a-z!/]/i.test(trimmed)) {
+        throw new Error("Chainz returned HTML (likely error or rate limit)");
+    }
+
     if (trimmed === "") {
         throw new Error("Chainz returned balance in unexpected format");
     }
@@ -92,7 +97,6 @@ const normalizeChainzBalance = (value: string): string => {
     }
 
     const scientificMatch = trimmed.match(/^([+-]?)(\d+(?:\.\d+)?)[eE]([+-]?\d+)$/);
-
     if (!scientificMatch) {
         throw new Error("Chainz returned balance in unexpected format");
     }
@@ -229,6 +233,23 @@ export const fetchChainzBalance = async (
         throw error;
     }
 };
+
+// Ensures the Chainstack auth_key is present as the first path segment.
+// e.g. https://bitcoin-mainnet.core.chainstack.com -> https://bitcoin-mainnet.core.chainstack.com/<AUTH_KEY>
+export const ensureAuthKeyInPath = (endpoint: string, authKey?: string): string => {
+    if (!authKey) return endpoint;
+    try {
+        const url = new URL(endpoint);
+        if (!url.hostname.endsWith(".chainstack.com")) return endpoint;
+        const segs = url.pathname.split("/").filter(Boolean);
+        if (segs[0] === authKey) return endpoint; // already there
+        url.pathname = `/${[authKey, ...segs].join("/")}`;
+        return url.toString();
+    } catch {
+        return endpoint;
+    }
+};
+
 
 const makeApiAuth = () => {
     if (typeof config.privateApiAuth !== "string") {
