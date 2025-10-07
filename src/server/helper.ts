@@ -17,7 +17,8 @@ export interface ChainBalanceResponse {
     provider: BalanceProvider;
 }
 
-const CHAINZ_ENDPOINT = "https://chainz.cryptoid.info/api.dws";
+// Build per-coin endpoint: https://chainz.cryptoid.info/btc/api.dws
+const chainzEndpointFor = (coin: string) => `https://chainz.cryptoid.info/${coin}/api.dws`;
 
 interface ChainzChainConfig {
     coin: string;
@@ -183,35 +184,54 @@ export const fetchChainzBalance = async (
     address: string,
 ): Promise<ChainBalanceResponse> => {
     const config = CHAINZ_CHAIN_CONFIG[chain];
-
     if (!config) {
         throw new Error("Requested chain is not supported by Chainz provider");
     }
 
+    const apiKey = process.env.CHAINZ_API_KEY?.trim();
+
+    // Use coin subdomain per Chainz convention
+    const endpoint = chainzEndpointFor(config.coin);
+
     const params = new URLSearchParams({
         q: "addressbalance",
-        coin: config.coin,
         a: address,
     });
 
-    const apiKey = process.env.CHAINZ_API_KEY?.trim();
+    if (apiKey) params.set("key", apiKey);
 
-    if (apiKey) {
-        params.set("key", apiKey);
-    }
+    // Optional: plain format reduces chance of HTML wrappers
+    // (Chainz usually returns plain number already; harmless to include)
+    // params.set("format", "plain");
 
-    const url = `${CHAINZ_ENDPOINT}?${params.toString()}`;
+    const url = `${endpoint}?${params.toString()}`;
 
     try {
         const response = await axios.get<string | number>(url, {
+            timeout: 8000,
+            // Present as a normal browser-ish client; some CDNs dislike generic UA
             headers: {
-                Accept: "text/plain, application/json;q=0.9, */*;q=0.8",
+                "Accept": "text/plain, application/json;q=0.9, */*;q=0.8",
+                "User-Agent": "EcencyBalanceBot/1.0 (+https://ecency.com)",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
             },
+            validateStatus: (s) => s >= 200 && s < 500, // we’ll inspect body on 4xx
         });
 
         const rawData = response.data;
-        const rawBalanceString = normalizeChainzBalance(String(rawData));
+        const text = String(rawData).trim();
 
+        // Detect HTML/cloudflare/rate-limit pages early
+        // e.g. 403/429 pages render HTML
+        if (/[<][a-z!/]/i.test(text)) {
+            throw new Error("Chainz returned HTML (likely error or rate limit)");
+        }
+
+        // Chainz should return a number, possibly scientific; normalize it
+        const rawBalanceString = normalizeChainzBalance(text);
+
+        // Convert coin units to integer smallest unit (sats)
         const normalizedBalance = convertDecimalToIntegerString(rawBalanceString, config.decimals);
 
         return {
@@ -223,16 +243,23 @@ export const fetchChainzBalance = async (
         };
     } catch (error) {
         if (axios.isAxiosError(error)) {
-            const message = typeof error.response?.data === "string" ? error.response.data : error.message;
+            // Improve logging: surface status + first bytes when not numeric
+            const status = error.response?.status;
+            const body = typeof error.response?.data === "string"
+                ? error.response.data.slice(0, 200)
+                : JSON.stringify(error.response?.data)?.slice(0, 200);
 
-            if (message) {
-                throw new Error(message);
-            }
+            const msg =
+                status
+                    ? `Chainz HTTP ${status}: ${body}`
+                    : error.message;
+
+            throw new Error(msg || "Chainz request failed");
         }
-
         throw error;
     }
 };
+
 
 // Ensures the Chainstack auth_key is present as the first path segment.
 // e.g. https://bitcoin-mainnet.core.chainstack.com -> https://bitcoin-mainnet.core.chainstack.com/<AUTH_KEY>
