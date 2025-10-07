@@ -9,7 +9,7 @@ import {
     getPromotedEntries,
     ChainBalanceResponse,
     parseBalanceProvider,
-    fetchChainzBalance,
+    fetchChainzBalance, ensureAuthKeyInPath,
 } from "../helper";
 
 import { pipe } from "../util";
