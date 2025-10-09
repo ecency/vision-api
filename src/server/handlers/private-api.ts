@@ -1460,8 +1460,17 @@ export const wavesFollowing = async (req: express.Request, res: express.Response
 };
 
 export const wavesTrendingTags = async (req: express.Request, res: express.Response) => {
-    const { container } = req.query;
-    const u = `waves/trending/tags?container=${container}`;
+    const { container, hours, days } = req.query;
+    let u = `waves/trending/tags?container=${container}`;
+
+    if (hours) {
+        u += `&hours=${hours}`;
+    }
+
+    if (days) {
+        u += `&days=${days}`;
+    }
+
     pipe(apiRequest(u, "GET"), res);
 };
 
