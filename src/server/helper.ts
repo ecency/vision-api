@@ -6,7 +6,7 @@ import config from "../config";
 
 import {baseApiRequest} from "./util";
 
-export type BalanceProvider = "chainstack" | "chainz" | "other";
+export type BalanceProvider = "chainstack" | "blockstream" | "chainz" | "other";
 
 export interface ChainBalanceResponse {
     chain: string;
@@ -15,6 +15,7 @@ export interface ChainBalanceResponse {
     raw: unknown;
     nodeId?: string;
     provider: BalanceProvider;
+    rateLimitRemaining?: number;
 }
 
 // Build per-coin endpoint: https://chainz.cryptoid.info/btc/api.dws
@@ -142,11 +143,154 @@ const CHAINZ_CHAIN_CONFIG: Record<string, ChainzChainConfig> = {
 };
 
 export const parseBalanceProvider = (value: unknown): BalanceProvider => {
-    if (typeof value === "string" && value.trim().toLowerCase() === "chainz") {
-        return "chainz";
+    if (typeof value === "string") {
+        const normalized = value.trim().toLowerCase();
+        if (normalized === "chainz") return "chainz";
+        if (normalized === "blockstream") return "blockstream";
     }
 
     return "chainstack";
+};
+
+const BLOCKSTREAM_TOKEN_CACHE_KEY = "blockstream:access-token";
+const BLOCKSTREAM_TOKEN_URL =
+    "https://login.blockstream.com/realms/blockstream-public/protocol/openid-connect/token";
+const BLOCKSTREAM_API_BASE = "https://enterprise.blockstream.info/api";
+
+const toBigInt = (value: unknown): bigint => {
+    if (typeof value === "bigint") return value;
+    if (typeof value === "number" && Number.isFinite(value)) return BigInt(Math.trunc(value));
+    if (typeof value === "string" && /^-?\d+$/.test(value.trim())) {
+        try {
+            return BigInt(value.trim());
+        } catch (_) {
+            return BigInt(0);
+        }
+    }
+    return BigInt(0);
+};
+
+const parseRateLimitHeader = (headerValue: unknown): number | undefined => {
+    if (headerValue === undefined || headerValue === null) return undefined;
+
+    if (Array.isArray(headerValue)) {
+        for (const value of headerValue) {
+            const parsed = parseRateLimitHeader(value);
+            if (parsed !== undefined) return parsed;
+        }
+        return undefined;
+    }
+
+    const text = String(headerValue).trim();
+    if (!text) return undefined;
+
+    const num = Number(text);
+    return Number.isFinite(num) ? num : undefined;
+};
+
+const getBlockstreamAccessToken = async (): Promise<string> => {
+    const cached = cache.get<string>(BLOCKSTREAM_TOKEN_CACHE_KEY);
+    if (cached) return cached;
+
+    const clientId = process.env.BLOCKSTREAM_CLIENT_ID?.trim();
+    const clientSecret = process.env.BLOCKSTREAM_CLIENT_SECRET?.trim();
+
+    if (!clientId || !clientSecret) {
+        throw new Error("Blockstream credentials are not configured");
+    }
+
+    const params = new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        grant_type: "client_credentials",
+        scope: "openid",
+    });
+
+    const resp = await axios.post(BLOCKSTREAM_TOKEN_URL, params.toString(), {
+        headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        timeout: 10000,
+    });
+
+    const { access_token: accessToken, expires_in: expiresIn } = resp.data ?? {};
+
+    if (typeof accessToken !== "string" || !accessToken) {
+        throw new Error("Blockstream token response missing access_token");
+    }
+
+    let ttl = 240; // default 4 minutes
+    const expiresNumeric =
+        typeof expiresIn === "number"
+            ? expiresIn
+            : typeof expiresIn === "string"
+            ? Number(expiresIn)
+            : undefined;
+    if (typeof expiresNumeric === "number" && Number.isFinite(expiresNumeric)) {
+        const adjusted = Math.max(30, Math.floor(expiresNumeric - 30));
+        if (Number.isFinite(adjusted) && adjusted > 0) ttl = adjusted;
+    }
+
+    cache.set(BLOCKSTREAM_TOKEN_CACHE_KEY, accessToken, ttl);
+    return accessToken;
+};
+
+export const fetchBlockstreamBalance = async (
+    chain: string,
+    address: string,
+): Promise<ChainBalanceResponse> => {
+    if (chain !== "btc") {
+        throw new Error("Blockstream balance fetcher only supports BTC");
+    }
+
+    const attempt = async (token: string, allowRetry: boolean): Promise<ChainBalanceResponse> => {
+        const resp = await axios.get(`${BLOCKSTREAM_API_BASE}/address/${address}`, {
+            headers: {
+                Authorization: `Bearer ${token}`,
+            },
+            timeout: 10000,
+            validateStatus: (status) => status >= 200 && status < 500,
+        });
+
+        if (resp.status === 401 && allowRetry) {
+            cache.del(BLOCKSTREAM_TOKEN_CACHE_KEY);
+            const refreshedToken = await getBlockstreamAccessToken();
+            return attempt(refreshedToken, false);
+        }
+
+        if (resp.status !== 200) {
+            throw new Error(`Blockstream API error (${resp.status})`);
+        }
+
+        const data = resp.data ?? {};
+        const chainStats = data.chain_stats ?? {};
+        const mempoolStats = data.mempool_stats ?? {};
+
+        const confirmedFunded = toBigInt(chainStats.funded_txo_sum);
+        const confirmedSpent = toBigInt(chainStats.spent_txo_sum);
+        const mempoolFunded = toBigInt(mempoolStats.funded_txo_sum);
+        const mempoolSpent = toBigInt(mempoolStats.spent_txo_sum);
+
+        const confirmedBalance = confirmedFunded - confirmedSpent;
+        const mempoolBalance = mempoolFunded - mempoolSpent;
+        const total = confirmedBalance + mempoolBalance;
+
+        const rateLimitRemaining =
+            parseRateLimitHeader(resp.headers["x-ratelimit-remaining"]) ??
+            parseRateLimitHeader(resp.headers["ratelimit-remaining"]);
+
+        return {
+            chain,
+            balance: total.toString(),
+            unit: "satoshi",
+            raw: data,
+            provider: "blockstream" as const,
+            rateLimitRemaining,
+        };
+    };
+
+    const token = await getBlockstreamAccessToken();
+    return attempt(token, true);
 };
 
 export const fetchChainzBalance = async (

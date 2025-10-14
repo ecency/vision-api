@@ -27,6 +27,8 @@
 * `SEARCH_API_SECRET` - hivesearcher api auth token
 * `CHAINSTACK_API_KEY` - Chainstack API key used to enumerate nodes and request balances directly from each network-specific endpoint.
 * `CHAINZ_API_KEY` - Chainz API key used to perform balance lookups when the Chainz provider is requested.
+* `BLOCKSTREAM_CLIENT_ID` - OAuth client identifier used to request temporary access tokens for the Blockstream Explorer Enterprise API fallback.
+* `BLOCKSTREAM_CLIENT_SECRET` - OAuth client secret paired with the client identifier for generating Blockstream access tokens.
 
 ##### Start api in dev
 `$ yarn start`
@@ -54,6 +56,8 @@ Configure the instance using following environment variables:
  * `SEARCH_API_SECRET`
  * `CHAINSTACK_API_KEY`
  * `CHAINZ_API_KEY`
+ * `BLOCKSTREAM_CLIENT_ID`
+ * `BLOCKSTREAM_CLIENT_SECRET`
 
 ```bash
 docker run -it --rm -p 3000:3000 -e PRIVATE_API_ADDR=https://api.example.com -e PRIVATE_API_AUTH=verysecretpassword ecency/api:latest

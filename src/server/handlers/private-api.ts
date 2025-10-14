@@ -9,7 +9,9 @@ import {
     getPromotedEntries,
     ChainBalanceResponse,
     parseBalanceProvider,
-    fetchChainzBalance, ensureAuthKeyInPath,
+    fetchChainzBalance,
+    fetchBlockstreamBalance,
+    ensureAuthKeyInPath,
 } from "../helper";
 
 import { pipe } from "../util";
@@ -1292,12 +1294,63 @@ export const balance = async (req: express.Request, res: express.Response) => {
         res.setHeader("x-provider-override-ignored", "true");
     }
 
+    if (provider === "blockstream" && normalizedChain !== "btc") {
+        console.warn(`provider=blockstream ignored for chain=${normalizedChain}`);
+        res.setHeader("x-provider-override-ignored", "true");
+    }
+
     // Slightly extend server timeouts for BTC path
     if (normalizedChain === "btc") {
         const extendedTimeout = BITCOIN_RPC_TIMEOUT_MS + 30_000;
         if (typeof req.setTimeout === "function") req.setTimeout(extendedTimeout);
         if (typeof res.setTimeout === "function") res.setTimeout(extendedTimeout);
     }
+
+    const applyProviderHeaders = (response: ChainBalanceResponse) => {
+        res.setHeader("x-provider", response.provider);
+        if (
+            response.provider === "blockstream" &&
+            response.rateLimitRemaining !== undefined
+        ) {
+            res.setHeader(
+                "x-blockstream-ratelimit-remaining",
+                String(response.rateLimitRemaining),
+            );
+        }
+    };
+
+    const sendBalanceResponse = (
+        responsePayload: ChainBalanceResponse,
+        fallbackReason?: string,
+    ) => {
+        applyProviderHeaders(responsePayload);
+        if (fallbackReason) {
+            res.setHeader("x-fallback-reason", fallbackReason);
+        }
+        res.status(200).json(responsePayload);
+    };
+
+    const tryBlockstreamFallback = async (reason: string): Promise<boolean> => {
+        try {
+            const balanceResponse = await fetchBlockstreamBalance(normalizedChain, address);
+            sendBalanceResponse(balanceResponse, reason);
+            return true;
+        } catch (blockstreamErr) {
+            console.error("BTC fallback to Blockstream failed:", blockstreamErr);
+            return false;
+        }
+    };
+
+    const tryChainzFallback = async (reason: string): Promise<boolean> => {
+        try {
+            const balanceResponse = await fetchChainzBalance(normalizedChain, address);
+            sendBalanceResponse(balanceResponse, reason);
+            return true;
+        } catch (fallbackErr) {
+            console.error("BTC fallback to Chainz failed:", fallbackErr);
+            return false;
+        }
+    };
 
     try {
         // Per-chain address validation (when provided)
@@ -1309,8 +1362,13 @@ export const balance = async (req: express.Request, res: express.Response) => {
         // If client explicitly asks for Chainz and it's BTC → go straight there
         if (normalizedChain === "btc" && provider === "chainz") {
             const balanceResponse = await fetchChainzBalance(normalizedChain, address);
-            res.setHeader("x-provider", "chainz");
-            res.status(200).json(balanceResponse);
+            sendBalanceResponse(balanceResponse);
+            return;
+        }
+
+        if (normalizedChain === "btc" && provider === "blockstream") {
+            const balanceResponse = await fetchBlockstreamBalance(normalizedChain, address);
+            sendBalanceResponse(balanceResponse);
             return;
         }
 
@@ -1321,23 +1379,20 @@ export const balance = async (req: express.Request, res: express.Response) => {
             node = handler.selectNode(nodes);
         } catch (fetchErr) {
             if (normalizedChain === "btc") {
-                console.error("Fetching Chainstack nodes failed; falling back to Chainz:", fetchErr);
-                const balanceResponse = await fetchChainzBalance(normalizedChain, address);
-                res.setHeader("x-provider", "chainz");
-                res.setHeader("x-fallback-reason", "nodes-fetch-failed");
-                res.status(200).json(balanceResponse);
-                return;
+                console.error(
+                    "Fetching Chainstack nodes failed; falling back to alternative providers:",
+                    fetchErr,
+                );
+                if (await tryBlockstreamFallback("nodes-fetch-failed")) return;
+                if (await tryChainzFallback("nodes-fetch-failed")) return;
             }
             throw fetchErr;
         }
 
         if (!node) {
             if (normalizedChain === "btc") {
-                const balanceResponse = await fetchChainzBalance(normalizedChain, address);
-                res.setHeader("x-provider", "chainz");
-                res.setHeader("x-fallback-reason", "no-node");
-                res.status(200).json(balanceResponse);
-                return;
+                if (await tryBlockstreamFallback("no-node")) return;
+                if (await tryChainzFallback("no-node")) return;
             }
             console.error(`No Chainstack node available for ${normalizedChain}`);
             res.status(502).send("No Chainstack node available for requested chain");
@@ -1353,20 +1408,13 @@ export const balance = async (req: express.Request, res: express.Response) => {
         } catch (err: any) {
             // BTC: fallback on ANY error (timeout, unsupported RPC, etc.)
             if (normalizedChain === "btc") {
-                console.error("BTC Chainstack path failed, falling back to Chainz:", {
+                console.error("BTC Chainstack path failed, attempting fallbacks:", {
                     code: err?.code,
                     message: err?.message,
                 });
-                try {
-                    const balanceResponse = await fetchChainzBalance(normalizedChain, address);
-                    res.setHeader("x-provider", "chainz");
-                    res.setHeader("x-fallback-reason", String(err?.code || err?.message || "unknown"));
-                    res.status(200).json(balanceResponse);
-                    return;
-                } catch (fallbackErr) {
-                    console.error("BTC fallback to Chainz failed:", fallbackErr);
-                    // Fall through to generic error handling below
-                }
+                const reason = String(err?.code || err?.message || "unknown");
+                if (await tryBlockstreamFallback(reason)) return;
+                if (await tryChainzFallback(reason)) return;
             }
             throw err;
         }
