@@ -34,17 +34,42 @@ interface ExternalWalletMetadata {
     decimals?: number;
 }
 
-const CHAIN_CONFIG: Record<string, { name: string; symbol: string; decimals: number }> = {
-    btc: { name: "Bitcoin", symbol: "BTC", decimals: 8 },
+interface ChainConfig {
+    name: string;
+    symbol: string;
+    decimals: number;
+    aliases?: string[];
+}
+
+const CHAIN_CONFIG: Record<string, ChainConfig> = {
+    btc: { name: "Bitcoin", symbol: "BTC", decimals: 8, aliases: ["bitcoin"] },
     eth: { name: "Ethereum", symbol: "ETH", decimals: 18 },
     bnb: { name: "BNB Chain", symbol: "BNB", decimals: 18 },
     sol: { name: "Solana", symbol: "SOL", decimals: 9 },
-    tron: { name: "Tron", symbol: "TRX", decimals: 6 },
+    tron: { name: "Tron", symbol: "TRX", decimals: 6, aliases: ["trx"] },
     ton: { name: "TON", symbol: "TON", decimals: 9 },
     apt: { name: "Aptos", symbol: "APT", decimals: 8 },
 };
 
-const SUPPORTED_CHAIN_KEYS = new Set(Object.keys(CHAIN_CONFIG));
+const CHAIN_SYMBOL_LOOKUP = new Map<string, { key: string; config: ChainConfig }>();
+
+Object.entries(CHAIN_CONFIG).forEach(([key, config]) => {
+    const baseSymbol = config.symbol.toLowerCase();
+    if (!CHAIN_SYMBOL_LOOKUP.has(baseSymbol)) {
+        CHAIN_SYMBOL_LOOKUP.set(baseSymbol, { key, config });
+    }
+
+    CHAIN_SYMBOL_LOOKUP.set(key.toLowerCase(), { key, config });
+
+    if (config.aliases && Array.isArray(config.aliases)) {
+        config.aliases.forEach((alias) => {
+            const normalized = alias.toLowerCase();
+            if (!CHAIN_SYMBOL_LOOKUP.has(normalized)) {
+                CHAIN_SYMBOL_LOOKUP.set(normalized, { key, config });
+            }
+        });
+    }
+});
 
 const firstDefined = (...values: any[]) => {
     for (let i = 0; i < values.length; i += 1) {
@@ -54,6 +79,33 @@ const firstDefined = (...values: any[]) => {
         }
     }
     return undefined;
+};
+
+const resolveChainConfig = (
+    value: unknown,
+    fallback?: unknown,
+): { key: string; config: ChainConfig } | null => {
+    const candidates = [value, fallback];
+
+    for (const candidate of candidates) {
+        if (candidate === undefined || candidate === null) {
+            continue;
+        }
+
+        const normalized = String(candidate).trim().toLowerCase();
+
+        if (!normalized) {
+            continue;
+        }
+
+        const match = CHAIN_SYMBOL_LOOKUP.get(normalized);
+
+        if (match) {
+            return match;
+        }
+    }
+
+    return null;
 };
 
 const parseMaybeNumber = (value: unknown): number | null => {
@@ -159,6 +211,44 @@ const normalizeCurrency = (currency?: string): string => {
     }
 
     return currency.trim().toLowerCase() || "usd";
+};
+
+const parseBoolean = (value: unknown): boolean | undefined => {
+    if (value === undefined || value === null) {
+        return undefined;
+    }
+
+    if (typeof value === "boolean") {
+        return value;
+    }
+
+    if (typeof value === "number") {
+        if (value === 1) {
+            return true;
+        }
+
+        if (value === 0) {
+            return false;
+        }
+    }
+
+    if (typeof value === "string") {
+        const normalized = value.trim().toLowerCase();
+
+        if (!normalized) {
+            return undefined;
+        }
+
+        if (["true", "1", "yes", "on"].includes(normalized)) {
+            return true;
+        }
+
+        if (["false", "0", "no", "off"].includes(normalized)) {
+            return false;
+        }
+    }
+
+    return undefined;
 };
 
 const getTokenPrice = (marketData: any, token: string, currency: string): number => {
@@ -305,7 +395,10 @@ const vestsToHivePower = (vests: number, hivePerMVests: number): number => {
     return (vests / 1e6) * hivePerMVests;
 };
 
-const extractExternalWallets = (accountData: any): ExternalWalletMetadata[] => {
+const extractExternalWallets = (
+    accountData: any,
+    options?: { onlyEnabled?: boolean },
+): ExternalWalletMetadata[] => {
     if (!accountData) {
         return [];
     }
@@ -331,73 +424,170 @@ const extractExternalWallets = (accountData: any): ExternalWalletMetadata[] => {
     const profile = parsed.profile && typeof parsed.profile === "object" ? parsed.profile : parsed;
     const walletsRootCandidate = firstDefined(profile.wallets, profile.wallet, parsed.wallets);
     const walletsRoot = walletsRootCandidate !== undefined ? walletsRootCandidate : null;
+    const tokensRoot = Array.isArray(profile.tokens)
+        ? profile.tokens
+        : Array.isArray(parsed.tokens)
+            ? parsed.tokens
+            : [];
 
-    if (!walletsRoot || typeof walletsRoot !== "object") {
-        return [];
-    }
+    const results = new Map<string, ExternalWalletMetadata>();
+    const onlyEnabled = Boolean(options && options.onlyEnabled);
 
-    const enabled =
-        typeof walletsRoot.enabled === "boolean"
-            ? walletsRoot.enabled
-            : typeof profile.wallets_enabled === "boolean"
-                ? profile.wallets_enabled
-                : true;
-
-    if (!enabled) {
-        return [];
-    }
-
-    const items = Array.isArray(walletsRoot.items)
-        ? walletsRoot.items
-        : Array.isArray(walletsRoot.wallets)
-            ? walletsRoot.wallets
-            : Array.isArray(walletsRoot.list)
-                ? walletsRoot.list
-                : [];
-
-    if (!Array.isArray(items) || items.length === 0) {
-        return [];
-    }
-
-    const results: ExternalWalletMetadata[] = [];
-
-    for (const rawItem of items) {
-        if (!rawItem || typeof rawItem !== "object") {
-            continue;
+    const addResult = (wallet: ExternalWalletMetadata) => {
+        const key = `${wallet.chain}::${wallet.address}`.toLowerCase();
+        if (!results.has(key)) {
+            results.set(key, wallet);
         }
+    };
 
-        const addressCandidate = firstDefined(rawItem.address, rawItem.addr, rawItem.wallet, rawItem.value);
-        const chainCandidate = firstDefined(rawItem.chain, rawItem.network, rawItem.token, rawItem.symbol, rawItem.name);
+    if (walletsRoot && typeof walletsRoot === "object") {
+        const enabled =
+            typeof walletsRoot.enabled === "boolean"
+                ? walletsRoot.enabled
+                : typeof profile.wallets_enabled === "boolean"
+                    ? profile.wallets_enabled
+                    : true;
 
-        if (!addressCandidate || !chainCandidate) {
-            continue;
+        if (enabled) {
+            const items = Array.isArray((walletsRoot as any).items)
+                ? (walletsRoot as any).items
+                : Array.isArray((walletsRoot as any).wallets)
+                    ? (walletsRoot as any).wallets
+                    : Array.isArray((walletsRoot as any).list)
+                        ? (walletsRoot as any).list
+                        : [];
+
+            for (const rawItem of items) {
+                if (!rawItem || typeof rawItem !== "object") {
+                    continue;
+                }
+
+                const meta = rawItem.meta && typeof rawItem.meta === "object" ? rawItem.meta : null;
+
+                if (onlyEnabled) {
+                    const showCandidate = firstDefined(
+                        typeof rawItem.show === "boolean" ? rawItem.show : undefined,
+                        typeof rawItem.enabled === "boolean" ? rawItem.enabled : undefined,
+                        meta && typeof meta.show === "boolean" ? meta.show : undefined,
+                    );
+
+                    if (showCandidate !== true) {
+                        continue;
+                    }
+                }
+
+                const addressCandidate = firstDefined(
+                    rawItem.address,
+                    rawItem.addr,
+                    rawItem.wallet,
+                    rawItem.value,
+                    meta && (meta.address || meta.addr),
+                );
+                const chainCandidate = firstDefined(
+                    rawItem.chain,
+                    rawItem.network,
+                    rawItem.type,
+                    rawItem.token,
+                    rawItem.symbol,
+                    rawItem.name,
+                );
+                const symbolCandidate = firstDefined(rawItem.symbol, rawItem.token, rawItem.name);
+                const resolved = resolveChainConfig(chainCandidate, symbolCandidate);
+
+                if (!addressCandidate || !resolved) {
+                    continue;
+                }
+
+                const { key: chain, config } = resolved;
+                const decimalsSource = firstDefined(
+                    rawItem.decimals,
+                    rawItem.precision,
+                    rawItem.scale,
+                    rawItem.decimal,
+                    meta && (meta.decimals || meta.precision || meta.scale || meta.decimal),
+                );
+                const symbolSource = firstDefined(rawItem.symbol, rawItem.token, config.symbol, chain);
+                const nameSource = firstDefined(rawItem.name, config.name, symbolSource);
+                const symbol = String(symbolSource !== undefined ? symbolSource : config.symbol).toUpperCase();
+                const name = String(nameSource !== undefined ? nameSource : symbol);
+                const decimals = parseMaybeNumber(decimalsSource);
+
+                addResult({
+                    address: String(addressCandidate),
+                    chain,
+                    symbol,
+                    name,
+                    ...(decimals !== null ? { decimals } : {}),
+                });
+            }
         }
-
-        const chain = String(chainCandidate).toLowerCase();
-
-        if (!SUPPORTED_CHAIN_KEYS.has(chain)) {
-            continue;
-        }
-
-        const config = CHAIN_CONFIG[chain];
-
-        const symbolSource = firstDefined(rawItem.symbol, rawItem.token, config.symbol, chain);
-        const nameSource = firstDefined(rawItem.name, config.name, symbolSource);
-        const decimalsSource = firstDefined(rawItem.decimals, rawItem.precision, rawItem.scale, rawItem.decimal);
-        const symbol = String(symbolSource !== undefined ? symbolSource : chain).toUpperCase();
-        const name = String(nameSource !== undefined ? nameSource : symbol);
-        const decimals = parseMaybeNumber(decimalsSource);
-
-        results.push({
-            address: String(addressCandidate),
-            chain,
-            symbol,
-            name,
-            ...(decimals !== null ? { decimals } : {}),
-        });
     }
 
-    return results;
+    if (Array.isArray(tokensRoot) && tokensRoot.length > 0) {
+        for (const token of tokensRoot) {
+            if (!token || typeof token !== "object") {
+                continue;
+            }
+
+            const typeCandidate = firstDefined(token.type, token.layer);
+            const type = typeof typeCandidate === "string" ? typeCandidate.trim().toLowerCase() : "";
+
+            if (type !== "chain") {
+                continue;
+            }
+
+            const meta = token.meta && typeof token.meta === "object" ? token.meta : null;
+
+            if (onlyEnabled) {
+                const showCandidate = meta && typeof meta.show === "boolean" ? meta.show : undefined;
+                const fallbackShow = typeof token.show === "boolean" ? token.show : undefined;
+
+                if (showCandidate !== true && fallbackShow !== true) {
+                    continue;
+                }
+            }
+
+            const addressCandidate = firstDefined(
+                meta && (meta.address || meta.addr || meta.wallet || meta.value),
+                token.address,
+                token.wallet,
+                token.value,
+            );
+
+            if (!addressCandidate) {
+                continue;
+            }
+
+            const chainCandidate = firstDefined(token.chain, token.network, token.symbol, token.name, token.type);
+            const symbolCandidate = firstDefined(token.symbol, meta && meta.symbol, chainCandidate);
+            const resolved = resolveChainConfig(chainCandidate, symbolCandidate);
+
+            if (!resolved) {
+                continue;
+            }
+
+            const { key: chain, config } = resolved;
+            const symbolSource = firstDefined(token.symbol, config.symbol, chainCandidate, chain);
+            const nameSource = firstDefined(token.name, config.name, symbolSource);
+            const decimalsSource = firstDefined(
+                token.decimals,
+                meta && (meta.decimals || meta.precision || meta.scale || meta.decimal),
+            );
+            const symbol = String(symbolSource !== undefined ? symbolSource : config.symbol).toUpperCase();
+            const name = String(nameSource !== undefined ? nameSource : symbol);
+            const decimals = parseMaybeNumber(decimalsSource);
+
+            addResult({
+                address: String(addressCandidate),
+                chain,
+                symbol,
+                name,
+                ...(decimals !== null ? { decimals } : {}),
+            });
+        }
+    }
+
+    return Array.from(results.values());
 };
 
 const buildPointsLayer = (pointsData: any, marketData: any, currency: string): PortfolioItem[] => {
@@ -663,8 +853,9 @@ const buildChainLayer = async (
     accountData: any,
     marketData: any,
     currency: string,
+    options?: { onlyEnabled?: boolean },
 ): Promise<PortfolioItem[]> => {
-    const wallets = extractExternalWallets(accountData);
+    const wallets = extractExternalWallets(accountData, options);
 
     if (wallets.length === 0) {
         return [];
@@ -1012,7 +1203,7 @@ export const portfolio = async (req: express.Request, res: express.Response) => 
 }
 
 export const portfolioV2 = async (req: express.Request, res: express.Response) => {
-    const { username, currency } = req.body || {};
+    const { username, currency, onlyEnabled } = req.body || {};
 
     if (!username || typeof username !== "string") {
         res.status(400).send("Missing username");
@@ -1020,6 +1211,7 @@ export const portfolioV2 = async (req: express.Request, res: express.Response) =
     }
 
     const normalizedCurrency = normalizeCurrency(currency);
+    const onlyEnabledFlag = parseBoolean(onlyEnabled);
 
     try {
         const globalPropsPromise = fetchGlobalProps();
@@ -1049,7 +1241,13 @@ export const portfolioV2 = async (req: express.Request, res: express.Response) =
             ...buildEngineLayer(engineData, marketData, normalizedCurrency, hivePrice),
         );
 
-        const chainWallets = await buildChainLayer(accountData, marketData, normalizedCurrency);
+        const chainOptions =
+            onlyEnabledFlag === undefined
+                ? undefined
+                : {
+                      onlyEnabled: onlyEnabledFlag,
+                  };
+        const chainWallets = await buildChainLayer(accountData, marketData, normalizedCurrency, chainOptions);
         wallets.push(...chainWallets);
 
         const filteredWallets = wallets.filter((item) => item && Number.isFinite(item.balance));
