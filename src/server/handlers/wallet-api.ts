@@ -436,9 +436,68 @@ const buildPointsLayer = (pointsData: any, marketData: any, currency: string): P
         balance = 0;
     }
 
+    const pendingCandidates = [
+        pointsData.pendingRewards,
+        pointsData.pending_rewards,
+        pointsData.pending,
+        pointsData.pending_points,
+        pointsData.pendingPoints,
+        pointsData.pending_token,
+        pointsData.pendingToken,
+        pointsData.unclaimed,
+        pointsData.unclaimed_points,
+        pointsData.unclaimedPoints,
+        pointsData.unclaimed_balance,
+        pointsData.unclaimedBalance,
+        pointsData.rewards,
+        pointsData.claims,
+    ];
+
+    let pendingRewards: number | undefined;
+
+    for (const candidate of pendingCandidates) {
+        if (candidate === undefined || candidate === null) {
+            continue;
+        }
+
+        if (typeof candidate === "object") {
+            const nested = pickFirstNumericValue(
+                (candidate as any).points,
+                (candidate as any).balance,
+                (candidate as any).amount,
+                (candidate as any).value,
+                (candidate as any).pending,
+                (candidate as any).total,
+            );
+
+            if (nested !== null) {
+                pendingRewards = nested;
+                break;
+            }
+
+            continue;
+        }
+
+        const parsed = parseMaybeNumber(candidate);
+        if (parsed !== null) {
+            pendingRewards = parsed;
+            break;
+        }
+    }
+
+    if (pendingRewards !== undefined && !Number.isFinite(pendingRewards)) {
+        pendingRewards = undefined;
+    }
+
     const price = getTokenPrice(marketData, "points", currency);
 
-    return [makePortfolioItem("Ecency Points", "POINTS", "points", balance, price)];
+    const options: PortfolioItemOptions = {};
+
+    if (pendingRewards !== undefined) {
+        options.pendingRewards = pendingRewards;
+    }
+
+    return [makePortfolioItem("Ecency Points", "POINTS", "points", balance, price, options)];
 };
 
 const buildHiveLayer = (
