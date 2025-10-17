@@ -18,6 +18,12 @@ interface PortfolioItem {
     address?: string;
     pendingRewards?: number;
     pendingRewardsFiat?: number;
+    liquid?: number;
+    liquidFiat?: number;
+    savings?: number;
+    savingsFiat?: number;
+    staked?: number;
+    stakedFiat?: number;
 }
 
 interface ExternalWalletMetadata {
@@ -71,6 +77,17 @@ const parseMaybeNumber = (value: unknown): number | null => {
         if (match) {
             const parsed = Number(match[0]);
             return Number.isNaN(parsed) ? null : parsed;
+        }
+    }
+
+    return null;
+};
+
+const pickFirstNumericValue = (...candidates: unknown[]): number | null => {
+    for (const candidate of candidates) {
+        const parsed = parseMaybeNumber(candidate);
+        if (parsed !== null) {
+            return parsed;
         }
     }
 
@@ -223,6 +240,8 @@ const getTokenPrice = (marketData: any, token: string, currency: string): number
 interface PortfolioItemOptions {
     address?: string;
     pendingRewards?: number;
+    savings?: number;
+    staked?: number;
 }
 
 const makePortfolioItem = (
@@ -235,16 +254,22 @@ const makePortfolioItem = (
 ): PortfolioItem => {
     const normalizedBalance = Number.isFinite(balance) ? balance : 0;
     const normalizedRate = Number.isFinite(fiatRate) ? fiatRate : 0;
+    const hasSavings =
+        typeof options.savings === "number" && Number.isFinite(options.savings);
+    const savingsValue = hasSavings ? options.savings || 0 : 0;
+    const hasStaked = typeof options.staked === "number" && Number.isFinite(options.staked);
+    const stakedValue = hasStaked ? options.staked || 0 : 0;
+    const totalBalance = normalizedBalance + (hasSavings ? savingsValue : 0) + (hasStaked ? stakedValue : 0);
     const hasPendingRewards =
         typeof options.pendingRewards === "number" && Number.isFinite(options.pendingRewards);
     const normalizedPendingRewards = hasPendingRewards ? options.pendingRewards || 0 : undefined;
 
-    return {
+    const item: PortfolioItem = {
         name,
         symbol,
         layer,
-        balance: normalizedBalance,
-        fiatPrice: normalizedBalance * normalizedRate,
+        balance: totalBalance,
+        fiatPrice: totalBalance * normalizedRate,
         ...(options.address ? { address: options.address } : {}),
         ...(hasPendingRewards
             ? {
@@ -253,6 +278,23 @@ const makePortfolioItem = (
               }
             : {}),
     };
+
+    if (hasSavings || hasStaked) {
+        item.liquid = normalizedBalance;
+        item.liquidFiat = normalizedBalance * normalizedRate;
+    }
+
+    if (hasSavings) {
+        item.savings = savingsValue;
+        item.savingsFiat = savingsValue * normalizedRate;
+    }
+
+    if (hasStaked) {
+        item.staked = stakedValue;
+        item.stakedFiat = stakedValue * normalizedRate;
+    }
+
+    return item;
 };
 
 const vestsToHivePower = (vests: number, hivePerMVests: number): number => {
@@ -431,18 +473,18 @@ const buildHiveLayer = (
     const hivePrice = getTokenPrice(marketData, "hive", currency);
     const hbdPrice = getTokenPrice(marketData, "hbd", currency);
 
+    const hivePendingTotal = pendingHive + pendingHivePower;
+
     return [
         makePortfolioItem("Hive", "HIVE", "hive", hiveBalance, hivePrice, {
-            pendingRewards: pendingHive,
-        }),
-        makePortfolioItem("Hive Savings", "HIVE", "hive", hiveSavings, hivePrice),
-        makePortfolioItem("Hive Power", "HP", "hive", hivePower, hivePrice, {
-            pendingRewards: pendingHivePower,
+            savings: hiveSavings,
+            staked: hivePower,
+            pendingRewards: hivePendingTotal,
         }),
         makePortfolioItem("Hive Dollar", "HBD", "hive", hbdBalance, hbdPrice, {
+            savings: hbdSavings,
             pendingRewards: pendingHbd,
         }),
-        makePortfolioItem("Hive Dollar Savings", "HBD", "hive", hbdSavings, hbdPrice),
     ];
 };
 
@@ -462,7 +504,6 @@ const buildEngineLayer = (engineData: any, marketData: any, currency: string, hi
         const stakedParsed = parseMaybeNumber(token.stakedBalance);
         const balance = balanceParsed !== null ? balanceParsed : 0;
         const staked = stakedParsed !== null ? stakedParsed : 0;
-        const total = balance + staked;
 
         const tokenPrice = typeof token.tokenPrice === "number" ? token.tokenPrice : 0;
         const priceInHive = tokenPrice > 0 ? tokenPrice : 0;
@@ -473,14 +514,22 @@ const buildEngineLayer = (engineData: any, marketData: any, currency: string, hi
 
         const pendingRewards = typeof token.pendingRewards === "number" ? token.pendingRewards : undefined;
 
+        const options: PortfolioItemOptions = {
+            staked,
+        };
+
+        if (pendingRewards !== undefined) {
+            options.pendingRewards = pendingRewards;
+        }
+
         items.push(
             makePortfolioItem(
                 name || symbol,
                 symbol || name || "ENGINE",
                 "engine",
-                total,
+                balance,
                 fiatRate,
-                pendingRewards !== undefined ? { pendingRewards } : {},
+                options,
             ),
         );
     }
@@ -493,39 +542,59 @@ const buildSpkLayer = (spkData: any, marketData: any, currency: string): Portfol
         return [];
     }
 
-    const sources = [spkData, spkData.balances, spkData.balance];
-    const seen = new Set<string>();
+    const balanceSource =
+        spkData.balance && typeof spkData.balance === "object"
+            ? spkData.balance
+            : spkData.balances && typeof spkData.balances === "object"
+                ? spkData.balances
+                : {};
+
+    const readValue = (...keys: string[]): number | null => {
+        const candidates: unknown[] = [];
+
+        for (const key of keys) {
+            if (balanceSource && typeof balanceSource === "object" && key in balanceSource) {
+                candidates.push((balanceSource as any)[key]);
+            }
+
+            if (key in spkData) {
+                candidates.push((spkData as any)[key]);
+            }
+
+            if (spkData.account && typeof spkData.account === "object" && key in spkData.account) {
+                candidates.push((spkData.account as any)[key]);
+            }
+
+            if (spkData.power && typeof spkData.power === "object" && key in spkData.power) {
+                candidates.push((spkData.power as any)[key]);
+            }
+        }
+
+        return pickFirstNumericValue(...candidates);
+    };
+
     const items: PortfolioItem[] = [];
 
-    for (const source of sources) {
-        if (!source || typeof source !== "object") {
-            continue;
-        }
+    const spkBalance = readValue("spk", "SPK", "balance_spk", "liquid_spk");
 
-        for (const [rawKey, rawValue] of Object.entries(source)) {
-            const key = rawKey.toLowerCase();
+    if (spkBalance !== null) {
+        const spkPrice = getTokenPrice(marketData, "spk", currency);
+        items.push(makePortfolioItem("SPK", "SPK", "spk", spkBalance, spkPrice));
+    }
 
-            if (seen.has(key)) {
-                continue;
-            }
+    const larynxBalance = readValue("larynx", "LARYNX");
+    const larynxPower = readValue("larynx_power", "larynxPower", "LARYNX_POWER");
 
-            const balance = parseMaybeNumber(rawValue);
+    if (larynxBalance !== null || larynxPower !== null) {
+        const liquid = larynxBalance !== null ? larynxBalance : 0;
+        const staked = larynxPower !== null ? larynxPower : 0;
+        const larynxPrice = getTokenPrice(marketData, "larynx", currency);
 
-            if (balance === null || balance === 0) {
-                continue;
-            }
-
-            if (!/[a-z]/i.test(rawKey)) {
-                continue;
-            }
-
-            const symbol = rawKey.toUpperCase();
-            const name = symbol;
-            const price = getTokenPrice(marketData, symbol, currency);
-
-            items.push(makePortfolioItem(name, symbol, "spk", balance, price));
-            seen.add(key);
-        }
+        items.push(
+            makePortfolioItem("LARYNX", "LARYNX", "spk", liquid, larynxPrice, {
+                staked,
+            }),
+        );
     }
 
     return items;
