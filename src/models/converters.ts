@@ -18,7 +18,16 @@ import {
     if (!balanceObj) {
       return null;
     }
-    const tokenMetadata = token && (JSON.parse(token.metadata) as TokenMetadata);
+    let tokenMetadata: TokenMetadata | undefined;
+
+    if (token && token.metadata) {
+      try {
+        tokenMetadata = JSON.parse(token.metadata) as TokenMetadata;
+      } catch (err) {
+        console.warn('failed to parse token metadata', token.symbol, err);
+        tokenMetadata = undefined;
+      }
+    }
   
     const stake = parseFloat(balanceObj.stake) || 0;
     const delegationsIn = parseFloat(balanceObj.delegationsIn) || 0;

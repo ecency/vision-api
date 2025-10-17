@@ -1132,7 +1132,7 @@ const fetchEngineTokensWithBalance = async (username: string) => {
     } catch (err) {
         console.warn("Engine data fetch failed", err);
         // instead of throwing error, handle to skip engine data addition
-        return null;
+        return [];
     }
 }
 
