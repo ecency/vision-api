@@ -395,18 +395,22 @@ const vestsToHivePower = (vests: number, hivePerMVests: number): number => {
     return (vests / 1e6) * hivePerMVests;
 };
 
-const extractExternalWallets = (
-    accountData: any,
-    options?: { onlyEnabled?: boolean },
-): ExternalWalletMetadata[] => {
+interface ParsedPostingMetadata {
+    profile: any | null;
+    root: any | null;
+    walletsRoot: any | null;
+    tokens: any[];
+}
+
+const parsePostingJsonMetadata = (accountData: any): ParsedPostingMetadata | null => {
     if (!accountData) {
-        return [];
+        return null;
     }
 
     const metadataString = accountData.posting_json_metadata;
 
     if (!metadataString || typeof metadataString !== "string") {
-        return [];
+        return null;
     }
 
     let parsed: any;
@@ -414,21 +418,132 @@ const extractExternalWallets = (
     try {
         parsed = JSON.parse(metadataString);
     } catch (_) {
-        return [];
+        return null;
     }
 
     if (!parsed || typeof parsed !== "object") {
-        return [];
+        return null;
     }
 
-    const profile = parsed.profile && typeof parsed.profile === "object" ? parsed.profile : parsed;
-    const walletsRootCandidate = firstDefined(profile.wallets, profile.wallet, parsed.wallets);
-    const walletsRoot = walletsRootCandidate !== undefined ? walletsRootCandidate : null;
-    const tokensRoot = Array.isArray(profile.tokens)
-        ? profile.tokens
+    const profile = parsed.profile && typeof parsed.profile === "object" ? parsed.profile : null;
+
+    const walletsRootCandidate = firstDefined(
+        profile && typeof profile === "object" ? (profile as any).wallets : undefined,
+        profile && typeof profile === "object" ? (profile as any).wallet : undefined,
+        parsed.wallets,
+    );
+
+    const tokensRoot = Array.isArray(profile && (profile as any).tokens)
+        ? (profile as any).tokens
         : Array.isArray(parsed.tokens)
             ? parsed.tokens
             : [];
+
+    return {
+        profile,
+        root: parsed,
+        walletsRoot: walletsRootCandidate !== undefined ? walletsRootCandidate : null,
+        tokens: tokensRoot,
+    };
+};
+
+const extractEnabledEngineTokenSymbols = (accountData: any): Set<string> => {
+    const metadata = parsePostingJsonMetadata(accountData);
+
+    if (!metadata) {
+        return new Set();
+    }
+
+    const enabled = new Set<string>();
+
+    const considerToken = (token: any, metaSource?: any) => {
+        if (!token || typeof token !== "object") {
+            return;
+        }
+
+        const typeCandidate = firstDefined((token as any).type, (token as any).layer);
+        const type = typeof typeCandidate === "string" ? typeCandidate.trim().toLowerCase() : "";
+
+        if (type !== "engine") {
+            return;
+        }
+
+        const meta = metaSource && typeof metaSource === "object"
+            ? metaSource
+            : (token as any).meta && typeof (token as any).meta === "object"
+                ? (token as any).meta
+                : null;
+
+        const showCandidate = firstDefined(
+            meta && typeof meta.show === "boolean" ? meta.show : undefined,
+            typeof (token as any).show === "boolean" ? (token as any).show : undefined,
+            typeof (token as any).enabled === "boolean" ? (token as any).enabled : undefined,
+        );
+
+        if (showCandidate !== true) {
+            return;
+        }
+
+        const symbolCandidate = firstDefined(
+            (token as any).symbol,
+            (token as any).token,
+            meta && (meta.symbol || meta.token),
+            (token as any).name,
+        );
+
+        if (!symbolCandidate) {
+            return;
+        }
+
+        const normalized = String(symbolCandidate).trim();
+
+        if (!normalized) {
+            return;
+        }
+
+        enabled.add(normalized.toUpperCase());
+    };
+
+    const { tokens, walletsRoot } = metadata;
+
+    if (Array.isArray(tokens)) {
+        for (const token of tokens) {
+            considerToken(token);
+        }
+    }
+
+    if (walletsRoot && typeof walletsRoot === "object") {
+        const raw = walletsRoot as any;
+        const items = Array.isArray(raw.items)
+            ? raw.items
+            : Array.isArray(raw.wallets)
+                ? raw.wallets
+                : Array.isArray(raw.list)
+                    ? raw.list
+                    : [];
+
+        for (const item of items) {
+            const meta = item && typeof item.meta === "object" ? item.meta : null;
+            considerToken(item, meta);
+        }
+    }
+
+    return enabled;
+};
+
+const extractExternalWallets = (
+    accountData: any,
+    options?: { onlyEnabled?: boolean },
+): ExternalWalletMetadata[] => {
+    const metadata = parsePostingJsonMetadata(accountData);
+
+    if (!metadata) {
+        return [];
+    }
+
+    const profile = metadata.profile && typeof metadata.profile === "object" ? metadata.profile : metadata.root;
+    const walletsRoot = metadata.walletsRoot !== null ? metadata.walletsRoot : null;
+    const tokensRoot = Array.isArray(metadata.tokens) ? metadata.tokens : [];
 
     const results = new Map<string, ExternalWalletMetadata>();
     const onlyEnabled = Boolean(options && options.onlyEnabled);
@@ -441,20 +556,21 @@ const extractExternalWallets = (
     };
 
     if (walletsRoot && typeof walletsRoot === "object") {
+        const walletObject = walletsRoot as any;
         const enabled =
-            typeof walletsRoot.enabled === "boolean"
-                ? walletsRoot.enabled
+            typeof walletObject.enabled === "boolean"
+                ? walletObject.enabled
                 : typeof profile.wallets_enabled === "boolean"
                     ? profile.wallets_enabled
                     : true;
 
         if (enabled) {
-            const items = Array.isArray((walletsRoot as any).items)
-                ? (walletsRoot as any).items
-                : Array.isArray((walletsRoot as any).wallets)
-                    ? (walletsRoot as any).wallets
-                    : Array.isArray((walletsRoot as any).list)
-                        ? (walletsRoot as any).list
+            const items = Array.isArray(walletObject.items)
+                ? walletObject.items
+                : Array.isArray(walletObject.wallets)
+                    ? walletObject.wallets
+                    : Array.isArray(walletObject.list)
+                        ? walletObject.list
                         : [];
 
             for (const rawItem of items) {
@@ -737,16 +853,38 @@ const buildHiveLayer = (
     ];
 };
 
-const buildEngineLayer = (engineData: any, marketData: any, currency: string, hivePrice: number): PortfolioItem[] => {
+const buildEngineLayer = (
+    engineData: any,
+    marketData: any,
+    currency: string,
+    hivePrice: number,
+    options?: { onlyEnabled?: boolean; allowedSymbols?: Set<string> },
+): PortfolioItem[] => {
     if (!Array.isArray(engineData) || engineData.length === 0) {
         return [];
     }
 
     const items: PortfolioItem[] = [];
+    const onlyEnabled = Boolean(options && options.onlyEnabled);
+    const allowedSymbols = options && options.allowedSymbols ? options.allowedSymbols : undefined;
 
     for (const token of engineData) {
         if (!token) {
             continue;
+        }
+
+        const rawSymbol =
+            typeof token.symbol === "string" && token.symbol
+                ? token.symbol
+                : typeof token.name === "string" && token.name
+                    ? token.name
+                    : "";
+        const symbolKey = rawSymbol ? rawSymbol.toUpperCase() : "";
+
+        if (onlyEnabled) {
+            if (!symbolKey || !allowedSymbols || !allowedSymbols.has(symbolKey)) {
+                continue;
+            }
         }
 
         const balanceParsed = parseMaybeNumber(token.balance);
@@ -758,17 +896,17 @@ const buildEngineLayer = (engineData: any, marketData: any, currency: string, hi
         const priceInHive = tokenPrice > 0 ? tokenPrice : 0;
         const fiatRate = hivePrice * priceInHive;
 
-        const symbol = typeof token.symbol === "string" ? token.symbol : "";
+        const symbol = typeof token.symbol === "string" && token.symbol ? token.symbol : rawSymbol;
         const name = typeof token.name === "string" && token.name ? token.name : symbol;
 
         const pendingRewards = typeof token.pendingRewards === "number" ? token.pendingRewards : undefined;
 
-        const options: PortfolioItemOptions = {
+        const itemOptions: PortfolioItemOptions = {
             staked,
         };
 
         if (pendingRewards !== undefined) {
-            options.pendingRewards = pendingRewards;
+            itemOptions.pendingRewards = pendingRewards;
         }
 
         items.push(
@@ -778,7 +916,7 @@ const buildEngineLayer = (engineData: any, marketData: any, currency: string, hi
                 "engine",
                 balance,
                 fiatRate,
-                options,
+                itemOptions,
             ),
         );
     }
@@ -1234,11 +1372,22 @@ export const portfolioV2 = async (req: express.Request, res: express.Response) =
 
         const wallets: PortfolioItem[] = [];
 
+        const engineOptions =
+            onlyEnabledFlag === true
+                ? {
+                      onlyEnabled: true,
+                      allowedSymbols: extractEnabledEngineTokenSymbols(accountData),
+                  }
+                : undefined;
+
         wallets.push(
             ...buildPointsLayer(pointsData, marketData, normalizedCurrency),
             ...buildHiveLayer(accountData, globalProps, marketData, normalizedCurrency),
             ...buildSpkLayer(spkData, marketData, normalizedCurrency),
-            ...buildEngineLayer(engineData, marketData, normalizedCurrency, hivePrice),
+        );
+
+        wallets.push(
+            ...buildEngineLayer(engineData, marketData, normalizedCurrency, hivePrice, engineOptions),
         );
 
         const chainOptions =
