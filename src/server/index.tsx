@@ -32,6 +32,7 @@ server
 
     // Wallet Api
     .post("^/wallet-api/portfolio$", walletApi.portfolio)
+    .post("^/wallet-api/portfolio-v2$", walletApi.portfolioV2)
     .post("^/private-api/engine-api$", walletApi.eapi)
     .get("^/private-api/engine-reward-api/:username$", walletApi.erewardapi)
     .get("^/private-api/engine-chart-api$", walletApi.echartapi)

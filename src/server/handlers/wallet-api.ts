@@ -1,11 +1,588 @@
 import express from "express";
 
-import { baseApiRequest, pipe } from "../util";
+import { baseApiRequest, pipe, parseToken } from "../util";
 import { fetchGlobalProps, getAccount } from "./hive-explorer";
-import { apiRequest } from "../helper";
+import { apiRequest, ChainBalanceResponse } from "../helper";
 
 import { EngineContracts, EngineIds, EngineMetric, EngineRequestPayload, EngineTables, JSON_RPC, Methods, Token, TokenBalance, TokenStatus } from "../../models/hiveEngine.types";
 import { convertEngineToken, convertRewardsStatus } from "../../models/converters";
+
+type PortfolioLayer = "points" | "hive" | "chain" | "spk" | "engine";
+
+interface PortfolioItem {
+    name: string;
+    symbol: string;
+    layer: PortfolioLayer;
+    balance: number;
+    fiatPrice: number;
+    address?: string;
+    pendingRewards?: number;
+    pendingRewardsFiat?: number;
+}
+
+interface ExternalWalletMetadata {
+    address: string;
+    chain: string;
+    symbol: string;
+    name: string;
+    decimals?: number;
+}
+
+const CHAIN_CONFIG: Record<string, { name: string; symbol: string; decimals: number }> = {
+    btc: { name: "Bitcoin", symbol: "BTC", decimals: 8 },
+    eth: { name: "Ethereum", symbol: "ETH", decimals: 18 },
+    bnb: { name: "BNB Chain", symbol: "BNB", decimals: 18 },
+    sol: { name: "Solana", symbol: "SOL", decimals: 9 },
+    tron: { name: "Tron", symbol: "TRX", decimals: 6 },
+    ton: { name: "TON", symbol: "TON", decimals: 9 },
+    apt: { name: "Aptos", symbol: "APT", decimals: 8 },
+};
+
+const SUPPORTED_CHAIN_KEYS = new Set(Object.keys(CHAIN_CONFIG));
+
+const firstDefined = (...values: any[]) => {
+    for (let i = 0; i < values.length; i += 1) {
+        const value = values[i];
+        if (value !== undefined && value !== null) {
+            return value;
+        }
+    }
+    return undefined;
+};
+
+const parseMaybeNumber = (value: unknown): number | null => {
+    if (typeof value === "number") {
+        return Number.isFinite(value) ? value : null;
+    }
+
+    if (typeof value === "string") {
+        const trimmed = value.trim();
+
+        if (!trimmed) {
+            return null;
+        }
+
+        const direct = Number(trimmed);
+        if (!Number.isNaN(direct)) {
+            return direct;
+        }
+
+        const match = trimmed.match(/-?\d+(?:\.\d+)?/);
+        if (match) {
+            const parsed = Number(match[0]);
+            return Number.isNaN(parsed) ? null : parsed;
+        }
+    }
+
+    return null;
+};
+
+const convertBaseUnitsToAmount = (value: string, decimals: number): number => {
+    if (!value) {
+        return 0;
+    }
+
+    const normalized = value.trim();
+
+    if (/^-?\d+$/.test(normalized)) {
+        const negative = normalized.startsWith("-");
+        const digits = negative ? normalized.slice(1) : normalized;
+        const padded = digits.padStart(decimals + 1, "0");
+        const integerPart = padded.slice(0, padded.length - decimals) || "0";
+        const fractionalPart = padded.slice(padded.length - decimals).replace(/0+$/, "");
+        const combined = `${negative ? "-" : ""}${integerPart}`;
+        const formatted = fractionalPart ? `${combined}.${fractionalPart}` : combined;
+        const parsed = Number(formatted);
+        return Number.isNaN(parsed) ? 0 : parsed;
+    }
+
+    const numeric = Number(normalized);
+    return Number.isNaN(numeric) ? 0 : numeric;
+};
+
+const convertChainBalanceToAmount = (
+    balanceResponse: ChainBalanceResponse | undefined,
+    decimals: number,
+): number => {
+    if (!balanceResponse) {
+        return 0;
+    }
+
+    const { balance, unit } = balanceResponse;
+
+    if (balance === null || typeof balance === "undefined") {
+        return 0;
+    }
+
+    if (typeof balance === "number") {
+        return balance;
+    }
+
+    if (typeof balance === "string") {
+        const trimmed = balance.trim();
+
+        if (!trimmed) {
+            return 0;
+        }
+
+        if (unit === "btc") {
+            const parsed = Number(trimmed);
+            return Number.isNaN(parsed) ? 0 : parsed;
+        }
+
+        return convertBaseUnitsToAmount(trimmed, decimals);
+    }
+
+    return 0;
+};
+
+const normalizeCurrency = (currency?: string): string => {
+    if (!currency || typeof currency !== "string") {
+        return "usd";
+    }
+
+    return currency.trim().toLowerCase() || "usd";
+};
+
+const getTokenPrice = (marketData: any, token: string, currency: string): number => {
+    if (!marketData || !token) {
+        return 0;
+    }
+
+    const currencyKey = currency.toLowerCase();
+    const tokenKey = token.toLowerCase();
+    const upperToken = token.toUpperCase();
+
+    const candidates: any[] = [];
+
+    if (marketData && typeof marketData === "object") {
+        if (tokenKey in marketData) {
+            candidates.push((marketData as any)[tokenKey]);
+        }
+
+        if (upperToken in marketData && upperToken !== tokenKey) {
+            candidates.push((marketData as any)[upperToken]);
+        }
+
+        if (token in marketData && token !== tokenKey && token !== upperToken) {
+            candidates.push((marketData as any)[token]);
+        }
+    }
+
+    for (let i = 0; i < candidates.length; i += 1) {
+        const candidate = candidates[i];
+        if (!candidate) {
+            continue;
+        }
+
+        if (typeof candidate === "number") {
+            return candidate;
+        }
+
+        if (candidate && typeof candidate === "object") {
+            let direct: any;
+
+            if (currencyKey in candidate) {
+                direct = candidate[currencyKey];
+            } else {
+                const upperCurrency = currencyKey.toUpperCase();
+                if (upperCurrency in candidate) {
+                    direct = candidate[upperCurrency];
+                }
+            }
+
+            if (typeof direct === "number") {
+                return direct;
+            }
+
+            if (direct && typeof direct === "object") {
+                const nestedKeys = ["price", "rate", "value"];
+                for (let j = 0; j < nestedKeys.length; j += 1) {
+                    const key = nestedKeys[j];
+                    const val = (direct as any)[key];
+                    if (typeof val === "number") {
+                        return val;
+                    }
+                }
+            }
+
+            const candidateKeys = ["price", "rate", "value"];
+            for (let k = 0; k < candidateKeys.length; k += 1) {
+                const key = candidateKeys[k];
+                const val = (candidate as any)[key];
+                if (typeof val === "number") {
+                    return val;
+                }
+            }
+        }
+    }
+
+    return 0;
+};
+
+interface PortfolioItemOptions {
+    address?: string;
+    pendingRewards?: number;
+}
+
+const makePortfolioItem = (
+    name: string,
+    symbol: string,
+    layer: PortfolioLayer,
+    balance: number,
+    fiatRate: number,
+    options: PortfolioItemOptions = {},
+): PortfolioItem => {
+    const normalizedBalance = Number.isFinite(balance) ? balance : 0;
+    const normalizedRate = Number.isFinite(fiatRate) ? fiatRate : 0;
+    const hasPendingRewards =
+        typeof options.pendingRewards === "number" && Number.isFinite(options.pendingRewards);
+    const normalizedPendingRewards = hasPendingRewards ? options.pendingRewards || 0 : undefined;
+
+    return {
+        name,
+        symbol,
+        layer,
+        balance: normalizedBalance,
+        fiatPrice: normalizedBalance * normalizedRate,
+        ...(options.address ? { address: options.address } : {}),
+        ...(hasPendingRewards
+            ? {
+                  pendingRewards: normalizedPendingRewards || 0,
+                  pendingRewardsFiat: (normalizedPendingRewards || 0) * normalizedRate,
+              }
+            : {}),
+    };
+};
+
+const vestsToHivePower = (vests: number, hivePerMVests: number): number => {
+    if (!Number.isFinite(vests) || !Number.isFinite(hivePerMVests)) {
+        return 0;
+    }
+
+    return (vests / 1e6) * hivePerMVests;
+};
+
+const extractExternalWallets = (accountData: any): ExternalWalletMetadata[] => {
+    if (!accountData) {
+        return [];
+    }
+
+    const metadataString = accountData.posting_json_metadata;
+
+    if (!metadataString || typeof metadataString !== "string") {
+        return [];
+    }
+
+    let parsed: any;
+
+    try {
+        parsed = JSON.parse(metadataString);
+    } catch (_) {
+        return [];
+    }
+
+    if (!parsed || typeof parsed !== "object") {
+        return [];
+    }
+
+    const profile = parsed.profile && typeof parsed.profile === "object" ? parsed.profile : parsed;
+    const walletsRootCandidate = firstDefined(profile.wallets, profile.wallet, parsed.wallets);
+    const walletsRoot = walletsRootCandidate !== undefined ? walletsRootCandidate : null;
+
+    if (!walletsRoot || typeof walletsRoot !== "object") {
+        return [];
+    }
+
+    const enabled =
+        typeof walletsRoot.enabled === "boolean"
+            ? walletsRoot.enabled
+            : typeof profile.wallets_enabled === "boolean"
+                ? profile.wallets_enabled
+                : true;
+
+    if (!enabled) {
+        return [];
+    }
+
+    const items = Array.isArray(walletsRoot.items)
+        ? walletsRoot.items
+        : Array.isArray(walletsRoot.wallets)
+            ? walletsRoot.wallets
+            : Array.isArray(walletsRoot.list)
+                ? walletsRoot.list
+                : [];
+
+    if (!Array.isArray(items) || items.length === 0) {
+        return [];
+    }
+
+    const results: ExternalWalletMetadata[] = [];
+
+    for (const rawItem of items) {
+        if (!rawItem || typeof rawItem !== "object") {
+            continue;
+        }
+
+        const addressCandidate = firstDefined(rawItem.address, rawItem.addr, rawItem.wallet, rawItem.value);
+        const chainCandidate = firstDefined(rawItem.chain, rawItem.network, rawItem.token, rawItem.symbol, rawItem.name);
+
+        if (!addressCandidate || !chainCandidate) {
+            continue;
+        }
+
+        const chain = String(chainCandidate).toLowerCase();
+
+        if (!SUPPORTED_CHAIN_KEYS.has(chain)) {
+            continue;
+        }
+
+        const config = CHAIN_CONFIG[chain];
+
+        const symbolSource = firstDefined(rawItem.symbol, rawItem.token, config.symbol, chain);
+        const nameSource = firstDefined(rawItem.name, config.name, symbolSource);
+        const decimalsSource = firstDefined(rawItem.decimals, rawItem.precision, rawItem.scale, rawItem.decimal);
+        const symbol = String(symbolSource !== undefined ? symbolSource : chain).toUpperCase();
+        const name = String(nameSource !== undefined ? nameSource : symbol);
+        const decimals = parseMaybeNumber(decimalsSource);
+
+        results.push({
+            address: String(addressCandidate),
+            chain,
+            symbol,
+            name,
+            ...(decimals !== null ? { decimals } : {}),
+        });
+    }
+
+    return results;
+};
+
+const buildPointsLayer = (pointsData: any, marketData: any, currency: string): PortfolioItem[] => {
+    if (!pointsData) {
+        return [];
+    }
+
+    const possible = [
+        pointsData.points,
+        pointsData.balance,
+        pointsData.point_balance,
+        pointsData.point,
+        pointsData.total_points,
+    ];
+
+    let balance = 0;
+
+    for (const candidate of possible) {
+        const parsed = parseMaybeNumber(candidate);
+        if (parsed !== null) {
+            balance = parsed;
+            break;
+        }
+
+        if (candidate && typeof candidate === "object") {
+            const nestedSource = firstDefined(candidate.points, candidate.balance, candidate.available);
+            const nested = parseMaybeNumber(nestedSource);
+            if (nested !== null) {
+                balance = nested;
+                break;
+            }
+        }
+    }
+
+    if (!Number.isFinite(balance)) {
+        balance = 0;
+    }
+
+    const price = getTokenPrice(marketData, "points", currency);
+
+    return [makePortfolioItem("Ecency Points", "POINTS", "points", balance, price)];
+};
+
+const buildHiveLayer = (
+    accountData: any,
+    globalProps: any,
+    marketData: any,
+    currency: string,
+): PortfolioItem[] => {
+    if (!accountData || !globalProps) {
+        return [];
+    }
+
+    const hiveBalance = parseToken(accountData.balance || "0 HIVE");
+    const hiveSavings = parseToken(accountData.savings_balance || "0 HIVE");
+    const hbdBalance = parseToken(accountData.hbd_balance || "0 HBD");
+    const hbdSavings = parseToken(accountData.savings_hbd_balance || "0 HBD");
+
+    const totalVests = parseToken(accountData.vesting_shares || "0 VESTS");
+    const delegatedVests = parseToken(accountData.delegated_vesting_shares || "0 VESTS");
+    const receivedVests = parseToken(accountData.received_vesting_shares || "0 VESTS");
+
+    const hivePerMVests = typeof globalProps.hivePerMVests === "number" ? globalProps.hivePerMVests : 0;
+    const netVests = totalVests - delegatedVests + receivedVests;
+
+    const hivePower = vestsToHivePower(netVests, hivePerMVests);
+
+    const pendingHive = parseToken(accountData.reward_hive_balance || "0 HIVE");
+    const pendingHbd = parseToken(accountData.reward_hbd_balance || "0 HBD");
+    const pendingVests = parseToken(accountData.reward_vesting_balance || "0 VESTS");
+    const pendingHivePower = vestsToHivePower(pendingVests, hivePerMVests);
+
+    const hivePrice = getTokenPrice(marketData, "hive", currency);
+    const hbdPrice = getTokenPrice(marketData, "hbd", currency);
+
+    return [
+        makePortfolioItem("Hive", "HIVE", "hive", hiveBalance, hivePrice, {
+            pendingRewards: pendingHive,
+        }),
+        makePortfolioItem("Hive Savings", "HIVE", "hive", hiveSavings, hivePrice),
+        makePortfolioItem("Hive Power", "HP", "hive", hivePower, hivePrice, {
+            pendingRewards: pendingHivePower,
+        }),
+        makePortfolioItem("Hive Dollar", "HBD", "hive", hbdBalance, hbdPrice, {
+            pendingRewards: pendingHbd,
+        }),
+        makePortfolioItem("Hive Dollar Savings", "HBD", "hive", hbdSavings, hbdPrice),
+    ];
+};
+
+const buildEngineLayer = (engineData: any, marketData: any, currency: string, hivePrice: number): PortfolioItem[] => {
+    if (!Array.isArray(engineData) || engineData.length === 0) {
+        return [];
+    }
+
+    const items: PortfolioItem[] = [];
+
+    for (const token of engineData) {
+        if (!token) {
+            continue;
+        }
+
+        const balanceParsed = parseMaybeNumber(token.balance);
+        const stakedParsed = parseMaybeNumber(token.stakedBalance);
+        const balance = balanceParsed !== null ? balanceParsed : 0;
+        const staked = stakedParsed !== null ? stakedParsed : 0;
+        const total = balance + staked;
+
+        const tokenPrice = typeof token.tokenPrice === "number" ? token.tokenPrice : 0;
+        const priceInHive = tokenPrice > 0 ? tokenPrice : 0;
+        const fiatRate = hivePrice * priceInHive;
+
+        const symbol = typeof token.symbol === "string" ? token.symbol : "";
+        const name = typeof token.name === "string" && token.name ? token.name : symbol;
+
+        const pendingRewards = typeof token.pendingRewards === "number" ? token.pendingRewards : undefined;
+
+        items.push(
+            makePortfolioItem(
+                name || symbol,
+                symbol || name || "ENGINE",
+                "engine",
+                total,
+                fiatRate,
+                pendingRewards !== undefined ? { pendingRewards } : {},
+            ),
+        );
+    }
+
+    return items;
+};
+
+const buildSpkLayer = (spkData: any, marketData: any, currency: string): PortfolioItem[] => {
+    if (!spkData || typeof spkData !== "object") {
+        return [];
+    }
+
+    const sources = [spkData, spkData.balances, spkData.balance];
+    const seen = new Set<string>();
+    const items: PortfolioItem[] = [];
+
+    for (const source of sources) {
+        if (!source || typeof source !== "object") {
+            continue;
+        }
+
+        for (const [rawKey, rawValue] of Object.entries(source)) {
+            const key = rawKey.toLowerCase();
+
+            if (seen.has(key)) {
+                continue;
+            }
+
+            const balance = parseMaybeNumber(rawValue);
+
+            if (balance === null || balance === 0) {
+                continue;
+            }
+
+            if (!/[a-z]/i.test(rawKey)) {
+                continue;
+            }
+
+            const symbol = rawKey.toUpperCase();
+            const name = symbol;
+            const price = getTokenPrice(marketData, symbol, currency);
+
+            items.push(makePortfolioItem(name, symbol, "spk", balance, price));
+            seen.add(key);
+        }
+    }
+
+    return items;
+};
+
+const buildChainLayer = async (
+    accountData: any,
+    marketData: any,
+    currency: string,
+): Promise<PortfolioItem[]> => {
+    const wallets = extractExternalWallets(accountData);
+
+    if (wallets.length === 0) {
+        return [];
+    }
+
+    const items = await Promise.all(
+        wallets.map(async (wallet) => {
+            const chain = wallet.chain.toLowerCase();
+            const config = CHAIN_CONFIG[chain];
+            const decimals = wallet.decimals !== undefined ? wallet.decimals : config.decimals;
+
+            try {
+                const response = await apiRequest(
+                    `balance/${chain}/${encodeURIComponent(wallet.address)}`,
+                    "GET",
+                );
+
+                const data = response.data as ChainBalanceResponse | undefined;
+                const balance = convertChainBalanceToAmount(data, decimals);
+                const price = getTokenPrice(marketData, wallet.symbol, currency);
+
+                return makePortfolioItem(
+                    wallet.name || config.name,
+                    wallet.symbol || config.symbol,
+                    "chain",
+                    balance,
+                    price,
+                    { address: wallet.address },
+                );
+            } catch (err) {
+                console.warn("Failed to fetch external wallet balance", { chain, address: wallet.address, err });
+                const price = getTokenPrice(marketData, wallet.symbol, currency);
+                return makePortfolioItem(
+                    wallet.name || config.name,
+                    wallet.symbol || config.symbol,
+                    "chain",
+                    0,
+                    price,
+                    { address: wallet.address },
+                );
+            }
+        }),
+    );
+
+    return items.filter(Boolean);
+};
 
 
 //docs: https://hive-engine.github.io/engine-docs/
@@ -305,3 +882,58 @@ export const portfolio = async (req: express.Request, res: express.Response) => 
     }
 
 }
+
+export const portfolioV2 = async (req: express.Request, res: express.Response) => {
+    const { username, currency } = req.body || {};
+
+    if (!username || typeof username !== "string") {
+        res.status(400).send("Missing username");
+        return;
+    }
+
+    const normalizedCurrency = normalizeCurrency(currency);
+
+    try {
+        const globalPropsPromise = fetchGlobalProps();
+        const accountPromise = getAccount(username);
+        const marketPromise = apiRequestData(`market-data/latest`);
+        const pointsPromise = apiRequestData(`users/${username}`);
+        const enginePromise = fetchEngineTokensWithBalance(username);
+        const spkPromise = fetchSpkData(username);
+
+        const [globalProps, accountData, marketData, pointsData, engineData, spkData] = await Promise.all([
+            globalPropsPromise,
+            accountPromise,
+            marketPromise,
+            pointsPromise,
+            enginePromise,
+            spkPromise,
+        ]);
+
+        const hivePrice = getTokenPrice(marketData, "hive", normalizedCurrency);
+
+        const wallets: PortfolioItem[] = [];
+
+        wallets.push(
+            ...buildPointsLayer(pointsData, marketData, normalizedCurrency),
+            ...buildHiveLayer(accountData, globalProps, marketData, normalizedCurrency),
+            ...buildSpkLayer(spkData, marketData, normalizedCurrency),
+            ...buildEngineLayer(engineData, marketData, normalizedCurrency, hivePrice),
+        );
+
+        const chainWallets = await buildChainLayer(accountData, marketData, normalizedCurrency);
+        wallets.push(...chainWallets);
+
+        const filteredWallets = wallets.filter((item) => item && Number.isFinite(item.balance));
+
+        res.send({
+            username,
+            currency: normalizedCurrency.toUpperCase(),
+            wallets: filteredWallets,
+        });
+    } catch (err: any) {
+        console.warn("failed to compile portfolio v2", err);
+        const message = err && err.message ? err.message : "Failed to compile portfolio";
+        res.status(500).send(message);
+    }
+};

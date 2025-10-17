@@ -77,6 +77,7 @@ export enum Methods {
     tokenPrice?: number;
     percentChange?: number;
     unclaimedBalance: string;
+    pendingRewards?: number;
     volume24h?: number;
   }
   
@@ -224,4 +225,3 @@ export enum Methods {
     NFTMARKET_CHANGE_PRICE = 'nftmarket_changePrice',
     NFTMARKET_ENABLE_MARKET = 'nftmarket_enableMarket',
   }
-  

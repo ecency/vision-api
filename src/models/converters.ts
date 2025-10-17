@@ -28,8 +28,9 @@ import {
     const tokenPrice = metrics ? parseFloat(metrics.lastPrice) : 0;
     const percentChange = metrics ? parseFloat(metrics.priceChangePercent) : 0;
     const volume24h = metrics ? parseFloat(metrics.volume) : 0;
-  
-    const unclaimedBalance = tokenStatus ? `${tokenStatus.pendingRewards} ${tokenStatus.symbol}` : '';
+
+    const pendingRewards = tokenStatus ? tokenStatus.pendingRewards : 0;
+    const unclaimedBalance = tokenStatus ? `${pendingRewards} ${tokenStatus.symbol}` : '';
   
     return {
       symbol: balanceObj.symbol,
@@ -40,6 +41,7 @@ import {
       delegationEnabled: token?.delegationEnabled || false,
       stakedBalance: stake + delegationsIn - delegationsOut,
       unclaimedBalance,
+      pendingRewards,
       balance,
       stake,
       delegationsIn,
@@ -91,4 +93,3 @@ import {
       authorperm: rawData.authorperm,
     } as HistoryItem;
   };
-  
