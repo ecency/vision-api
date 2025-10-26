@@ -24,6 +24,7 @@ interface PortfolioItem {
     savingsFiat?: number;
     staked?: number;
     stakedFiat?: number;
+    iconUrl?: string;
 }
 
 interface ExternalWalletMetadata {
@@ -341,6 +342,7 @@ const makePortfolioItem = (
     balance: number,
     fiatRate: number,
     options: PortfolioItemOptions = {},
+    iconUrl?: string,
 ): PortfolioItem => {
     const normalizedBalance = Number.isFinite(balance) ? balance : 0;
     const normalizedRate = Number.isFinite(fiatRate) ? fiatRate : 0;
@@ -360,12 +362,13 @@ const makePortfolioItem = (
         layer,
         balance: totalBalance,
         fiatPrice: totalBalance * normalizedRate,
+        iconUrl,
         ...(options.address ? { address: options.address } : {}),
         ...(hasPendingRewards
             ? {
-                  pendingRewards: normalizedPendingRewards || 0,
-                  pendingRewardsFiat: (normalizedPendingRewards || 0) * normalizedRate,
-              }
+                pendingRewards: normalizedPendingRewards || 0,
+                pendingRewardsFiat: (normalizedPendingRewards || 0) * normalizedRate,
+            }
             : {}),
     };
 
@@ -898,6 +901,7 @@ const buildEngineLayer = (
 
         const symbol = typeof token.symbol === "string" && token.symbol ? token.symbol : rawSymbol;
         const name = typeof token.name === "string" && token.name ? token.name : symbol;
+        const iconUrl = typeof token.icon === "string" && token.icon ? token.icon : undefined;
 
         const pendingRewards = typeof token.pendingRewards === "number" ? token.pendingRewards : undefined;
 
@@ -917,6 +921,7 @@ const buildEngineLayer = (
                 balance,
                 fiatRate,
                 itemOptions,
+                iconUrl,
             ),
         );
     }
