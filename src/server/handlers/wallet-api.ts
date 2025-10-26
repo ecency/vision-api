@@ -41,16 +41,17 @@ interface ChainConfig {
     symbol: string;
     decimals: number;
     aliases?: string[];
+    iconUrl?: string;
 }
 
 const CHAIN_CONFIG: Record<string, ChainConfig> = {
-    btc: { name: "Bitcoin", symbol: "BTC", decimals: 8, aliases: ["bitcoin"] },
-    eth: { name: "Ethereum", symbol: "ETH", decimals: 18 },
-    bnb: { name: "BNB Chain", symbol: "BNB", decimals: 18 },
-    sol: { name: "Solana", symbol: "SOL", decimals: 9 },
-    tron: { name: "Tron", symbol: "TRX", decimals: 6, aliases: ["trx"] },
-    ton: { name: "TON", symbol: "TON", decimals: 9 },
-    apt: { name: "Aptos", symbol: "APT", decimals: 8 },
+    btc: { name: "Bitcoin", symbol: "BTC", decimals: 8, aliases: ["bitcoin"], iconUrl: ASSET_ICON_URLS.BTC },
+    eth: { name: "Ethereum", symbol: "ETH", decimals: 18, iconUrl: ASSET_ICON_URLS.ETH },
+    bnb: { name: "BNB Chain", symbol: "BNB", decimals: 18, iconUrl: ASSET_ICON_URLS.BNB },
+    sol: { name: "Solana", symbol: "SOL", decimals: 9, iconUrl: ASSET_ICON_URLS.SOL },
+    tron: { name: "Tron", symbol: "TRX", decimals: 6, aliases: ["trx"], iconUrl: ASSET_ICON_URLS.TRX },
+    ton: { name: "TON", symbol: "TON", decimals: 9, iconUrl: ASSET_ICON_URLS.TON },
+    apt: { name: "Aptos", symbol: "APT", decimals: 8, iconUrl: ASSET_ICON_URLS.APT },
 };
 
 const CHAIN_SYMBOL_LOOKUP = new Map<string, { key: string; config: ChainConfig }>();
@@ -1022,6 +1023,8 @@ const buildChainLayer = async (
                 const balance = convertChainBalanceToAmount(data, decimals);
                 const price = getTokenPrice(marketData, wallet.symbol, currency);
 
+                const iconUrl = config.iconUrl || ASSET_ICON_URLS.CHAIN_PLACEHOLDER
+
                 return makePortfolioItem(
                     wallet.name || config.name,
                     wallet.symbol || config.symbol,
@@ -1029,6 +1032,7 @@ const buildChainLayer = async (
                     balance,
                     price,
                     { address: wallet.address },
+                    iconUrl
                 );
             } catch (err) {
                 console.warn("Failed to fetch external wallet balance", { chain, address: wallet.address, err });
