@@ -67,3 +67,13 @@ export const bots = [
 export const ACTIVE_PROPOSAL_META = {
         id: 336
 }
+
+
+export const ASSET_ICON_URLS = {
+        POINTS: "https://images.ecency.com/DQmRhnpQt7zzfS67uDGv6TPLGmKFhWfNFrDLECP4M3bRo4f/ecency_logo_2x.png",
+        HIVE: "https://images.ecency.com/DQmb7w4JNXXPKyzYVk615xGSfMTKLArQ7R9kWapuiY8dNHW/hive_icon.png",
+        HBD: "https://images.ecency.com/DQmbXwGcbDvATn7x7XpZVPuYhB8YYTozDDvNtJanVpbdE8f/hbd_icon.png",
+        SPK: "https://images.ecency.com/DQmZKETm7FX3HPmbohY2EEXDy3CebxZg8ESqU2ixVC77aA2/image.png",
+        SPK_PLACEHOLDER:"https://images.ecency.com/DQmbUoMBYahwwaZ795LV1T19Nm6nWQ5EpD9NCV9jqEnY92b/image_1_.png",
+        ENGINE_PLACEHOLDER: "https://images.ecency.com/DQmUWpEYA5f2U9NmCEheSdzXwqQrBTL16jG6vWBJGYjUtZB/image_2_.png"
+}

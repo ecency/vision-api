@@ -6,6 +6,7 @@ import { apiRequest, ChainBalanceResponse } from "../helper";
 
 import { EngineContracts, EngineIds, EngineMetric, EngineRequestPayload, EngineTables, JSON_RPC, Methods, Token, TokenBalance, TokenStatus } from "../../models/hiveEngine.types";
 import { convertEngineToken, convertRewardsStatus } from "../../models/converters";
+import { ASSET_ICON_URLS } from "./constants";
 
 type PortfolioLayer = "points" | "hive" | "chain" | "spk" | "engine";
 
@@ -799,6 +800,7 @@ const buildPointsLayer = (pointsData: any, marketData: any, currency: string): P
     }
 
     const price = getTokenPrice(marketData, "points", currency);
+    const iconUrl = ASSET_ICON_URLS.POINTS;
 
     const options: PortfolioItemOptions = {};
 
@@ -806,7 +808,7 @@ const buildPointsLayer = (pointsData: any, marketData: any, currency: string): P
         options.pendingRewards = pendingRewards;
     }
 
-    return [makePortfolioItem("Ecency Points", "POINTS", "points", balance, price, options)];
+    return [makePortfolioItem("Ecency Points", "POINTS", "points", balance, price, options, iconUrl)];
 };
 
 const buildHiveLayer = (
@@ -848,11 +850,11 @@ const buildHiveLayer = (
             savings: hiveSavings,
             staked: hivePower,
             pendingRewards: hivePendingTotal,
-        }),
+        }, ASSET_ICON_URLS.HIVE),
         makePortfolioItem("Hive Dollar", "HBD", "hive", hbdBalance, hbdPrice, {
             savings: hbdSavings,
             pendingRewards: pendingHbd,
-        }),
+        }, ASSET_ICON_URLS.HBD),
     ];
 };
 
@@ -901,7 +903,7 @@ const buildEngineLayer = (
 
         const symbol = typeof token.symbol === "string" && token.symbol ? token.symbol : rawSymbol;
         const name = typeof token.name === "string" && token.name ? token.name : symbol;
-        const iconUrl = typeof token.icon === "string" && token.icon ? token.icon : undefined;
+        const iconUrl = typeof token.icon === "string" && token.icon ? token.icon : ASSET_ICON_URLS.ENGINE_PLACEHOLDER;
 
         const pendingRewards = typeof token.pendingRewards === "number" ? token.pendingRewards : undefined;
 
@@ -971,7 +973,7 @@ const buildSpkLayer = (spkData: any, marketData: any, currency: string): Portfol
 
     if (spkBalance !== null) {
         const spkPrice = getTokenPrice(marketData, "spk", currency);
-        items.push(makePortfolioItem("SPK", "SPK", "spk", spkBalance, spkPrice));
+        items.push(makePortfolioItem("SPK", "SPK", "spk", spkBalance, spkPrice, {}, ASSET_ICON_URLS.SPK));
     }
 
     const larynxBalance = readValue("larynx", "LARYNX");
@@ -985,7 +987,7 @@ const buildSpkLayer = (spkData: any, marketData: any, currency: string): Portfol
         items.push(
             makePortfolioItem("LARYNX", "LARYNX", "spk", liquid, larynxPrice, {
                 staked,
-            }),
+            }, ASSET_ICON_URLS.SPK_PLACEHOLDER),
         );
     }
 
@@ -1114,7 +1116,7 @@ const engineContractsRequest = (data: EngineRequestPayload, url: string) => {
 }
 
 //raw engine rewards api call
-const engineRewardsRequest = (username:string, params:any) => {
+const engineRewardsRequest = (username: string, params: any) => {
     const url = `${ENGINE_REWARDS_URL}/@${username}`;
     const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency' };
 
