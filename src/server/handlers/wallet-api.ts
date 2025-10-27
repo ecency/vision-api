@@ -983,11 +983,13 @@ const buildHiveLayer = (
             pendingRewards: hivePendingTotal,
         },
             ASSET_ICON_URLS.HIVE,
-            HIVE_ACTIONS),
+            HIVE_ACTIONS
+        ),
         makePortfolioItem("Hive Dollar", "HBD", "hive", hbdBalance, hbdPrice, {
             savings: hbdSavings,
             pendingRewards: pendingHbd,
-        }, ASSET_ICON_URLS.HBD,
+        },
+            ASSET_ICON_URLS.HBD,
             HBD_ACTIONS),
     ];
 };
@@ -1066,6 +1068,21 @@ const buildEngineLayer = (
             actions.push(EngineActions.UNDELEGATE);
         }
 
+        const extraData = [
+            {
+                dataKey: 'staked',
+                value: token.stake !== 0 ? `${token.stake}` : '0.00',
+            },
+            {
+                dataKey: 'delegations_in',
+                value: token.delegationsIn !== 0 ? `${token.delegationsIn}` : '0.00',
+            },
+            {
+                dataKey: 'delegations_out',
+                value: token.delegationsOut !== 0 ? `${token.delegationsOut}` : '0.00',
+            },
+        ]
+
         items.push(
             makePortfolioItem(
                 name || symbol,
@@ -1075,7 +1092,8 @@ const buildEngineLayer = (
                 fiatRate,
                 itemOptions,
                 iconUrl,
-                actions
+                actions,
+                extraData
             ),
         );
     }
@@ -1133,8 +1151,35 @@ const buildSpkLayer = (spkData: any, marketData: any, currency: string): Portfol
             SPK_ACTIONS));
     }
 
+
     const larynxBalance = readValue("larynx", "LARYNX");
     const larynxPower = readValue("larynx_power", "larynxPower", "LARYNX_POWER");
+
+    //compile larynx power
+    const _larPower = spkData.poweredUp / 1000;
+    const _grantedPwr = spkData.granted?.t ? spkData.granted.t / 1000 : 0;
+    const _grantingPwr = spkData.granting?.t ? spkData.granting.t / 1000 : 0;
+
+    const _netSpkPower = _larPower + _grantedPwr + _grantingPwr;
+
+    const extraData = [
+        ...(spkData.power_downs ? [{
+            dataKey: 'scheduled_power_downs',
+            value: Object.keys(spkData.power_downs).length + '',
+        }] : []),
+        {
+            dataKey: 'delegated_larynx_power',
+            value: `${_grantedPwr.toFixed(3)} LP`,
+        },
+        {
+            dataKey: 'delegating_larynx_power',
+            value: `- ${_grantingPwr.toFixed(3)} LP`,
+        },
+        {
+            dataKey: 'total_larynx_power',
+            value: `${_netSpkPower.toFixed(3)} LP`,
+        }
+    ];
 
     if (larynxBalance !== null || larynxPower !== null) {
         const liquid = larynxBalance !== null ? larynxBalance : 0;
@@ -1146,7 +1191,8 @@ const buildSpkLayer = (spkData: any, marketData: any, currency: string): Portfol
                 staked,
             },
                 ASSET_ICON_URLS.SPK_PLACEHOLDER,
-                LARYNX_ACTIONS),
+                LARYNX_ACTIONS,
+                extraData),
         );
     }
 
