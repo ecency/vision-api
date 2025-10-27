@@ -10,6 +10,53 @@ import { ASSET_ICON_URLS } from "./constants";
 
 type PortfolioLayer = "points" | "hive" | "chain" | "spk" | "engine";
 
+const ECENCY_ACTIONS = ['dropdown_transfer', 'dropdown_promote', 'dropdown_boost'];
+
+const HIVE_ACTIONS = [
+    'transfer_token',
+    'transfer_to_savings',
+    'transfer_to_vesting',
+    'withdraw_hive',
+    'swap_token',
+    'recurrent_transfer',
+    'delegate',
+    'power_down'
+];
+
+const HBD_ACTIONS = [
+    'transfer_token',
+    'transfer_to_savings',
+    'convert',
+    'withdraw_hbd',
+    'swap_token',
+];
+
+const SPK_ACTIONS = [
+    'transfer_spk',
+]
+
+const LARYNX_ACTIONS = [
+    'transfer_larynx_spk',
+    'power_up_spk',
+    'delegate_spk',
+    'power_down_spk',
+];
+
+const CHAIN_ACTIONS = [
+    'receive'
+]
+
+//incorporate engine actions
+export enum EngineActions {
+    TRANSFER = 'transfer',
+    DELEGATE = 'delegate',
+    UNDELEGATE = 'undelegate',
+    STAKE = 'stake',
+    UNSTAKE = 'unstake',
+}
+
+
+
 interface PortfolioItem {
     name: string;
     symbol: string;
@@ -26,6 +73,7 @@ interface PortfolioItem {
     staked?: number;
     stakedFiat?: number;
     iconUrl?: string;
+    actions?: string[]
 }
 
 interface ExternalWalletMetadata {
@@ -345,6 +393,7 @@ const makePortfolioItem = (
     fiatRate: number,
     options: PortfolioItemOptions = {},
     iconUrl?: string,
+    actions?: string[]
 ): PortfolioItem => {
     const normalizedBalance = Number.isFinite(balance) ? balance : 0;
     const normalizedRate = Number.isFinite(fiatRate) ? fiatRate : 0;
@@ -365,6 +414,7 @@ const makePortfolioItem = (
         balance: totalBalance,
         fiatPrice: totalBalance * normalizedRate,
         iconUrl,
+        actions,
         ...(options.address ? { address: options.address } : {}),
         ...(hasPendingRewards
             ? {
@@ -716,6 +766,8 @@ const buildPointsLayer = (pointsData: any, marketData: any, currency: string): P
         return [];
     }
 
+
+
     const possible = [
         pointsData.points,
         pointsData.balance,
@@ -809,7 +861,16 @@ const buildPointsLayer = (pointsData: any, marketData: any, currency: string): P
         options.pendingRewards = pendingRewards;
     }
 
-    return [makePortfolioItem("Ecency Points", "POINTS", "points", balance, price, options, iconUrl)];
+    return [makePortfolioItem(
+        "Ecency Points",
+        "POINTS",
+        "points",
+        balance,
+        price,
+        options,
+        iconUrl,
+        ECENCY_ACTIONS
+    )];
 };
 
 const buildHiveLayer = (
@@ -851,11 +912,14 @@ const buildHiveLayer = (
             savings: hiveSavings,
             staked: hivePower,
             pendingRewards: hivePendingTotal,
-        }, ASSET_ICON_URLS.HIVE),
+        },
+            ASSET_ICON_URLS.HIVE,
+            HIVE_ACTIONS),
         makePortfolioItem("Hive Dollar", "HBD", "hive", hbdBalance, hbdPrice, {
             savings: hbdSavings,
             pendingRewards: pendingHbd,
-        }, ASSET_ICON_URLS.HBD),
+        }, ASSET_ICON_URLS.HBD,
+            HBD_ACTIONS),
     ];
 };
 
@@ -916,6 +980,23 @@ const buildEngineLayer = (
             itemOptions.pendingRewards = pendingRewards;
         }
 
+        //compile actions
+        const actions = [EngineActions.TRANSFER]; // Transfer is always available
+
+        // Add staking related actions if staking is enabled
+        if (token.stakingEnabled) {
+            actions.push(EngineActions.STAKE);
+            if (staked > 0) {
+                actions.push(EngineActions.UNSTAKE);
+            }
+        }
+
+        // Add delegation related actions if delegation is enabled
+        if (token.delegationEnabled) {
+            actions.push(EngineActions.DELEGATE);
+            actions.push(EngineActions.UNDELEGATE);
+        }
+
         items.push(
             makePortfolioItem(
                 name || symbol,
@@ -925,6 +1006,7 @@ const buildEngineLayer = (
                 fiatRate,
                 itemOptions,
                 iconUrl,
+                actions
             ),
         );
     }
@@ -946,6 +1028,8 @@ const buildSpkLayer = (spkData: any, marketData: any, currency: string): Portfol
 
     const readValue = (...keys: string[]): number | null => {
         const candidates: unknown[] = [];
+
+
 
         for (const key of keys) {
             if (balanceSource && typeof balanceSource === "object" && key in balanceSource) {
@@ -974,7 +1058,10 @@ const buildSpkLayer = (spkData: any, marketData: any, currency: string): Portfol
 
     if (spkBalance !== null) {
         const spkPrice = getTokenPrice(marketData, "spk", currency);
-        items.push(makePortfolioItem("SPK", "SPK", "spk", spkBalance, spkPrice, {}, ASSET_ICON_URLS.SPK));
+        items.push(makePortfolioItem("SPK", "SPK", "spk", spkBalance, spkPrice,
+            {},
+            ASSET_ICON_URLS.SPK,
+            SPK_ACTIONS));
     }
 
     const larynxBalance = readValue("larynx", "LARYNX");
@@ -988,7 +1075,9 @@ const buildSpkLayer = (spkData: any, marketData: any, currency: string): Portfol
         items.push(
             makePortfolioItem("LARYNX", "LARYNX", "spk", liquid, larynxPrice, {
                 staked,
-            }, ASSET_ICON_URLS.SPK_PLACEHOLDER),
+            },
+                ASSET_ICON_URLS.SPK_PLACEHOLDER,
+                LARYNX_ACTIONS),
         );
     }
 
@@ -1032,7 +1121,8 @@ const buildChainLayer = async (
                     balance,
                     price,
                     { address: wallet.address },
-                    iconUrl
+                    iconUrl,
+                    CHAIN_ACTIONS
                 );
             } catch (err) {
                 console.warn("Failed to fetch external wallet balance", { chain, address: wallet.address, err });
@@ -1044,6 +1134,8 @@ const buildChainLayer = async (
                     0,
                     price,
                     { address: wallet.address },
+                    config.iconUrl || ASSET_ICON_URLS.CHAIN_PLACEHOLDER,
+                    CHAIN_ACTIONS
                 );
             }
         }),
@@ -1061,14 +1153,14 @@ const ENGINE_NODES = [
     "https://ha.herpc.dtools.dev",
     "https://herpc.kanibot.com",
     "https://herpc.actifit.io",
-  ];
+];
 
 // min and max included
 const randomIntFromInterval = (min: number, max: number) => {
     return Math.floor(Math.random() * (max - min + 1) + min);
 }
 
-let BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0,4)]}/contracts`;
+let BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0, 4)]}/contracts`;
 const BASE_SPK_URL = 'https://spk.good-karma.xyz';
 
 const ENGINE_REWARDS_URL = 'https://scot-api.hive-engine.com/';
@@ -1152,7 +1244,7 @@ export const fetchEngineBalances = async (account: string): Promise<TokenBalance
         return response.data.result;
     }
     catch (e) {
-        BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0,6)]}/contracts`;
+        BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0, 6)]}/contracts`;
         const response = await engineContractsRequest(data, BASE_ENGINE_URL);
 
         if (!response.data?.result) {
@@ -1185,8 +1277,8 @@ export const fetchEngineTokens = async (tokens: string[]): Promise<Token[]> => {
         }
 
         return response.data.result;
-    } catch(e) {
-        BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0,6)]}/contracts`;
+    } catch (e) {
+        BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0, 6)]}/contracts`;
         const response = await engineContractsRequest(data, BASE_ENGINE_URL);
 
         if (!response.data?.result) {
@@ -1219,8 +1311,8 @@ export const fetchEngineMetics = async (tokens: string[]): Promise<EngineMetric[
         }
 
         return response.data.result;
-    } catch(e) {
-        BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0,6)]}/contracts`;
+    } catch (e) {
+        BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0, 6)]}/contracts`;
         const response = await engineContractsRequest(data, BASE_ENGINE_URL);
 
         if (!response.data?.result) {
@@ -1233,21 +1325,21 @@ export const fetchEngineMetics = async (tokens: string[]): Promise<EngineMetric[
 
 export const fetchEngineRewards = async (username: string): Promise<TokenStatus[]> => {
     try {
-        const response = await engineRewardsRequest(username, {hive : 1});
+        const response = await engineRewardsRequest(username, { hive: 1 });
 
-        const rawData:TokenStatus[] = Object.values(response.data);
+        const rawData: TokenStatus[] = Object.values(response.data);
         if (!rawData || rawData.length === 0) {
-          throw new Error('No rewards data returned');
+            throw new Error('No rewards data returned');
         }
 
         const data = rawData.map(convertRewardsStatus);
         const filteredData = data.filter((item) => item && item.pendingToken > 0);
 
         return filteredData;
-      } catch (err) {
+    } catch (err) {
         console.warn('failed to get unclaimed engine rewards', err);
         return [];
-      }
+    }
 }
 
 
@@ -1259,7 +1351,7 @@ const fetchEngineTokensWithBalance = async (username: string) => {
         const balances = await fetchEngineBalances(username);
 
         if (!balances) {
-             throw new Error("failed to fetch engine balances");
+            throw new Error("failed to fetch engine balances");
         }
 
         const symbols = balances.map((t) => t.symbol);
@@ -1386,9 +1478,9 @@ export const portfolioV2 = async (req: express.Request, res: express.Response) =
         const engineOptions =
             onlyEnabledFlag === true
                 ? {
-                      onlyEnabled: true,
-                      allowedSymbols: extractEnabledEngineTokenSymbols(accountData),
-                  }
+                    onlyEnabled: true,
+                    allowedSymbols: extractEnabledEngineTokenSymbols(accountData),
+                }
                 : undefined;
 
         wallets.push(
@@ -1405,8 +1497,8 @@ export const portfolioV2 = async (req: express.Request, res: express.Response) =
             onlyEnabledFlag === undefined
                 ? undefined
                 : {
-                      onlyEnabled: onlyEnabledFlag,
-                  };
+                    onlyEnabled: onlyEnabledFlag,
+                };
         const chainWallets = await buildChainLayer(accountData, marketData, normalizedCurrency, chainOptions);
         wallets.push(...chainWallets);
 
