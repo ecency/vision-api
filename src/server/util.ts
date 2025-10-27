@@ -65,3 +65,19 @@ export const parseAsset = (strVal:string) => {
       symbol: Symbol[sp[1]],
     };
   };
+
+
+/**
+ * calculates hours difference between two dates, negative value will mean first date
+ * is from past time
+ * @param date1 Base date from which date2 will be subtracted
+ * @param date2 Date to be subtracted
+ * @returns number of hours difference between two dates
+ */
+export const getHoursDifferntial = (date1: Date, date2: Date): number => {
+  if (date1 instanceof Date && date2 instanceof Date) {
+    return (Number(date1) - Number(date2)) / (60 * 60 * 1000);
+  }
+
+  return 0;
+};

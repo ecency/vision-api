@@ -1,6 +1,6 @@
 import express from "express";
 
-import { baseApiRequest, pipe, parseToken } from "../util";
+import { baseApiRequest, pipe, parseToken, getHoursDifferntial } from "../util";
 import { fetchGlobalProps, getAccount } from "./hive-explorer";
 import { apiRequest, ChainBalanceResponse } from "../helper";
 
@@ -19,9 +19,12 @@ const HIVE_ACTIONS = [
     'withdraw_hive',
     'swap_token',
     'recurrent_transfer',
+];
+
+const HP_ACTIONS = [
     'delegate',
     'power_down'
-];
+]
 
 const HBD_ACTIONS = [
     'transfer_token',
@@ -74,6 +77,7 @@ interface PortfolioItem {
     stakedFiat?: number;
     iconUrl?: string;
     actions?: string[]
+    extraData?: Array<{ key: string; value: any }>;
 }
 
 interface ExternalWalletMetadata {
@@ -393,7 +397,8 @@ const makePortfolioItem = (
     fiatRate: number,
     options: PortfolioItemOptions = {},
     iconUrl?: string,
-    actions?: string[]
+    actions?: string[],
+    extraData?: Array<{ dataKey: string; value: any }>
 ): PortfolioItem => {
     const normalizedBalance = Number.isFinite(balance) ? balance : 0;
     const normalizedRate = Number.isFinite(fiatRate) ? fiatRate : 0;
@@ -415,6 +420,7 @@ const makePortfolioItem = (
         fiatPrice: totalBalance * normalizedRate,
         iconUrl,
         actions,
+        extraData,
         ...(options.address ? { address: options.address } : {}),
         ...(hasPendingRewards
             ? {
@@ -907,7 +913,70 @@ const buildHiveLayer = (
 
     const hivePendingTotal = pendingHive + pendingHivePower;
 
+
+
+    // aaggregate extra data pairs
+    const extraData: { dataKey: string, value: string, subValue?: string }[] = [];
+    const delegatedHP = vestsToHivePower(delegatedVests, hivePerMVests);
+    const receivedHP = vestsToHivePower(receivedVests, hivePerMVests);
+
+    //calculate powering down hive power
+    const pwrDwnHoursLeft = getHoursDifferntial(
+        new Date(`${accountData.next_vesting_withdrawal}.000Z`),
+        new Date(),
+    );
+    const isPoweringDown = pwrDwnHoursLeft > 0;
+
+    const nextVestingSharesWithdrawal = isPoweringDown
+        ? Math.min(
+            parseToken(accountData.vesting_withdraw_rate || "0 VESTS"),
+            (Number(accountData.to_withdraw) - Number(accountData.withdrawn)) / 1e6,
+        )
+        : 0;
+    const nextVestingSharesWithdrawalHive = isPoweringDown
+        ? vestsToHivePower(nextVestingSharesWithdrawal, hivePerMVests)
+        : 0;
+    if (delegatedHP) {
+        extraData.push({
+            dataKey: 'delegated_hive_power',
+            value: `- ${delegatedHP.toFixed(3)} HP`,
+        });
+    }
+
+    if (receivedHP) {
+        extraData.push({
+            dataKey: 'received_hive_power',
+            value: `+ ${receivedHP.toFixed(3)} HP`,
+        });
+    }
+
+    if (nextVestingSharesWithdrawalHive) {
+        extraData.push({
+            dataKey: 'powering_down_hive_power',
+            value: `- ${nextVestingSharesWithdrawalHive.toFixed(3)} HP`,
+            subValue: `${Math.round(pwrDwnHoursLeft)}h`,
+        });
+    }
+
+    extraData.push(
+        {
+            dataKey: 'total_hive_power',
+            value: `${(
+                hivePower -
+                delegatedHP +
+                receivedHP -
+                nextVestingSharesWithdrawalHive
+            ).toFixed(3)} HP`,
+        },
+    );
+
     return [
+        makePortfolioItem("Hive Power", "HP", "hive", hivePower, hivePrice,
+            {},
+            ASSET_ICON_URLS.HIVE,
+            HP_ACTIONS,
+            extraData
+        ),
         makePortfolioItem("Hive", "HIVE", "hive", hiveBalance, hivePrice, {
             savings: hiveSavings,
             staked: hivePower,
