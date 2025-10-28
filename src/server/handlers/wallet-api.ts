@@ -10,44 +10,57 @@ import { ASSET_ICON_URLS } from "./constants";
 
 type PortfolioLayer = "points" | "hive" | "chain" | "spk" | "engine";
 
-const ECENCY_ACTIONS = ['dropdown_transfer', 'dropdown_promote', 'dropdown_boost'];
+interface TokenAction {
+    id: string;
+    //Later Add support for other properties required for dynamically generating ops on app end
+    //to:string
+    //from:string
+    //memoSupported:boolean
+    //precision:number
+    //etc
+}
 
-const HIVE_ACTIONS = [
-    'transfer_token',
+const ECENCY_ACTIONS = ['ecency_point_transfer', 'promote', 'boost'].map(actionId => ({ id: actionId }));
+
+const HIVE_ACTIONS: Array<TokenAction> = [
+    'transfer',
     'transfer_to_savings',
     'transfer_to_vesting',
-    'withdraw_hive',
+    'transfer_from_savings',
     'swap_token',
     'recurrent_transfer',
-];
+].map(actionId => ({ id: actionId }));
 
 const HP_ACTIONS = [
-    'delegate',
-    'power_down'
-]
+    'delegate_vesting_shares',
+    'withdraw_vesting'
+].map(actionId => ({ id: actionId }));
 
 const HBD_ACTIONS = [
-    'transfer_token',
+    'transfer',
     'transfer_to_savings',
     'convert',
-    'withdraw_hbd',
+    'transfer_from_savings',
     'swap_token',
-];
+].map(actionId => ({ id: actionId }));
 
 const SPK_ACTIONS = [
-    'transfer_spk',
-]
+    'spkcc_spk_send',
+].map(actionId => ({ id: actionId }));
 
 const LARYNX_ACTIONS = [
     'transfer_larynx_spk',
-    'power_up_spk',
-    'delegate_spk',
-    'power_down_spk',
-];
+    'spkcc_send',
+    'spkcc_power_grant',
+    'spkcc_power_up',
+    'spkcc_power_down',
+].map(actionId => ({ id: actionId }));
 
 const CHAIN_ACTIONS = [
     'receive'
-]
+].map(actionId => ({ id: actionId }));
+
+
 
 //incorporate engine actions
 export enum EngineActions {
@@ -76,8 +89,8 @@ interface PortfolioItem {
     staked?: number;
     stakedFiat?: number;
     iconUrl?: string;
-    actions?: string[]
-    extraData?: Array<{ key: string; value: any }>;
+    actions?: TokenAction[]
+    extraData?: Array<{ dataKey: string; value: any }>;
 }
 
 interface ExternalWalletMetadata {
@@ -101,7 +114,7 @@ const CHAIN_CONFIG: Record<string, ChainConfig> = {
     eth: { name: "Ethereum", symbol: "ETH", decimals: 18, iconUrl: ASSET_ICON_URLS.ETH },
     bnb: { name: "BNB Chain", symbol: "BNB", decimals: 18, iconUrl: ASSET_ICON_URLS.BNB },
     sol: { name: "Solana", symbol: "SOL", decimals: 9, iconUrl: ASSET_ICON_URLS.SOL },
-    tron: { name: "Tron", symbol: "TRX", decimals: 6, aliases: ["trx"], iconUrl: ASSET_ICON_URLS.TRX },
+    tron: { name: "Tron", symbol: "TRX", decimals: 6, aliases: ["trx"], iconUrl: ASSET_ICON_URLS.TRON },
     ton: { name: "TON", symbol: "TON", decimals: 9, iconUrl: ASSET_ICON_URLS.TON },
     apt: { name: "Aptos", symbol: "APT", decimals: 8, iconUrl: ASSET_ICON_URLS.APT },
 };
@@ -397,7 +410,7 @@ const makePortfolioItem = (
     fiatRate: number,
     options: PortfolioItemOptions = {},
     iconUrl?: string,
-    actions?: string[],
+    actions?: TokenAction[],
     extraData?: Array<{ dataKey: string; value: any }>
 ): PortfolioItem => {
     const normalizedBalance = Number.isFinite(balance) ? balance : 0;
