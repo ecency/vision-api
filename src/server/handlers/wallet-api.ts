@@ -1,13 +1,77 @@
 import express from "express";
 
-import { baseApiRequest, pipe, parseToken } from "../util";
+import { baseApiRequest, pipe, parseToken, getHoursDifferntial } from "../util";
 import { fetchGlobalProps, getAccount } from "./hive-explorer";
 import { apiRequest, ChainBalanceResponse } from "../helper";
 
 import { EngineContracts, EngineIds, EngineMetric, EngineRequestPayload, EngineTables, JSON_RPC, Methods, Token, TokenBalance, TokenStatus } from "../../models/hiveEngine.types";
 import { convertEngineToken, convertRewardsStatus } from "../../models/converters";
+import { ASSET_ICON_URLS } from "./constants";
 
 type PortfolioLayer = "points" | "hive" | "chain" | "spk" | "engine";
+
+interface TokenAction {
+    id: string;
+    //Later Add support for other properties required for dynamically generating ops on app end
+    //to:string
+    //from:string
+    //memoSupported:boolean
+    //precision:number
+    //etc
+}
+
+const ECENCY_ACTIONS = ['ecency_point_transfer', 'promote', 'boost'].map(actionId => ({ id: actionId }));
+
+const HIVE_ACTIONS: Array<TokenAction> = [
+    'transfer',
+    'transfer_to_savings',
+    'transfer_to_vesting',
+    'transfer_from_savings',
+    'swap_token',
+    'recurrent_transfer',
+].map(actionId => ({ id: actionId }));
+
+const HP_ACTIONS = [
+    'delegate_vesting_shares',
+    'withdraw_vesting'
+].map(actionId => ({ id: actionId }));
+
+const HBD_ACTIONS = [
+    'transfer',
+    'transfer_to_savings',
+    'convert',
+    'transfer_from_savings',
+    'swap_token',
+].map(actionId => ({ id: actionId }));
+
+const SPK_ACTIONS = [
+    'spkcc_spk_send',
+].map(actionId => ({ id: actionId }));
+
+const LARYNX_ACTIONS = [
+    'transfer_larynx_spk',
+    'spkcc_send',
+    'spkcc_power_grant',
+    'spkcc_power_up',
+    'spkcc_power_down',
+].map(actionId => ({ id: actionId }));
+
+const CHAIN_ACTIONS = [
+    'receive'
+].map(actionId => ({ id: actionId }));
+
+
+
+//incorporate engine actions
+export enum EngineActions {
+    TRANSFER = 'transfer',
+    DELEGATE = 'delegate',
+    UNDELEGATE = 'undelegate',
+    STAKE = 'stake',
+    UNSTAKE = 'unstake',
+}
+
+
 
 interface PortfolioItem {
     name: string;
@@ -24,6 +88,9 @@ interface PortfolioItem {
     savingsFiat?: number;
     staked?: number;
     stakedFiat?: number;
+    iconUrl?: string;
+    actions?: TokenAction[]
+    extraData?: Array<{ dataKey: string; value: any }>;
 }
 
 interface ExternalWalletMetadata {
@@ -39,16 +106,17 @@ interface ChainConfig {
     symbol: string;
     decimals: number;
     aliases?: string[];
+    iconUrl?: string;
 }
 
 const CHAIN_CONFIG: Record<string, ChainConfig> = {
-    btc: { name: "Bitcoin", symbol: "BTC", decimals: 8, aliases: ["bitcoin"] },
-    eth: { name: "Ethereum", symbol: "ETH", decimals: 18 },
-    bnb: { name: "BNB Chain", symbol: "BNB", decimals: 18 },
-    sol: { name: "Solana", symbol: "SOL", decimals: 9 },
-    tron: { name: "Tron", symbol: "TRX", decimals: 6, aliases: ["trx"] },
-    ton: { name: "TON", symbol: "TON", decimals: 9 },
-    apt: { name: "Aptos", symbol: "APT", decimals: 8 },
+    btc: { name: "Bitcoin", symbol: "BTC", decimals: 8, aliases: ["bitcoin"], iconUrl: ASSET_ICON_URLS.BTC },
+    eth: { name: "Ethereum", symbol: "ETH", decimals: 18, iconUrl: ASSET_ICON_URLS.ETH },
+    bnb: { name: "BNB Chain", symbol: "BNB", decimals: 18, iconUrl: ASSET_ICON_URLS.BNB },
+    sol: { name: "Solana", symbol: "SOL", decimals: 9, iconUrl: ASSET_ICON_URLS.SOL },
+    tron: { name: "Tron", symbol: "TRX", decimals: 6, aliases: ["trx"], iconUrl: ASSET_ICON_URLS.TRON },
+    ton: { name: "TON", symbol: "TON", decimals: 9, iconUrl: ASSET_ICON_URLS.TON },
+    apt: { name: "Aptos", symbol: "APT", decimals: 8, iconUrl: ASSET_ICON_URLS.APT },
 };
 
 const CHAIN_SYMBOL_LOOKUP = new Map<string, { key: string; config: ChainConfig }>();
@@ -341,6 +409,9 @@ const makePortfolioItem = (
     balance: number,
     fiatRate: number,
     options: PortfolioItemOptions = {},
+    iconUrl?: string,
+    actions?: TokenAction[],
+    extraData?: Array<{ dataKey: string; value: any }>
 ): PortfolioItem => {
     const normalizedBalance = Number.isFinite(balance) ? balance : 0;
     const normalizedRate = Number.isFinite(fiatRate) ? fiatRate : 0;
@@ -360,12 +431,15 @@ const makePortfolioItem = (
         layer,
         balance: totalBalance,
         fiatPrice: totalBalance * normalizedRate,
+        iconUrl,
+        actions,
+        extraData,
         ...(options.address ? { address: options.address } : {}),
         ...(hasPendingRewards
             ? {
-                  pendingRewards: normalizedPendingRewards || 0,
-                  pendingRewardsFiat: (normalizedPendingRewards || 0) * normalizedRate,
-              }
+                pendingRewards: normalizedPendingRewards || 0,
+                pendingRewardsFiat: (normalizedPendingRewards || 0) * normalizedRate,
+            }
             : {}),
     };
 
@@ -711,6 +785,8 @@ const buildPointsLayer = (pointsData: any, marketData: any, currency: string): P
         return [];
     }
 
+
+
     const possible = [
         pointsData.points,
         pointsData.balance,
@@ -796,6 +872,7 @@ const buildPointsLayer = (pointsData: any, marketData: any, currency: string): P
     }
 
     const price = getTokenPrice(marketData, "points", currency);
+    const iconUrl = ASSET_ICON_URLS.POINTS;
 
     const options: PortfolioItemOptions = {};
 
@@ -803,7 +880,16 @@ const buildPointsLayer = (pointsData: any, marketData: any, currency: string): P
         options.pendingRewards = pendingRewards;
     }
 
-    return [makePortfolioItem("Ecency Points", "POINTS", "points", balance, price, options)];
+    return [makePortfolioItem(
+        "Ecency Points",
+        "POINTS",
+        "points",
+        balance,
+        price,
+        options,
+        iconUrl,
+        ECENCY_ACTIONS
+    )];
 };
 
 const buildHiveLayer = (
@@ -840,16 +926,84 @@ const buildHiveLayer = (
 
     const hivePendingTotal = pendingHive + pendingHivePower;
 
+
+
+    // aaggregate extra data pairs
+    const extraData: { dataKey: string, value: string, subValue?: string }[] = [];
+    const delegatedHP = vestsToHivePower(delegatedVests, hivePerMVests);
+    const receivedHP = vestsToHivePower(receivedVests, hivePerMVests);
+
+    //calculate powering down hive power
+    const pwrDwnHoursLeft = getHoursDifferntial(
+        new Date(`${accountData.next_vesting_withdrawal}.000Z`),
+        new Date(),
+    );
+    const isPoweringDown = pwrDwnHoursLeft > 0;
+
+    const nextVestingSharesWithdrawal = isPoweringDown
+        ? Math.min(
+            parseToken(accountData.vesting_withdraw_rate || "0 VESTS"),
+            (Number(accountData.to_withdraw) - Number(accountData.withdrawn)) / 1e6,
+        )
+        : 0;
+    const nextVestingSharesWithdrawalHive = isPoweringDown
+        ? vestsToHivePower(nextVestingSharesWithdrawal, hivePerMVests)
+        : 0;
+    if (delegatedHP) {
+        extraData.push({
+            dataKey: 'delegated_hive_power',
+            value: `- ${delegatedHP.toFixed(3)} HP`,
+        });
+    }
+
+    if (receivedHP) {
+        extraData.push({
+            dataKey: 'received_hive_power',
+            value: `+ ${receivedHP.toFixed(3)} HP`,
+        });
+    }
+
+    if (nextVestingSharesWithdrawalHive) {
+        extraData.push({
+            dataKey: 'powering_down_hive_power',
+            value: `- ${nextVestingSharesWithdrawalHive.toFixed(3)} HP`,
+            subValue: `${Math.round(pwrDwnHoursLeft)}h`,
+        });
+    }
+
+    extraData.push(
+        {
+            dataKey: 'total_hive_power',
+            value: `${(
+                hivePower -
+                delegatedHP +
+                receivedHP -
+                nextVestingSharesWithdrawalHive
+            ).toFixed(3)} HP`,
+        },
+    );
+
     return [
+        makePortfolioItem("Hive Power", "HP", "hive", hivePower, hivePrice,
+            {},
+            ASSET_ICON_URLS.HIVE,
+            HP_ACTIONS,
+            extraData
+        ),
         makePortfolioItem("Hive", "HIVE", "hive", hiveBalance, hivePrice, {
             savings: hiveSavings,
             staked: hivePower,
             pendingRewards: hivePendingTotal,
-        }),
+        },
+            ASSET_ICON_URLS.HIVE,
+            HIVE_ACTIONS
+        ),
         makePortfolioItem("Hive Dollar", "HBD", "hive", hbdBalance, hbdPrice, {
             savings: hbdSavings,
             pendingRewards: pendingHbd,
-        }),
+        },
+            ASSET_ICON_URLS.HBD,
+            HBD_ACTIONS),
     ];
 };
 
@@ -898,6 +1052,7 @@ const buildEngineLayer = (
 
         const symbol = typeof token.symbol === "string" && token.symbol ? token.symbol : rawSymbol;
         const name = typeof token.name === "string" && token.name ? token.name : symbol;
+        const iconUrl = typeof token.icon === "string" && token.icon ? token.icon : ASSET_ICON_URLS.ENGINE_PLACEHOLDER;
 
         const pendingRewards = typeof token.pendingRewards === "number" ? token.pendingRewards : undefined;
 
@@ -909,6 +1064,38 @@ const buildEngineLayer = (
             itemOptions.pendingRewards = pendingRewards;
         }
 
+        //compile actions
+        const actions: TokenAction[] = [{ id: EngineActions.TRANSFER }]; // Transfer is always available
+
+        // Add staking related actions if staking is enabled
+        if (token.stakingEnabled) {
+            actions.push({ id: EngineActions.STAKE });
+            if (staked > 0) {
+                actions.push({ id: EngineActions.UNSTAKE });
+            }
+        }
+
+        // Add delegation related actions if delegation is enabled
+        if (token.delegationEnabled) {
+            actions.push({ id: EngineActions.DELEGATE });
+            actions.push({ id: EngineActions.UNDELEGATE });
+        }
+
+        const extraData = [
+            {
+                dataKey: 'staked',
+                value: token.stake !== 0 ? `${token.stake}` : '0.00',
+            },
+            {
+                dataKey: 'delegations_in',
+                value: token.delegationsIn !== 0 ? `${token.delegationsIn}` : '0.00',
+            },
+            {
+                dataKey: 'delegations_out',
+                value: token.delegationsOut !== 0 ? `${token.delegationsOut}` : '0.00',
+            },
+        ]
+
         items.push(
             makePortfolioItem(
                 name || symbol,
@@ -917,6 +1104,9 @@ const buildEngineLayer = (
                 balance,
                 fiatRate,
                 itemOptions,
+                iconUrl,
+                actions,
+                extraData
             ),
         );
     }
@@ -938,6 +1128,8 @@ const buildSpkLayer = (spkData: any, marketData: any, currency: string): Portfol
 
     const readValue = (...keys: string[]): number | null => {
         const candidates: unknown[] = [];
+
+
 
         for (const key of keys) {
             if (balanceSource && typeof balanceSource === "object" && key in balanceSource) {
@@ -966,11 +1158,41 @@ const buildSpkLayer = (spkData: any, marketData: any, currency: string): Portfol
 
     if (spkBalance !== null) {
         const spkPrice = getTokenPrice(marketData, "spk", currency);
-        items.push(makePortfolioItem("SPK", "SPK", "spk", spkBalance, spkPrice));
+        items.push(makePortfolioItem("SPK", "SPK", "spk", spkBalance, spkPrice,
+            {},
+            ASSET_ICON_URLS.SPK,
+            SPK_ACTIONS));
     }
+
 
     const larynxBalance = readValue("larynx", "LARYNX");
     const larynxPower = readValue("larynx_power", "larynxPower", "LARYNX_POWER");
+
+    //compile larynx power
+    const _larPower = spkData.poweredUp / 1000;
+    const _grantedPwr = spkData.granted?.t ? spkData.granted.t / 1000 : 0;
+    const _grantingPwr = spkData.granting?.t ? spkData.granting.t / 1000 : 0;
+
+    const _netSpkPower = _larPower + _grantedPwr + _grantingPwr;
+
+    const extraData = [
+        ...(spkData.power_downs ? [{
+            dataKey: 'scheduled_power_downs',
+            value: Object.keys(spkData.power_downs).length + '',
+        }] : []),
+        {
+            dataKey: 'delegated_larynx_power',
+            value: `${_grantedPwr.toFixed(3)} LP`,
+        },
+        {
+            dataKey: 'delegating_larynx_power',
+            value: `- ${_grantingPwr.toFixed(3)} LP`,
+        },
+        {
+            dataKey: 'total_larynx_power',
+            value: `${_netSpkPower.toFixed(3)} LP`,
+        }
+    ];
 
     if (larynxBalance !== null || larynxPower !== null) {
         const liquid = larynxBalance !== null ? larynxBalance : 0;
@@ -980,7 +1202,10 @@ const buildSpkLayer = (spkData: any, marketData: any, currency: string): Portfol
         items.push(
             makePortfolioItem("LARYNX", "LARYNX", "spk", liquid, larynxPrice, {
                 staked,
-            }),
+            },
+                ASSET_ICON_URLS.SPK_PLACEHOLDER,
+                LARYNX_ACTIONS,
+                extraData),
         );
     }
 
@@ -1015,6 +1240,8 @@ const buildChainLayer = async (
                 const balance = convertChainBalanceToAmount(data, decimals);
                 const price = getTokenPrice(marketData, wallet.symbol, currency);
 
+                const iconUrl = config.iconUrl || ASSET_ICON_URLS.CHAIN_PLACEHOLDER
+
                 return makePortfolioItem(
                     wallet.name || config.name,
                     wallet.symbol || config.symbol,
@@ -1022,6 +1249,8 @@ const buildChainLayer = async (
                     balance,
                     price,
                     { address: wallet.address },
+                    iconUrl,
+                    CHAIN_ACTIONS
                 );
             } catch (err) {
                 console.warn("Failed to fetch external wallet balance", { chain, address: wallet.address, err });
@@ -1033,6 +1262,8 @@ const buildChainLayer = async (
                     0,
                     price,
                     { address: wallet.address },
+                    config.iconUrl || ASSET_ICON_URLS.CHAIN_PLACEHOLDER,
+                    CHAIN_ACTIONS
                 );
             }
         }),
@@ -1050,14 +1281,16 @@ const ENGINE_NODES = [
     "https://ha.herpc.dtools.dev",
     "https://herpc.kanibot.com",
     "https://herpc.actifit.io",
-  ];
+];
 
 // min and max included
 const randomIntFromInterval = (min: number, max: number) => {
     return Math.floor(Math.random() * (max - min + 1) + min);
 }
 
-let BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0,4)]}/contracts`;
+const pickRandomEngineUrl = () => `${ENGINE_NODES[randomIntFromInterval(0, ENGINE_NODES.length - 1)]}/contracts`;
+
+let BASE_ENGINE_URL = pickRandomEngineUrl();
 const BASE_SPK_URL = 'https://spk.good-karma.xyz';
 
 const ENGINE_REWARDS_URL = 'https://scot-api.hive-engine.com/';
@@ -1109,7 +1342,7 @@ const engineContractsRequest = (data: EngineRequestPayload, url: string) => {
 }
 
 //raw engine rewards api call
-const engineRewardsRequest = (username:string, params:any) => {
+const engineRewardsRequest = (username: string, params: any) => {
     const url = `${ENGINE_REWARDS_URL}/@${username}`;
     const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency' };
 
@@ -1141,7 +1374,7 @@ export const fetchEngineBalances = async (account: string): Promise<TokenBalance
         return response.data.result;
     }
     catch (e) {
-        BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0,6)]}/contracts`;
+        BASE_ENGINE_URL = pickRandomEngineUrl();
         const response = await engineContractsRequest(data, BASE_ENGINE_URL);
 
         if (!response.data?.result) {
@@ -1174,8 +1407,8 @@ export const fetchEngineTokens = async (tokens: string[]): Promise<Token[]> => {
         }
 
         return response.data.result;
-    } catch(e) {
-        BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0,6)]}/contracts`;
+    } catch (e) {
+        BASE_ENGINE_URL = pickRandomEngineUrl();
         const response = await engineContractsRequest(data, BASE_ENGINE_URL);
 
         if (!response.data?.result) {
@@ -1208,8 +1441,8 @@ export const fetchEngineMetics = async (tokens: string[]): Promise<EngineMetric[
         }
 
         return response.data.result;
-    } catch(e) {
-        BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0,6)]}/contracts`;
+    } catch (e) {
+        BASE_ENGINE_URL = pickRandomEngineUrl();
         const response = await engineContractsRequest(data, BASE_ENGINE_URL);
 
         if (!response.data?.result) {
@@ -1222,21 +1455,21 @@ export const fetchEngineMetics = async (tokens: string[]): Promise<EngineMetric[
 
 export const fetchEngineRewards = async (username: string): Promise<TokenStatus[]> => {
     try {
-        const response = await engineRewardsRequest(username, {hive : 1});
+        const response = await engineRewardsRequest(username, { hive: 1 });
 
-        const rawData:TokenStatus[] = Object.values(response.data);
+        const rawData: TokenStatus[] = Object.values(response.data);
         if (!rawData || rawData.length === 0) {
-          throw new Error('No rewards data returned');
+            throw new Error('No rewards data returned');
         }
 
         const data = rawData.map(convertRewardsStatus);
         const filteredData = data.filter((item) => item && item.pendingToken > 0);
 
         return filteredData;
-      } catch (err) {
+    } catch (err) {
         console.warn('failed to get unclaimed engine rewards', err);
         return [];
-      }
+    }
 }
 
 
@@ -1248,7 +1481,7 @@ const fetchEngineTokensWithBalance = async (username: string) => {
         const balances = await fetchEngineBalances(username);
 
         if (!balances) {
-             throw new Error("failed to fetch engine balances");
+            throw new Error("failed to fetch engine balances");
         }
 
         const symbols = balances.map((t) => t.symbol);
@@ -1375,9 +1608,9 @@ export const portfolioV2 = async (req: express.Request, res: express.Response) =
         const engineOptions =
             onlyEnabledFlag === true
                 ? {
-                      onlyEnabled: true,
-                      allowedSymbols: extractEnabledEngineTokenSymbols(accountData),
-                  }
+                    onlyEnabled: true,
+                    allowedSymbols: extractEnabledEngineTokenSymbols(accountData),
+                }
                 : undefined;
 
         wallets.push(
@@ -1394,8 +1627,8 @@ export const portfolioV2 = async (req: express.Request, res: express.Response) =
             onlyEnabledFlag === undefined
                 ? undefined
                 : {
-                      onlyEnabled: onlyEnabledFlag,
-                  };
+                    onlyEnabled: onlyEnabledFlag,
+                };
         const chainWallets = await buildChainLayer(accountData, marketData, normalizedCurrency, chainOptions);
         wallets.push(...chainWallets);
 
