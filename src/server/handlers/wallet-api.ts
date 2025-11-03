@@ -1065,20 +1065,20 @@ const buildEngineLayer = (
         }
 
         //compile actions
-        const actions = [EngineActions.TRANSFER]; // Transfer is always available
+        const actions: TokenAction[] = [{ id: EngineActions.TRANSFER }]; // Transfer is always available
 
         // Add staking related actions if staking is enabled
         if (token.stakingEnabled) {
-            actions.push(EngineActions.STAKE);
+            actions.push({ id: EngineActions.STAKE });
             if (staked > 0) {
-                actions.push(EngineActions.UNSTAKE);
+                actions.push({ id: EngineActions.UNSTAKE });
             }
         }
 
         // Add delegation related actions if delegation is enabled
         if (token.delegationEnabled) {
-            actions.push(EngineActions.DELEGATE);
-            actions.push(EngineActions.UNDELEGATE);
+            actions.push({ id: EngineActions.DELEGATE });
+            actions.push({ id: EngineActions.UNDELEGATE });
         }
 
         const extraData = [
@@ -1288,7 +1288,9 @@ const randomIntFromInterval = (min: number, max: number) => {
     return Math.floor(Math.random() * (max - min + 1) + min);
 }
 
-let BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0, 4)]}/contracts`;
+const pickRandomEngineUrl = () => `${ENGINE_NODES[randomIntFromInterval(0, ENGINE_NODES.length - 1)]}/contracts`;
+
+let BASE_ENGINE_URL = pickRandomEngineUrl();
 const BASE_SPK_URL = 'https://spk.good-karma.xyz';
 
 const ENGINE_REWARDS_URL = 'https://scot-api.hive-engine.com/';
@@ -1372,7 +1374,7 @@ export const fetchEngineBalances = async (account: string): Promise<TokenBalance
         return response.data.result;
     }
     catch (e) {
-        BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0, 6)]}/contracts`;
+        BASE_ENGINE_URL = pickRandomEngineUrl();
         const response = await engineContractsRequest(data, BASE_ENGINE_URL);
 
         if (!response.data?.result) {
@@ -1406,7 +1408,7 @@ export const fetchEngineTokens = async (tokens: string[]): Promise<Token[]> => {
 
         return response.data.result;
     } catch (e) {
-        BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0, 6)]}/contracts`;
+        BASE_ENGINE_URL = pickRandomEngineUrl();
         const response = await engineContractsRequest(data, BASE_ENGINE_URL);
 
         if (!response.data?.result) {
@@ -1440,7 +1442,7 @@ export const fetchEngineMetics = async (tokens: string[]): Promise<EngineMetric[
 
         return response.data.result;
     } catch (e) {
-        BASE_ENGINE_URL = `${ENGINE_NODES[randomIntFromInterval(0, 6)]}/contracts`;
+        BASE_ENGINE_URL = pickRandomEngineUrl();
         const response = await engineContractsRequest(data, BASE_ENGINE_URL);
 
         if (!response.data?.result) {
