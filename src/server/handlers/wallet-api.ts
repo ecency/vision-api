@@ -319,6 +319,196 @@ const parseBoolean = (value: unknown): boolean | undefined => {
     return undefined;
 };
 
+
+const createCurrencyKeyVariants = (currencyKey: string, baseKey?: string): string[] => {
+    const normalizedCurrency = currencyKey.toLowerCase();
+    const upperCurrency = normalizedCurrency.toUpperCase();
+    const capitalizedCurrency =
+        normalizedCurrency.length > 0
+            ? normalizedCurrency.charAt(0).toUpperCase() + normalizedCurrency.slice(1)
+            : normalizedCurrency;
+
+    const currencyVariants = [normalizedCurrency, upperCurrency, capitalizedCurrency];
+
+    if (!baseKey) {
+        return Array.from(new Set(currencyVariants));
+    }
+
+    const normalizedBase = baseKey.toLowerCase();
+    const upperBase = normalizedBase.toUpperCase();
+    const capitalizedBase =
+        normalizedBase.length > 0
+            ? normalizedBase.charAt(0).toUpperCase() + normalizedBase.slice(1)
+            : normalizedBase;
+
+    const baseVariants = [normalizedBase, upperBase, capitalizedBase];
+    const separators = ["", "_", "-", ".", "/"];
+    const results = new Set<string>();
+
+    currencyVariants.forEach((currencyVariant) => {
+        baseVariants.forEach((baseVariant) => {
+            separators.forEach((separator) => {
+                results.add(`${currencyVariant}${separator}${baseVariant}`);
+                results.add(`${baseVariant}${separator}${currencyVariant}`);
+            });
+        });
+    });
+
+    return Array.from(results);
+};
+
+const extractPriceFromValue = (
+    value: any,
+    currencyKey: string,
+    visited: Set<any> = new Set<any>(),
+): number | null => {
+    if (typeof value === "number") {
+        return Number.isFinite(value) ? value : null;
+    }
+
+    if (typeof value === "string") {
+        const parsed = parseMaybeNumber(value);
+        return parsed !== null ? parsed : null;
+    }
+
+    if (!value || typeof value !== "object") {
+        return null;
+    }
+
+    if (visited.has(value)) {
+        return null;
+    }
+    visited.add(value);
+
+    if (Array.isArray(value)) {
+        for (const entry of value) {
+            const result = extractPriceFromValue(entry, currencyKey, visited);
+            if (result !== null) {
+                return result;
+            }
+        }
+        return null;
+    }
+
+    const directKeys = createCurrencyKeyVariants(currencyKey);
+    for (const key of directKeys) {
+        if (Object.prototype.hasOwnProperty.call(value, key)) {
+            const result = extractPriceFromValue((value as any)[key], currencyKey, visited);
+            if (result !== null) {
+                return result;
+            }
+        }
+    }
+
+    const baseKeys = ["price", "rate", "value", "amount", "last", "lastPrice", "lastValue"];
+    for (const baseKey of baseKeys) {
+        const variants = createCurrencyKeyVariants(currencyKey, baseKey);
+        for (const key of variants) {
+            if (Object.prototype.hasOwnProperty.call(value, key)) {
+                const result = extractPriceFromValue((value as any)[key], currencyKey, visited);
+                if (result !== null) {
+                    return result;
+                }
+            }
+        }
+    }
+
+    for (const baseKey of baseKeys) {
+        if (Object.prototype.hasOwnProperty.call(value, baseKey)) {
+            const result = extractPriceFromValue((value as any)[baseKey], currencyKey, visited);
+            if (result !== null) {
+                return result;
+            }
+        }
+    }
+
+    const nestedKeys = [
+        "data",
+        "result",
+        "results",
+        "quote",
+        "quotes",
+        "current",
+        "current_price",
+        "currentPrice",
+        "market",
+        "markets",
+        "metrics",
+        "stats",
+        "values",
+        "priceData",
+        "price_data",
+    ];
+
+    for (const nestedKey of nestedKeys) {
+        if (Object.prototype.hasOwnProperty.call(value, nestedKey)) {
+            const result = extractPriceFromValue((value as any)[nestedKey], currencyKey, visited);
+            if (result !== null) {
+                return result;
+            }
+        }
+    }
+
+    return null;
+};
+
+const collectContainers = (
+    root: any,
+    depth: number,
+    visited: Set<any> = new Set<any>(),
+): any[] => {
+    if (!root || typeof root !== "object" || visited.has(root) || depth < 0) {
+        return [];
+    }
+
+    visited.add(root);
+
+    const results: any[] = [root];
+
+    if (depth === 0) {
+        return results;
+    }
+
+    const nestedKeys = [
+        "data",
+        "result",
+        "results",
+        "payload",
+        "response",
+        "market",
+        "markets",
+        "prices",
+        "priceData",
+        "price_data",
+        "tokens",
+        "tokenPrices",
+        "token_prices",
+        "tokenprices",
+        "items",
+        "entries",
+        "list",
+        "assets",
+        "values",
+    ];
+
+    for (const key of nestedKeys) {
+        const nested = (root as any)[key];
+        if (nested && typeof nested === "object") {
+            results.push(...collectContainers(nested, depth - 1, visited));
+        }
+    }
+
+    if (Array.isArray(root)) {
+        for (const entry of root) {
+            if (entry && typeof entry === "object") {
+                results.push(...collectContainers(entry, depth - 1, visited));
+            }
+        }
+    }
+
+    return results;
+};
+
 const getTokenPrice = (marketData: any, token: string, currency: string): number => {
     if (!marketData || !token) {
         return 0;
@@ -328,72 +518,105 @@ const getTokenPrice = (marketData: any, token: string, currency: string): number
     const tokenKey = token.toLowerCase();
     const upperToken = token.toUpperCase();
 
+    const containers = collectContainers(marketData, 3);
     const candidates: any[] = [];
 
-    if (marketData && typeof marketData === "object") {
-        if (tokenKey in marketData) {
-            candidates.push((marketData as any)[tokenKey]);
+    const addCandidate = (value: any) => {
+        if (value !== undefined && value !== null) {
+            candidates.push(value);
         }
+    };
 
-        if (upperToken in marketData && upperToken !== tokenKey) {
-            candidates.push((marketData as any)[upperToken]);
-        }
+    const candidateListKeys = [
+        "tokens",
+        "tokenPrices",
+        "token_prices",
+        "tokenprices",
+        "prices",
+        "markets",
+        "market",
+        "items",
+        "entries",
+        "list",
+        "assets",
+    ];
 
-        if (token in marketData && token !== tokenKey && token !== upperToken) {
-            candidates.push((marketData as any)[token]);
-        }
-    }
+    const symbolKeys = ["symbol", "token", "name", "id", "ticker"];
 
-    for (let i = 0; i < candidates.length; i += 1) {
-        const candidate = candidates[i];
-        if (!candidate) {
+    for (const container of containers) {
+        if (!container) {
             continue;
         }
 
-        if (typeof candidate === "number") {
-            return candidate;
+        if (Array.isArray(container)) {
+            for (const entry of container) {
+                if (!entry || typeof entry !== "object") {
+                    continue;
+                }
+
+                const symbolCandidate = firstDefined(
+                    ...symbolKeys.map((key) => (entry as any)[key]),
+                );
+
+                if (
+                    typeof symbolCandidate === "string" &&
+                    symbolCandidate.trim().toLowerCase() === tokenKey
+                ) {
+                    addCandidate(entry);
+                }
+            }
+            continue;
         }
 
-        if (candidate && typeof candidate === "object") {
-            let direct: any;
+        addCandidate((container as any)[tokenKey]);
+        addCandidate((container as any)[upperToken]);
+        if (token !== tokenKey && token !== upperToken) {
+            addCandidate((container as any)[token]);
+        }
 
-            if (currencyKey in candidate) {
-                direct = candidate[currencyKey];
-            } else {
-                const upperCurrency = currencyKey.toUpperCase();
-                if (upperCurrency in candidate) {
-                    direct = candidate[upperCurrency];
-                }
+        for (const listKey of candidateListKeys) {
+            const nestedList = (container as any)[listKey];
+            if (!nestedList) {
+                continue;
             }
 
-            if (typeof direct === "number") {
-                return direct;
-            }
+            if (Array.isArray(nestedList)) {
+                for (const entry of nestedList) {
+                    if (!entry || typeof entry !== "object") {
+                        continue;
+                    }
 
-            if (direct && typeof direct === "object") {
-                const nestedKeys = ["price", "rate", "value"];
-                for (let j = 0; j < nestedKeys.length; j += 1) {
-                    const key = nestedKeys[j];
-                    const val = (direct as any)[key];
-                    if (typeof val === "number") {
-                        return val;
+                    const symbolCandidate = firstDefined(
+                        ...symbolKeys.map((key) => (entry as any)[key]),
+                    );
+
+                    if (
+                        typeof symbolCandidate === "string" &&
+                        symbolCandidate.trim().toLowerCase() === tokenKey
+                    ) {
+                        addCandidate(entry);
                     }
                 }
-            }
-
-            const candidateKeys = ["price", "rate", "value"];
-            for (let k = 0; k < candidateKeys.length; k += 1) {
-                const key = candidateKeys[k];
-                const val = (candidate as any)[key];
-                if (typeof val === "number") {
-                    return val;
+            } else if (typeof nestedList === "object") {
+                addCandidate((nestedList as any)[tokenKey]);
+                addCandidate((nestedList as any)[upperToken]);
+                if (token !== tokenKey && token !== upperToken) {
+                    addCandidate((nestedList as any)[token]);
                 }
             }
+        }
+    }
+
+    for (const candidate of candidates) {
+        const price = extractPriceFromValue(candidate, currencyKey);
+        if (price !== null) {
+            return price;
         }
     }
 
     return 0;
 };
+
 
 interface PortfolioItemOptions {
     address?: string;
