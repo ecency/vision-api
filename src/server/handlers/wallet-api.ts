@@ -60,6 +60,8 @@ const CHAIN_ACTIONS = [
     'receive'
 ].map(actionId => ({ id: actionId }));
 
+const POINTS_USD_RATE = 0.002;
+
 
 
 //incorporate engine actions
@@ -78,7 +80,7 @@ interface PortfolioItem {
     symbol: string;
     layer: PortfolioLayer;
     balance: number;
-    fiatPrice: number;
+    fiatRate: number;
     address?: string;
     pendingRewards?: number;
     pendingRewardsFiat?: number;
@@ -617,6 +619,50 @@ const getTokenPrice = (marketData: any, token: string, currency: string): number
     return 0;
 };
 
+const convertUsdRateToCurrency = (marketData: any, currency: string, usdRate: number): number => {
+    const normalizedCurrency = normalizeCurrency(currency);
+
+    if (!Number.isFinite(usdRate) || usdRate <= 0) {
+        return 0;
+    }
+
+    if (normalizedCurrency === "usd") {
+        return usdRate;
+    }
+
+    const referenceTokens = ["hive", "hbd", "btc", "eth"];
+
+    for (const reference of referenceTokens) {
+        const priceInUsd = getTokenPrice(marketData, reference, "usd");
+        const priceInTarget = getTokenPrice(marketData, reference, normalizedCurrency);
+
+        if (priceInUsd > 0 && priceInTarget > 0) {
+            const converted = usdRate * (priceInTarget / priceInUsd);
+            if (Number.isFinite(converted) && converted > 0) {
+                return converted;
+            }
+        }
+    }
+
+    const direct = getTokenPrice(marketData, "usd", normalizedCurrency);
+    if (direct > 0 && Number.isFinite(direct)) {
+        const converted = usdRate * direct;
+        if (Number.isFinite(converted) && converted > 0) {
+            return converted;
+        }
+    }
+
+    const inverse = getTokenPrice(marketData, normalizedCurrency, "usd");
+    if (inverse > 0 && Number.isFinite(inverse)) {
+        const converted = usdRate / inverse;
+        if (Number.isFinite(converted) && converted > 0) {
+            return converted;
+        }
+    }
+
+    return usdRate;
+};
+
 
 interface PortfolioItemOptions {
     address?: string;
@@ -653,7 +699,7 @@ const makePortfolioItem = (
         symbol,
         layer,
         balance: totalBalance,
-        fiatPrice: totalBalance * normalizedRate,
+        fiatRate: normalizedRate,
         iconUrl,
         actions,
         extraData,
@@ -1094,7 +1140,7 @@ const buildPointsLayer = (pointsData: any, marketData: any, currency: string): P
         pendingRewards = undefined;
     }
 
-    const price = getTokenPrice(marketData, "points", currency);
+    const price = convertUsdRateToCurrency(marketData, currency, POINTS_USD_RATE);
     const iconUrl = ASSET_ICON_URLS.POINTS;
 
     const options: PortfolioItemOptions = {};
