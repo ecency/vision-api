@@ -1253,16 +1253,18 @@ const buildHiveLayer = (
     );
 
     return [
-        makePortfolioItem("Hive Power", "HP", "hive", hivePower, hivePrice,
-            {},
+        makePortfolioItem("Hive Power", "HP", "hive", 0, hivePrice,
+            {
+                pendingRewards: pendingHivePower,
+                staked: hivePower,
+            },
             ASSET_ICON_URLS.HIVE,
             HP_ACTIONS,
             extraData
         ),
         makePortfolioItem("Hive", "HIVE", "hive", hiveBalance, hivePrice, {
             savings: hiveSavings,
-            staked: hivePower,
-            pendingRewards: hivePendingTotal,
+            pendingRewards: pendingHive,
         },
             ASSET_ICON_URLS.HIVE,
             HIVE_ACTIONS
@@ -1351,10 +1353,6 @@ const buildEngineLayer = (
         }
 
         const extraData = [
-            {
-                dataKey: 'staked',
-                value: token.stake !== 0 ? `${token.stake}` : '0.00',
-            },
             {
                 dataKey: 'delegations_in',
                 value: token.delegationsIn !== 0 ? `${token.delegationsIn}` : '0.00',
