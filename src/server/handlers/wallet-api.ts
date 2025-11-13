@@ -712,10 +712,10 @@ const makePortfolioItem = (
             : {}),
     };
 
-    if (hasSavings || hasStaked) {
-        item.liquid = normalizedBalance;
-        item.liquidFiat = normalizedBalance * normalizedRate;
-    }
+    
+    item.liquid = normalizedBalance;
+    item.liquidFiat = normalizedBalance * normalizedRate;
+
 
     if (hasSavings) {
         item.savings = savingsValue;
