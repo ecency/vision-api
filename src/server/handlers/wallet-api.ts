@@ -1254,7 +1254,7 @@ const buildHiveLayer = (
     });
 
     return [
-        makePortfolioItem("Hive Power", "HP", "hive", hpBalance, hivePrice,
+        makePortfolioItem("Staked Hive", "HP", "hive", hpBalance, hivePrice,
             {
                 pendingRewards: pendingHivePower,
                 staked: availableHp,
