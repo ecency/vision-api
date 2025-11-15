@@ -712,7 +712,7 @@ const makePortfolioItem = (
             : {}),
     };
 
-    
+
     item.liquid = normalizedBalance;
     item.liquidFiat = normalizedBalance * normalizedRate;
 
@@ -1181,9 +1181,6 @@ const buildHiveLayer = (
     const receivedVests = parseToken(accountData.received_vesting_shares || "0 VESTS");
 
     const hivePerMVests = typeof globalProps.hivePerMVests === "number" ? globalProps.hivePerMVests : 0;
-    const netVests = totalVests - delegatedVests + receivedVests;
-
-    const hivePower = vestsToHivePower(netVests, hivePerMVests);
 
     const pendingHive = parseToken(accountData.reward_hive_balance || "0 HIVE");
     const pendingHbd = parseToken(accountData.reward_hbd_balance || "0 HBD");
@@ -1192,9 +1189,6 @@ const buildHiveLayer = (
 
     const hivePrice = getTokenPrice(marketData, "hive", currency);
     const hbdPrice = getTokenPrice(marketData, "hbd", currency);
-
-    const hivePendingTotal = pendingHive + pendingHivePower;
-
 
 
     // aaggregate extra data pairs
@@ -1218,45 +1212,52 @@ const buildHiveLayer = (
     const nextVestingSharesWithdrawalHive = isPoweringDown
         ? vestsToHivePower(nextVestingSharesWithdrawal, hivePerMVests)
         : 0;
-    if (delegatedHP) {
-        extraData.push({
-            dataKey: 'delegated_hive_power',
-            value: `- ${delegatedHP.toFixed(3)} HP`,
-        });
-    }
+
+
+    //HP availble/owned by user (not including delegated and powering down hp)
+    //taken from vesting_shared in account response
+    const availableHp = vestsToHivePower(totalVests, hivePerMVests);
+
+    //Estimate user owned HP including outgoing delegation and powering down hp
+    //will be shown in main wallet screen and also used for fiat estimations
+    const hpBalance = delegatedHP + nextVestingSharesWithdrawalHive
+
+    //current effective hive power
+    const netHp = availableHp - delegatedHP - nextVestingSharesWithdrawalHive + receivedHP;
+
 
     if (receivedHP) {
         extraData.push({
             dataKey: 'received_hive_power',
-            value: `+ ${receivedHP.toFixed(3)} HP`,
+            value: `+ ${Intl.NumberFormat().format(receivedHP)} HP`,
+        });
+    }
+
+    if (delegatedHP) {
+        extraData.push({
+            dataKey: 'delegated_hive_power',
+            value: `- ${Intl.NumberFormat().format(delegatedHP)} HP`,
         });
     }
 
     if (nextVestingSharesWithdrawalHive) {
         extraData.push({
             dataKey: 'powering_down_hive_power',
-            value: `- ${nextVestingSharesWithdrawalHive.toFixed(3)} HP`,
+            value: `- ${Intl.NumberFormat().format(nextVestingSharesWithdrawalHive)} HP`,
             subValue: `${Math.round(pwrDwnHoursLeft)}h`,
         });
     }
 
-    extraData.push(
-        {
-            dataKey: 'total_hive_power',
-            value: `${(
-                hivePower -
-                delegatedHP +
-                receivedHP -
-                nextVestingSharesWithdrawalHive
-            ).toFixed(3)} HP`,
-        },
-    );
+    extraData.push({
+        dataKey: 'net_hive_power',
+        value: `${Intl.NumberFormat().format(netHp)} HP`,
+    });
 
     return [
-        makePortfolioItem("Hive Power", "HP", "hive", 0, hivePrice,
+        makePortfolioItem("Staked Hive", "HP", "hive", hpBalance, hivePrice,
             {
                 pendingRewards: pendingHivePower,
-                staked: hivePower,
+                staked: availableHp,
             },
             ASSET_ICON_URLS.HIVE,
             HP_ACTIONS,
