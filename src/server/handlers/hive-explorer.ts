@@ -51,22 +51,35 @@ export const fetchGlobalProps = async () => {
                 ? globalDynamic.head_block_number
                 : Number(globalDynamic.head_block_number) || 0;
 
-        // Hive inflation started at 9.5% and decreases by 0.01% every 250k blocks
-        // (roughly ~8.7 days) until it reaches the 0.95% floor. Using the 9.5% base
-        // keeps the APR math aligned with the blockchain monetary policy.
+        // The blockchain exposes the current inflation rate (in basis points) as part
+        // of the global props. Prefer that exact value when present so the APR stays
+        // perfectly aligned with what on-chain tooling reports.
+        const currentInflationRateRaw =
+            typeof globalDynamic.current_inflation_rate === 'number'
+                ? globalDynamic.current_inflation_rate
+                : Number(globalDynamic.current_inflation_rate) || 0;
+
         const inflationBase = 9.5;
         const inflationDecreasePerStep = 0.01;
         const blocksPerStep = 250000;
         const inflationFloor = 0.95;
-        const inflationReductionSteps = headBlockNumber / blocksPerStep;
-        const inflationRate = Math.max(
+        // Historically Hive did not start lowering the inflation rate until several
+        // million blocks into the chain. Mirror that behaviour so the fallback math
+        // matches the node implementation when `current_inflation_rate` is missing.
+        const inflationStartBlock = 7000000;
+        const inflationReductionSteps = Math.max(headBlockNumber - inflationStartBlock, 0) / blocksPerStep;
+        const derivedInflationRate = Math.max(
             inflationFloor,
-            inflationBase - inflationReductionSteps * inflationDecreasePerStep,
+            inflationBase - Math.floor(inflationReductionSteps) * inflationDecreasePerStep,
         );
+
+        const inflationRatePercent = currentInflationRateRaw > 0
+            ? currentInflationRateRaw / 100
+            : derivedInflationRate;
 
         const hpAprCandidate =
             _totalFunds > 0 && _virtualSupply > 0 && vestingRewardPercent > 0
-                ? ((_virtualSupply * (inflationRate / 100)) * vestingRewardPercent * 100) / _totalFunds
+                ? (_virtualSupply * (inflationRatePercent / 100) * vestingRewardPercent * 100) / _totalFunds
                 : 0;
         const hpApr = Number.isFinite(hpAprCandidate) ? hpAprCandidate : 0;
 
