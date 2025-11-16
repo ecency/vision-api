@@ -1218,12 +1218,10 @@ const buildHiveLayer = (
     //taken from vesting_shared in account response
     const availableHp = vestsToHivePower(totalVests, hivePerMVests);
 
-    //Estimate user owned HP including outgoing delegation and powering down hp
-    //will be shown in main wallet screen and also used for fiat estimations
-    const hpBalance = delegatedHP + nextVestingSharesWithdrawalHive
-
-    //current effective hive power
-    const netHp = availableHp - delegatedHP - nextVestingSharesWithdrawalHive + receivedHP;
+    // separate the user-owned portion from the effective net amount (which includes received delegations)
+    const ownedNetHp = availableHp - delegatedHP - nextVestingSharesWithdrawalHive;
+    const effectiveNetHp = ownedNetHp + receivedHP;
+    const availableLiquidHp = Math.max(ownedNetHp, 0);
 
 
     if (receivedHP) {
@@ -1250,19 +1248,30 @@ const buildHiveLayer = (
 
     extraData.push({
         dataKey: 'net_hive_power',
-        value: `${Intl.NumberFormat().format(netHp)} HP`,
+        value: `${Intl.NumberFormat().format(effectiveNetHp)} HP`,
     });
 
+    const stakedHiveItem = makePortfolioItem(
+        "Staked Hive",
+        "HP",
+        "hive",
+        0,
+        hivePrice,
+        {
+            pendingRewards: pendingHivePower,
+            staked: availableHp,
+        },
+        ASSET_ICON_URLS.HIVE,
+        HP_ACTIONS,
+        extraData,
+    );
+
+    // available HP should reflect the net amount that can be used (after delegations/power-downs)
+    stakedHiveItem.liquid = availableLiquidHp;
+    stakedHiveItem.liquidFiat = availableLiquidHp * hivePrice;
+
     return [
-        makePortfolioItem("Staked Hive", "HP", "hive", hpBalance, hivePrice,
-            {
-                pendingRewards: pendingHivePower,
-                staked: availableHp,
-            },
-            ASSET_ICON_URLS.HIVE,
-            HP_ACTIONS,
-            extraData
-        ),
+        stakedHiveItem,
         makePortfolioItem("Hive", "HIVE", "hive", hiveBalance, hivePrice, {
             savings: hiveSavings,
             pendingRewards: pendingHive,
