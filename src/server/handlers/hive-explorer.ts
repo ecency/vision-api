@@ -51,7 +51,10 @@ export const fetchGlobalProps = async () => {
                 ? globalDynamic.head_block_number
                 : Number(globalDynamic.head_block_number) || 0;
 
-        const inflationBase = 9;
+        // Hive inflation started at 9.5% and decreases by 0.01% every 250k blocks
+        // (roughly ~8.7 days) until it reaches the 0.95% floor. Using the 9.5% base
+        // keeps the APR math aligned with the blockchain monetary policy.
+        const inflationBase = 9.5;
         const inflationDecreasePerStep = 0.01;
         const blocksPerStep = 250000;
         const inflationFloor = 0.95;
