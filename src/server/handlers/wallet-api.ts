@@ -93,6 +93,7 @@ interface PortfolioItem {
     iconUrl?: string;
     actions?: TokenAction[]
     extraData?: Array<{ dataKey: string; value: any }>;
+    apr?: number;
 }
 
 interface ExternalWalletMetadata {
@@ -669,6 +670,7 @@ interface PortfolioItemOptions {
     pendingRewards?: number;
     savings?: number;
     staked?: number;
+    apr?: number;
 }
 
 const makePortfolioItem = (
@@ -694,6 +696,8 @@ const makePortfolioItem = (
         typeof options.pendingRewards === "number" && Number.isFinite(options.pendingRewards);
     const normalizedPendingRewards = hasPendingRewards ? options.pendingRewards || 0 : undefined;
 
+    const aprCandidate = typeof options.apr === "number" && Number.isFinite(options.apr) ? options.apr : undefined;
+
     const item: PortfolioItem = {
         name,
         symbol,
@@ -710,6 +714,7 @@ const makePortfolioItem = (
                 pendingRewardsFiat: (normalizedPendingRewards || 0) * normalizedRate,
             }
             : {}),
+        ...(aprCandidate !== undefined ? { apr: aprCandidate } : {}),
     };
 
 
@@ -1181,6 +1186,12 @@ const buildHiveLayer = (
     const receivedVests = parseToken(accountData.received_vesting_shares || "0 VESTS");
 
     const hivePerMVests = typeof globalProps.hivePerMVests === "number" ? globalProps.hivePerMVests : 0;
+    const hbdApr = typeof globalProps.hbdApr === "number" && Number.isFinite(globalProps.hbdApr)
+        ? globalProps.hbdApr
+        : undefined;
+    const hpApr = typeof globalProps.hpApr === "number" && Number.isFinite(globalProps.hpApr)
+        ? globalProps.hpApr
+        : undefined;
 
     const pendingHive = parseToken(accountData.reward_hive_balance || "0 HIVE");
     const pendingHbd = parseToken(accountData.reward_hbd_balance || "0 HBD");
@@ -1251,16 +1262,22 @@ const buildHiveLayer = (
         value: `${Intl.NumberFormat().format(effectiveNetHp)} HP`,
     });
 
+    const stakedOptions: PortfolioItemOptions = {
+        pendingRewards: pendingHivePower,
+        staked: availableHp,
+    };
+
+    if (hpApr !== undefined) {
+        stakedOptions.apr = hpApr;
+    }
+
     const stakedHiveItem = makePortfolioItem(
         "Staked Hive",
         "HP",
         "hive",
         0,
         hivePrice,
-        {
-            pendingRewards: pendingHivePower,
-            staked: availableHp,
-        },
+        stakedOptions,
         ASSET_ICON_URLS.HIVE,
         HP_ACTIONS,
         extraData,
@@ -1282,6 +1299,7 @@ const buildHiveLayer = (
         makePortfolioItem("Hive Dollar", "HBD", "hive", hbdBalance, hbdPrice, {
             savings: hbdSavings,
             pendingRewards: pendingHbd,
+            ...(hbdApr !== undefined ? { apr: hbdApr } : {}),
         },
             ASSET_ICON_URLS.HBD,
             HBD_ACTIONS),
