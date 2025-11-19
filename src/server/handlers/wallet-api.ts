@@ -1342,8 +1342,10 @@ const buildEngineLayer = (
 
         const balanceParsed = parseMaybeNumber(token.balance);
         const stakedParsed = parseMaybeNumber(token.stakedBalance);
+        const ownStakeParsed = parseMaybeNumber(token.stake);
         const balance = balanceParsed !== null ? balanceParsed : 0;
         const staked = stakedParsed !== null ? stakedParsed : 0;
+        const ownStake = ownStakeParsed !== null ? ownStakeParsed : staked;
 
         const tokenPrice = typeof token.tokenPrice === "number" ? token.tokenPrice : 0;
         const priceInHive = tokenPrice > 0 ? tokenPrice : 0;
@@ -1365,11 +1367,12 @@ const buildEngineLayer = (
 
         //compile actions
         const actions: TokenAction[] = [{ id: EngineActions.TRANSFER }]; // Transfer is always available
+        const stakingEnabled = Boolean(token.stakingEnabled);
 
         // Add staking related actions if staking is enabled
-        if (token.stakingEnabled) {
+        if (stakingEnabled) {
             actions.push({ id: EngineActions.STAKE });
-            if (staked > 0) {
+            if (ownStake > 0) {
                 actions.push({ id: EngineActions.UNSTAKE });
             }
         }
