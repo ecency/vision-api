@@ -84,5 +84,14 @@ export const announcements = [
         "path": "/@.+/(blog|posts|wallet|points|engine|permissions|spk)",
         "auth": true,
         "ops": "hive://sign/op/WyJ1cGRhdGVfcHJvcG9zYWxfdm90ZXMiLHsidm90ZXIiOiJfX3NpZ25lciIsInByb3Bvc2FsX2lkcyI6IjMzNiIsImFwcHJvdmUiOnRydWUsImV4dGVuc2lvbnMiOltdfV0."
+    },
+{
+        "id": 109,
+        "title": "Get Latest Ecency app!❤️",
+        "description": "We made Ecency app Hardfork 28 compatible",
+        "button_text": "Update now",
+        "button_link": "/mobile",
+        "path": "/",
+        "auth": false
     }
 ]
