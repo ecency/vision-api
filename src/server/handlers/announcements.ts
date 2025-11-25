@@ -74,7 +74,7 @@ export const announcements = [
         "path": "/@.+/(blog|posts|wallet|points|engine|permissions|spk)",
         "auth": true,
         "ops": "hive://sign/op/WyJ1cGRhdGVfcHJvcG9zYWxfdm90ZXMiLHsidm90ZXIiOiAiX19zaWduZXIiLCJwcm9wb3NhbF9pZHMiOiBbMjgzXSwiYXBwcm92ZSI6dHJ1ZSwiZXh0ZW5zaW9ucyI6IFtdfV0."
-    }*/
+    },
     {
         "id": 108,
         "title": "Support Ecency! ❤️",
@@ -85,7 +85,7 @@ export const announcements = [
         "auth": true,
         "ops": "hive://sign/op/WyJ1cGRhdGVfcHJvcG9zYWxfdm90ZXMiLHsidm90ZXIiOiJfX3NpZ25lciIsInByb3Bvc2FsX2lkcyI6IjMzNiIsImFwcHJvdmUiOnRydWUsImV4dGVuc2lvbnMiOltdfV0."
     },
-{
+    {
         "id": 109,
         "title": "Get Latest Ecency app!❤️",
         "description": "We made Ecency app Hardfork 28 compatible",
@@ -93,5 +93,5 @@ export const announcements = [
         "button_link": "/mobile",
         "path": "/",
         "auth": false
-    }
+    }*/
 ]
