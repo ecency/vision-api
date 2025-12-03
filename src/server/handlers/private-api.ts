@@ -328,27 +328,64 @@ const ensureHttpsEndpoint = (node: ChainstackNode): string => {
     return endpoint;
 };
 
-const normalizeHexPayload = (value: unknown): string => {
-    if (typeof value !== "string") {
-        throw new Error("Signed payload must be a string");
+const coercePayloadBuffer = (value: unknown): Buffer | null => {
+    if (typeof value === "string") {
+        return null;
     }
 
-    const trimmed = value.trim();
-    const hex = trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed;
+    if (Buffer.isBuffer(value)) {
+        return value;
+    }
 
-    if (!hex || !/^[a-fA-F0-9]+$/.test(hex) || hex.length % 2 !== 0) {
+    if (value instanceof Uint8Array) {
+        return Buffer.from(value);
+    }
+
+    if (value instanceof ArrayBuffer) {
+        return Buffer.from(new Uint8Array(value));
+    }
+
+    if (Array.isArray(value) && value.every((entry) => Number.isInteger(entry) && entry >= 0 && entry <= 255)) {
+        return Buffer.from(value as number[]);
+    }
+
+    return null;
+};
+
+const normalizeHexPayload = (value: unknown): string => {
+    const trimmed = typeof value === "string" ? value.trim() : "";
+    const hexFromString = trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed;
+
+    const buffer = coercePayloadBuffer(value);
+    const hexFromBuffer = buffer ? buffer.toString("hex") : "";
+
+    const normalized = hexFromString || hexFromBuffer;
+
+    if (!normalized) {
+        throw new Error("Signed payload must be a hex-encoded string or byte array");
+    }
+
+    if (!/^[a-fA-F0-9]+$/.test(normalized) || normalized.length % 2 !== 0) {
         throw new Error("Signed payload must be a hex-encoded string");
     }
 
-    return `0x${hex}`;
+    return `0x${normalized}`;
 };
 
 const normalizeBase64Payload = (value: unknown): string => {
-    if (typeof value !== "string") {
-        throw new Error("Signed payload must be a string");
+    const trimmed = typeof value === "string" ? value.trim() : "";
+    const buffer = coercePayloadBuffer(value);
+
+    if (!trimmed && !buffer) {
+        throw new Error("Signed payload must be a base64 string or byte array");
     }
 
-    const trimmed = value.trim();
+    if (buffer) {
+        if (buffer.length === 0) {
+            throw new Error("Signed payload must not be empty");
+        }
+        return buffer.toString("base64");
+    }
 
     try {
         const buf = Buffer.from(trimmed, "base64");
@@ -1670,6 +1707,11 @@ export const broadcast = async (req: express.Request, res: express.Response) => 
         }
     } catch (err) {
         res.status(400).json({ error: err instanceof Error ? err.message : "Invalid payload" });
+        return;
+    }
+
+    if (typeof normalizedPayload !== "string") {
+        res.status(400).json({ error: "Signed payload must be a string" });
         return;
     }
 
