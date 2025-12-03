@@ -174,6 +174,12 @@ const CHAINSTACK_API_BASE = "https://api.chainstack.com/v1";
 const CHAINSTACK_NODES_ENDPOINT = `${CHAINSTACK_API_BASE}/nodes`;
 const CHAINSTACK_NODE_CACHE_TTL_MS = 300 * 60 * 1000; // 5 hours
 
+type BroadcastRequestBody = {
+    signedPayload?: unknown;
+    rawTransaction?: unknown;
+    payload?: unknown;
+};
+
 interface ChainstackNodeDetails {
     https_endpoint?: string;
     wss_endpoint?: string;
@@ -209,10 +215,24 @@ interface AxiosNodeConfig {
     auth?: AxiosAuthConfig;
 }
 
+interface ChainBroadcastResponse {
+    chain: string;
+    txId?: string;
+    raw: unknown;
+    nodeId: string;
+    provider: "chainstack";
+}
+
 interface ChainHandler {
     validateAddress?: (address: string) => boolean;
     selectNode: (nodes: ChainstackNode[]) => ChainstackNode | null;
     fetchBalance: (node: ChainstackNode, address: string) => Promise<ChainBalanceResponse>;
+}
+
+interface ChainBroadcastHandler {
+    normalizePayload?: (payload: unknown) => unknown;
+    selectNode: (nodes: ChainstackNode[]) => ChainstackNode | null;
+    broadcast: (node: ChainstackNode, payload: unknown) => Promise<ChainBroadcastResponse>;
 }
 
 let cachedNodes: ChainstackNode[] | null = null;
@@ -277,6 +297,16 @@ const fetchChainstackNodes = async (): Promise<ChainstackNode[]> => {
     }
 };
 
+const extractSignedPayload = (body: BroadcastRequestBody | undefined): unknown => {
+    if (!body || typeof body !== "object") return undefined;
+
+    const { signedPayload, rawTransaction, payload } = body;
+
+    if (signedPayload !== undefined) return signedPayload;
+    if (rawTransaction !== undefined) return rawTransaction;
+    return payload;
+};
+
 const endpointIncludes = (node: ChainstackNode, needle: string) => {
     const loweredNeedle = needle.toLowerCase();
     const candidates = [
@@ -296,6 +326,40 @@ const ensureHttpsEndpoint = (node: ChainstackNode): string => {
     }
 
     return endpoint;
+};
+
+const normalizeHexPayload = (value: unknown): string => {
+    if (typeof value !== "string") {
+        throw new Error("Signed payload must be a string");
+    }
+
+    const trimmed = value.trim();
+    const hex = trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed;
+
+    if (!hex || !/^[a-fA-F0-9]+$/.test(hex) || hex.length % 2 !== 0) {
+        throw new Error("Signed payload must be a hex-encoded string");
+    }
+
+    return `0x${hex}`;
+};
+
+const normalizeBase64Payload = (value: unknown): string => {
+    if (typeof value !== "string") {
+        throw new Error("Signed payload must be a string");
+    }
+
+    const trimmed = value.trim();
+
+    try {
+        const buf = Buffer.from(trimmed, "base64");
+        if (buf.length === 0) {
+            throw new Error("Empty payload");
+        }
+    } catch (err) {
+        throw new Error("Signed payload must be valid base64");
+    }
+
+    return trimmed;
 };
 
 const stripLeadingZeros = (value: string): string => {
@@ -447,6 +511,37 @@ const fetchEvmBalance = async (chain: string, node: ChainstackNode, address: str
     };
 };
 
+const broadcastEvmTransaction = async (
+    chain: string,
+    node: ChainstackNode,
+    signedPayload: string,
+): Promise<ChainBroadcastResponse> => {
+    const endpoint = ensureHttpsEndpoint(node);
+    const config = buildNodeAxiosConfig(node);
+
+    const payload = {
+        jsonrpc: "2.0",
+        id: "broadcast",
+        method: "eth_sendRawTransaction",
+        params: [signedPayload],
+    };
+
+    const response = await axios.post(endpoint, payload, config);
+    const data = response.data;
+
+    if (data?.error) {
+        throw new Error(data.error?.message || "EVM broadcast failed");
+    }
+
+    return {
+        chain,
+        txId: data?.result,
+        raw: data,
+        nodeId: node.id,
+        provider: "chainstack",
+    };
+};
+
 const fetchSolanaBalance = async (node: ChainstackNode, address: string): Promise<ChainBalanceResponse> => {
     const endpoint = ensureHttpsEndpoint(node);
     const config = buildNodeAxiosConfig(node);
@@ -475,6 +570,36 @@ const fetchSolanaBalance = async (node: ChainstackNode, address: string): Promis
         chain: "sol",
         balance: value.toString(),
         unit: "lamports",
+        raw: data,
+        nodeId: node.id,
+        provider: "chainstack",
+    };
+};
+
+const broadcastSolanaTransaction = async (
+    node: ChainstackNode,
+    signedPayload: string,
+): Promise<ChainBroadcastResponse> => {
+    const endpoint = ensureHttpsEndpoint(node);
+    const config = buildNodeAxiosConfig(node);
+
+    const payload = {
+        jsonrpc: "2.0",
+        id: "broadcast",
+        method: "sendTransaction",
+        params: [signedPayload, { encoding: "base64" }],
+    };
+
+    const response = await axios.post(endpoint, payload, config);
+    const data = response.data;
+
+    if (data?.error) {
+        throw new Error(data.error?.message || "Solana broadcast failed");
+    }
+
+    return {
+        chain: "sol",
+        txId: data?.result,
         raw: data,
         nodeId: node.id,
         provider: "chainstack",
@@ -521,6 +646,11 @@ const fetchTronBalance = async (node: ChainstackNode, address: string): Promise<
         provider: "chainstack",
     };
 };
+
+const broadcastTronTransaction = async (
+    node: ChainstackNode,
+    signedPayload: string,
+): Promise<ChainBroadcastResponse> => broadcastEvmTransaction("tron", node, signedPayload);
 
 const requestToncenterBalance = async (
     baseEndpoint: string,
@@ -1224,6 +1354,43 @@ const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promi
     };
 };
 
+const normalizeBitcoinPayload = (value: unknown): string => normalizeHexPayload(value).slice(2);
+
+const broadcastBitcoinTransaction = async (
+    node: ChainstackNode,
+    signedPayload: string,
+): Promise<ChainBroadcastResponse> => {
+    const baseEndpoint = ensureHttpsEndpoint(node);
+    const endpoint = ensureAuthKeyInPath(baseEndpoint, node.details?.auth_key);
+
+    const config: AxiosRequestConfig = {
+        ...buildNodeAxiosConfig(node, { noAuthHeaders: true }),
+        timeout: BITCOIN_RPC_TIMEOUT_MS,
+    };
+
+    const payload = {
+        jsonrpc: "1.0",
+        id: "broadcast",
+        method: "sendrawtransaction",
+        params: [signedPayload],
+    };
+
+    const response = await axios.post(endpoint, payload, config);
+    const data = response.data;
+
+    if (data?.error) {
+        throw new Error(data.error?.message || "Bitcoin broadcast failed");
+    }
+
+    return {
+        chain: "btc",
+        txId: data?.result,
+        raw: data,
+        nodeId: node.id,
+        provider: "chainstack",
+    };
+};
+
 const CHAIN_HANDLERS: Record<string, ChainHandler> = {
     btc: {
         selectNode: (nodes) => nodes.find((node) => endpointIncludes(node, "bitcoin")) ?? null,
@@ -1263,6 +1430,34 @@ const CHAIN_HANDLERS: Record<string, ChainHandler> = {
         },
         selectNode: (nodes) => nodes.find((node) => endpointIncludes(node, "aptos")) ?? null,
         fetchBalance: (node, address) => fetchAptosBalance(node, address),
+    },
+};
+
+const CHAIN_BROADCAST_HANDLERS: Record<string, ChainBroadcastHandler> = {
+    btc: {
+        normalizePayload: normalizeBitcoinPayload,
+        selectNode: CHAIN_HANDLERS.btc.selectNode,
+        broadcast: (node, payload) => broadcastBitcoinTransaction(node, payload as string),
+    },
+    eth: {
+        normalizePayload: normalizeHexPayload,
+        selectNode: CHAIN_HANDLERS.eth.selectNode,
+        broadcast: (node, payload) => broadcastEvmTransaction("eth", node, payload as string),
+    },
+    bnb: {
+        normalizePayload: normalizeHexPayload,
+        selectNode: CHAIN_HANDLERS.bnb.selectNode,
+        broadcast: (node, payload) => broadcastEvmTransaction("bnb", node, payload as string),
+    },
+    tron: {
+        normalizePayload: normalizeHexPayload,
+        selectNode: CHAIN_HANDLERS.tron.selectNode,
+        broadcast: (node, payload) => broadcastTronTransaction(node, payload as string),
+    },
+    sol: {
+        normalizePayload: normalizeBase64Payload,
+        selectNode: CHAIN_HANDLERS.sol.selectNode,
+        broadcast: (node, payload) => broadcastSolanaTransaction(node, payload as string),
     },
 };
 
@@ -1436,6 +1631,78 @@ export const balance = async (req: express.Request, res: express.Response) => {
         }
 
         // Final catch-all
+        const msg = err instanceof Error ? err.message : "Unknown error";
+        res.status(502).json({ error: msg });
+    }
+};
+
+export const broadcast = async (req: express.Request, res: express.Response) => {
+    const { chain } = req.params;
+    const signedPayload = extractSignedPayload(req.body as BroadcastRequestBody);
+
+    if (!chain) {
+        res.status(400).send("Missing chain parameter");
+        return;
+    }
+
+    if (!CHAIN_PARAM_REGEX.test(chain)) {
+        res.status(400).send("Invalid chain parameter");
+        return;
+    }
+
+    const normalizedChain = chain.toLowerCase();
+    const handler = CHAIN_BROADCAST_HANDLERS[normalizedChain];
+
+    if (!handler) {
+        res.status(400).send("Unsupported chain for broadcast");
+        return;
+    }
+
+    if (typeof signedPayload === "undefined") {
+        res.status(400).send("Missing signed payload");
+        return;
+    }
+
+    let normalizedPayload: unknown = signedPayload;
+    try {
+        if (handler.normalizePayload) {
+            normalizedPayload = handler.normalizePayload(signedPayload);
+        }
+    } catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : "Invalid payload" });
+        return;
+    }
+
+    try {
+        const nodes = await fetchChainstackNodes();
+        const node = handler.selectNode(nodes);
+
+        if (!node) {
+            console.error(`No Chainstack node available for ${normalizedChain} broadcast`);
+            res.status(502).send("No Chainstack node available for requested chain");
+            return;
+        }
+
+        const response = await handler.broadcast(node, normalizedPayload);
+        res.setHeader("x-provider", "chainstack");
+        res.status(200).json(response);
+    } catch (err) {
+        console.error("broadcast(): error while submitting transaction", err);
+
+        if (axios.isAxiosError(err) && err.response) {
+            const { status, data } = err.response;
+            if (data !== undefined) {
+                if (data !== null && typeof data === "object") {
+                    res.status(status).json(data);
+                } else {
+                    res.status(status).json({ error: String(data) });
+                }
+            } else {
+                res.sendStatus(status);
+            }
+            return;
+        }
+
         const msg = err instanceof Error ? err.message : "Unknown error";
         res.status(502).json({ error: msg });
     }
