@@ -688,7 +688,13 @@ const broadcastTronTransaction = async (
     node: ChainstackNode,
     signedPayload: string,
 ): Promise<ChainBroadcastResponse> => {
-    const endpoint = ensureHttpsEndpoint(node).replace(/\/+$/, "");
+    const baseEndpoint =
+        node.details?.solidity_http_api_endpoint?.replace(/\/+$/, "") || ensureHttpsEndpoint(node).replace(/\/+$/, "");
+
+    const endpoint = baseEndpoint.endsWith("/jsonrpc")
+        ? baseEndpoint.slice(0, -"/jsonrpc".length)
+        : baseEndpoint;
+
     const config = buildNodeAxiosConfig(node);
 
     const normalizedPayload = signedPayload.startsWith("0x") ? signedPayload.slice(2) : signedPayload;
