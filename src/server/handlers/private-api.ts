@@ -687,7 +687,42 @@ const fetchTronBalance = async (node: ChainstackNode, address: string): Promise<
 const broadcastTronTransaction = async (
     node: ChainstackNode,
     signedPayload: string,
-): Promise<ChainBroadcastResponse> => broadcastEvmTransaction("tron", node, signedPayload);
+): Promise<ChainBroadcastResponse> => {
+    const endpoint = ensureHttpsEndpoint(node).replace(/\/+$/, "");
+    const config = buildNodeAxiosConfig(node);
+
+    const normalizedPayload = signedPayload.startsWith("0x") ? signedPayload.slice(2) : signedPayload;
+
+    const payload = {
+        transaction: normalizedPayload,
+    };
+
+    const response = await axios.post(`${endpoint}/wallet/broadcasthex`, payload, config);
+    const data = response.data;
+
+    if (data?.result === false) {
+        const message = typeof data?.message === "string" ? data.message : undefined;
+        let decodedMessage = message;
+
+        if (message) {
+            try {
+                decodedMessage = Buffer.from(message, "base64").toString("utf8");
+            } catch (err) {
+                decodedMessage = message;
+            }
+        }
+
+        throw new Error(decodedMessage || "Tron broadcast failed");
+    }
+
+    return {
+        chain: "tron",
+        txId: data?.txid,
+        raw: data,
+        nodeId: node.id,
+        provider: "chainstack",
+    };
+};
 
 const requestToncenterBalance = async (
     baseEndpoint: string,
