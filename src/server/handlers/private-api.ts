@@ -2502,6 +2502,11 @@ export const reblogCount = async (req: express.Request, res: express.Response) =
     pipe(apiRequest(`post-reblog-count/${author}/${permlink}`, "GET"), res);
 };
 
+export const tips = async (req: express.Request, res: express.Response) => {
+    const { author, permlink } = req.params;
+    pipe(apiRequest(`post-tips/${author}/${permlink}`, "GET"), res);
+};
+
 export const gameGet = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req);
     if (!username) {

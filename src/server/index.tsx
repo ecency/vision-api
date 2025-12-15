@@ -75,6 +75,7 @@ server
     .post("^/private-api/request-delete$", privateApi.report)
     .post("^/private-api/post-reblogs$", privateApi.reblogs)
     .post("^/private-api/post-reblog-count$", privateApi.reblogCount)
+    .post("^/private-api/post-tips$", privateApi.tips)
 
     .post("^/private-api/chats-get$", privateApi.chatsGet)
     .post("^/private-api/channels-get", privateApi.channelsGet)
