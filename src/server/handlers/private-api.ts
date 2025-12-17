@@ -2503,7 +2503,7 @@ export const reblogCount = async (req: express.Request, res: express.Response) =
 };
 
 export const tips = async (req: express.Request, res: express.Response) => {
-    const { author, permlink } = req.params;
+    const { author, permlink } = req.body;
     pipe(apiRequest(`post-tips/${author}/${permlink}`, "GET"), res);
 };
 
