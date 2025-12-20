@@ -155,7 +155,7 @@ export const parseBalanceProvider = (value: unknown): BalanceProvider => {
 const BLOCKSTREAM_TOKEN_CACHE_KEY = "blockstream:access-token";
 const BLOCKSTREAM_TOKEN_URL =
     "https://login.blockstream.com/realms/blockstream-public/protocol/openid-connect/token";
-const BLOCKSTREAM_API_BASE = "https://enterprise.blockstream.info/api";
+export const BLOCKSTREAM_API_BASE = "https://enterprise.blockstream.info/api";
 
 const toBigInt = (value: unknown): bigint => {
     if (typeof value === "bigint") return value;
@@ -188,7 +188,7 @@ const parseRateLimitHeader = (headerValue: unknown): number | undefined => {
     return Number.isFinite(num) ? num : undefined;
 };
 
-const getBlockstreamAccessToken = async (): Promise<string> => {
+export const getBlockstreamAccessToken = async (): Promise<string> => {
     const cached = cache.get<string>(BLOCKSTREAM_TOKEN_CACHE_KEY);
     if (cached) return cached;
 

@@ -12,6 +12,8 @@ import {
     fetchChainzBalance,
     fetchBlockstreamBalance,
     ensureAuthKeyInPath,
+    getBlockstreamAccessToken,
+    BLOCKSTREAM_API_BASE,
 } from "../helper";
 
 import { pipe } from "../util";
@@ -399,6 +401,32 @@ const normalizeBase64Payload = (value: unknown): string => {
     return trimmed;
 };
 
+const normalizeAptosPayload = (value: unknown): string => {
+    if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (!trimmed) {
+            throw new Error("Aptos payload must not be empty");
+        }
+        // Validate it's valid JSON
+        try {
+            JSON.parse(trimmed);
+        } catch (err) {
+            throw new Error("Aptos payload must be valid JSON");
+        }
+        return trimmed;
+    }
+
+    if (value && typeof value === "object") {
+        try {
+            return JSON.stringify(value);
+        } catch (err) {
+            throw new Error("Failed to serialize Aptos payload to JSON");
+        }
+    }
+
+    throw new Error("Aptos payload must be a JSON string or object");
+};
+
 const stripLeadingZeros = (value: string): string => {
     const stripped = value.replace(/^0+/, "");
     return stripped === "" ? "0" : stripped;
@@ -724,6 +752,154 @@ const broadcastTronTransaction = async (
     return {
         chain: "tron",
         txId: data?.txid,
+        raw: data,
+        nodeId: node.id,
+        provider: "chainstack",
+    };
+};
+
+const broadcastTonTransaction = async (
+    node: ChainstackNode,
+    signedPayload: string,
+): Promise<ChainBroadcastResponse> => {
+    const endpointCandidates = [node.details?.toncenter_api_v3, node.details?.toncenter_api_v2]
+        .filter((e): e is string => Boolean(e))
+        .map((e) => ensureAuthKeyInPath(e, node.details?.auth_key));
+
+    if (endpointCandidates.length === 0) {
+        throw new Error("TON node does not provide a Toncenter endpoint");
+    }
+
+    const headers: Record<string, string> = {
+        Accept: "application/json, text/plain;q=0.9, */*;q=0.8",
+        "Content-Type": "application/json",
+        "User-Agent": "EcencyBalanceBot/1.0 (+https://ecency.com)",
+    };
+
+    const auth =
+        node.details?.auth_username && node.details?.auth_password
+            ? {
+                username: node.details.auth_username as string,
+                password: node.details.auth_password as string,
+            }
+            : undefined;
+
+    const apiKey = node.details?.auth_key;
+
+    // Try JSON-RPC sendBoc method
+    for (const baseEndpoint of endpointCandidates) {
+        const postTargets = new Set<string>();
+        const baseSanitized = baseEndpoint.replace(/\/+$/, "");
+        const lower = baseSanitized.toLowerCase();
+
+        if (lower.endsWith("/jsonrpc")) {
+            postTargets.add(baseSanitized);
+        } else {
+            postTargets.add(`${baseSanitized}/jsonrpc`);
+            postTargets.add(baseSanitized);
+        }
+
+        // Try both param formats for compatibility
+        const paramFormats = [
+            { boc: signedPayload },  // v3 format
+            [signedPayload],         // v2 array format
+        ];
+
+        for (const url of postTargets) {
+            for (const params of paramFormats) {
+                try {
+                    const payload = {
+                        id: "broadcast",
+                        jsonrpc: "2.0",
+                        method: "sendBoc",
+                        params,
+                    };
+
+                    const cfg: AxiosRequestConfig = {
+                        headers,
+                        auth,
+                        timeout: TON_TIMEOUT_MS,
+                        params: apiKey ? { api_key: apiKey } : undefined,
+                        validateStatus: (s) => s >= 200 && s < 500,
+                    };
+
+                    const { data, status } = await axios.post(url, payload, cfg);
+
+                    if (typeof data === "string" && /<[^>]+>/.test(data)) {
+                        continue;
+                    }
+
+                    if (data?.error) {
+                        const msg = data.error?.message || data.error;
+                        // Continue to next format if error, don't throw yet
+                        continue;
+                    }
+
+                    // Success - return result
+                    return {
+                        chain: "ton",
+                        txId: data?.result?.hash,
+                        raw: data,
+                        nodeId: node.id,
+                        provider: "chainstack",
+                    };
+                } catch (e) {
+                    if (axios.isAxiosError(e) && (e.response?.status === 404 || e.response?.status === 405)) {
+                        continue;
+                    }
+                    // Continue to next format/endpoint
+                    continue;
+                }
+            }
+        }
+    }
+
+    throw new Error("TON broadcast failed on all endpoints");
+};
+
+const broadcastAptosTransaction = async (
+    node: ChainstackNode,
+    signedPayload: string,
+): Promise<ChainBroadcastResponse> => {
+    const endpoint = ensureHttpsEndpoint(node);
+    const config = buildNodeAxiosConfig(node);
+    const sanitizedEndpoint = endpoint.replace(/\/+$/, "");
+    const url = `${sanitizedEndpoint}/v1/transactions`;
+
+    let parsedPayload: any;
+    try {
+        parsedPayload = JSON.parse(signedPayload);
+    } catch (err) {
+        throw new Error("Aptos payload must be valid JSON");
+    }
+
+    const response = await axios.post(url, parsedPayload, {
+        ...config,
+        headers: {
+            ...config.headers,
+            "Content-Type": "application/json",
+        },
+    });
+
+    const data = response.data;
+
+    // Check for error responses
+    if (data?.message && !data?.hash) {
+        throw new Error(data.message || "Aptos broadcast failed");
+    }
+
+    if (data?.error_code) {
+        const errorMsg = data?.message || data?.error_code;
+        throw new Error(`Aptos broadcast failed: ${errorMsg}`);
+    }
+
+    if (!data?.hash) {
+        throw new Error("Aptos broadcast failed: no transaction hash returned");
+    }
+
+    return {
+        chain: "apt",
+        txId: data.hash,
         raw: data,
         nodeId: node.id,
         provider: "chainstack",
@@ -1434,6 +1610,36 @@ const fetchBitcoinBalance = async (node: ChainstackNode, address: string): Promi
 
 const normalizeBitcoinPayload = (value: unknown): string => normalizeHexPayload(value).slice(2);
 
+const broadcastBitcoinViaBlockstream = async (signedPayload: string): Promise<ChainBroadcastResponse> => {
+    const token = await getBlockstreamAccessToken();
+
+    const response = await axios.post(
+        `${BLOCKSTREAM_API_BASE}/tx`,
+        signedPayload,
+        {
+            headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "text/plain",
+            },
+            timeout: 15000,
+        }
+    );
+
+    const txId = typeof response.data === "string" ? response.data.trim() : response.data?.txid;
+
+    if (!txId) {
+        throw new Error("Blockstream broadcast failed: no txid returned");
+    }
+
+    return {
+        chain: "btc",
+        txId,
+        raw: response.data,
+        nodeId: "blockstream-fallback",
+        provider: "chainstack",
+    };
+};
+
 const broadcastBitcoinTransaction = async (
     node: ChainstackNode,
     signedPayload: string,
@@ -1453,20 +1659,34 @@ const broadcastBitcoinTransaction = async (
         params: [signedPayload],
     };
 
-    const response = await axios.post(endpoint, payload, config);
-    const data = response.data;
+    try {
+        const response = await axios.post(endpoint, payload, config);
+        const data = response.data;
 
-    if (data?.error) {
-        throw new Error(data.error?.message || "Bitcoin broadcast failed");
+        if (data?.error) {
+            throw new Error(data.error?.message || "Bitcoin broadcast failed");
+        }
+
+        return {
+            chain: "btc",
+            txId: data?.result,
+            raw: data,
+            nodeId: node.id,
+            provider: "chainstack",
+        };
+    } catch (primaryError) {
+        console.warn("Chainstack BTC broadcast failed, trying Blockstream fallback", primaryError);
+
+        try {
+            return await broadcastBitcoinViaBlockstream(signedPayload);
+        } catch (blockstreamError) {
+            console.error("All BTC broadcast providers failed", {
+                chainstack: primaryError,
+                blockstream: blockstreamError,
+            });
+            throw primaryError;
+        }
     }
-
-    return {
-        chain: "btc",
-        txId: data?.result,
-        raw: data,
-        nodeId: node.id,
-        provider: "chainstack",
-    };
 };
 
 const CHAIN_HANDLERS: Record<string, ChainHandler> = {
@@ -1536,6 +1756,16 @@ const CHAIN_BROADCAST_HANDLERS: Record<string, ChainBroadcastHandler> = {
         normalizePayload: normalizeBase64Payload,
         selectNode: CHAIN_HANDLERS.sol.selectNode,
         broadcast: (node, payload) => broadcastSolanaTransaction(node, payload as string),
+    },
+    ton: {
+        normalizePayload: normalizeBase64Payload,
+        selectNode: CHAIN_HANDLERS.ton.selectNode,
+        broadcast: (node, payload) => broadcastTonTransaction(node, payload as string),
+    },
+    apt: {
+        normalizePayload: normalizeAptosPayload,
+        selectNode: CHAIN_HANDLERS.apt.selectNode,
+        broadcast: (node, payload) => broadcastAptosTransaction(node, payload as string),
     },
 };
 
