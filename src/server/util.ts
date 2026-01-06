@@ -25,7 +25,7 @@ export const pipe = async (promise: Promise<AxiosResponse>, res: express.Respons
 };
 
 
-export const baseApiRequest = (url: string, method: Method, headers: any = {}, payload: any = {}, params: any = {}): Promise<AxiosResponse> => {
+export const baseApiRequest = (url: string, method: Method, headers: any = {}, payload: any = {}, params: any = {}, timeout: number = 30000): Promise<AxiosResponse> => {
     const requestConf: AxiosRequestConfig = {
         url,
         method,
@@ -33,7 +33,8 @@ export const baseApiRequest = (url: string, method: Method, headers: any = {}, p
         responseType: "json",
         headers: {...headers},
         data: {...payload},
-        params: {...params}
+        params: {...params},
+        timeout
     }
 
     return axios(requestConf)
