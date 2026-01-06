@@ -174,7 +174,7 @@ const CHAIN_PARAM_REGEX = /^[a-z0-9-]+$/i;
 
 const CHAINSTACK_API_BASE = "https://api.chainstack.com/v1";
 const CHAINSTACK_NODES_ENDPOINT = `${CHAINSTACK_API_BASE}/nodes`;
-const CHAINSTACK_NODE_CACHE_TTL_MS = 300 * 60 * 1000; // 5 hours
+const CHAINSTACK_NODE_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 type BroadcastRequestBody = {
     signedPayload?: unknown;

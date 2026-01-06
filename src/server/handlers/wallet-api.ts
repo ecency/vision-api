@@ -1529,9 +1529,14 @@ const buildChainLayer = async (
             const decimals = wallet.decimals !== undefined ? wallet.decimals : config.decimals;
 
             try {
+                // Use shorter timeout for portfolio balance queries (10s instead of default 30s)
+                // to prevent the entire portfolio request from timing out
                 const response = await apiRequest(
                     `balance/${chain}/${encodeURIComponent(wallet.address)}`,
                     "GET",
+                    {},
+                    {},
+                    10000
                 );
 
                 const data = response.data as ChainBalanceResponse | undefined;
