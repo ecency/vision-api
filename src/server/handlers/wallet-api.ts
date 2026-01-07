@@ -82,6 +82,7 @@ interface PortfolioItem {
     balance: number;
     fiatRate: number;
     address?: string;
+    error?: string;
     pendingRewards?: number;
     pendingRewardsFiat?: number;
     liquid?: number;
@@ -680,6 +681,7 @@ const convertUsdRateToCurrency = (marketData: any, currency: string, usdRate: nu
 
 interface PortfolioItemOptions {
     address?: string;
+    error?: string;
     pendingRewards?: number;
     savings?: number;
     staked?: number;
@@ -720,6 +722,7 @@ const makePortfolioItem = (
         iconUrl,
         actions,
         extraData,
+        ...(options.error ? { error: options.error } : {}),
         ...(options.address ? { address: options.address } : {}),
         ...(hasPendingRewards
             ? {
@@ -1552,6 +1555,17 @@ const buildChainLayer = async (
                     10000
                 );
 
+                if (response.status !== 200) {
+                    const payload = response.data as any;
+                    const message =
+                        payload && typeof payload === "object"
+                            ? payload.error?.message || payload.error || payload.message
+                            : typeof payload === "string"
+                                ? payload
+                                : null;
+                    throw new Error(message || `Chain balance request failed (${response.status})`);
+                }
+
                 const data = response.data as ChainBalanceResponse | undefined;
                 const balance = convertChainBalanceToAmount(data, decimals);
                 const price = getTokenPrice(marketData, wallet.symbol, currency);
@@ -1569,6 +1583,7 @@ const buildChainLayer = async (
                     CHAIN_ACTIONS
                 );
             } catch (err) {
+                const errorMessage = err instanceof Error ? err.message : "Chain balance request failed";
                 console.warn("Failed to fetch external wallet balance", { chain, address: wallet.address, err });
                 const price = getTokenPrice(marketData, wallet.symbol, currency);
                 return makePortfolioItem(
@@ -1577,7 +1592,7 @@ const buildChainLayer = async (
                     "chain",
                     0,
                     price,
-                    { address: wallet.address },
+                    { address: wallet.address, error: errorMessage },
                     config.iconUrl || ASSET_ICON_URLS.CHAIN_PLACEHOLDER,
                     CHAIN_ACTIONS
                 );
