@@ -249,6 +249,19 @@ const convertChainBalanceToAmount = (
     }
 
     const { balance, unit } = balanceResponse;
+    const normalizedUnit = typeof unit === "string" ? unit.trim().toLowerCase() : "";
+    const unitDecimals: Record<string, number> = {
+        wei: 18,
+        lamports: 9,
+        sun: 6,
+        nanotons: 9,
+        octas: 8,
+        satoshi: 8,
+    };
+    const resolvedDecimals =
+        normalizedUnit && normalizedUnit in unitDecimals
+            ? unitDecimals[normalizedUnit]
+            : decimals;
 
     if (balance === null || typeof balance === "undefined") {
         return 0;
@@ -265,12 +278,12 @@ const convertChainBalanceToAmount = (
             return 0;
         }
 
-        if (unit === "btc") {
+        if (normalizedUnit === "btc") {
             const parsed = Number(trimmed);
             return Number.isNaN(parsed) ? 0 : parsed;
         }
 
-        return convertBaseUnitsToAmount(trimmed, decimals);
+        return convertBaseUnitsToAmount(trimmed, resolvedDecimals);
     }
 
     return 0;
