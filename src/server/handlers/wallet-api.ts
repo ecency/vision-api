@@ -707,11 +707,24 @@ const getTokenPrice = (marketData: any, token: string, currency: string): number
 
     // Fallback: If no direct price found and currency is not USD, try USD conversion
     if (currencyKey !== "usd") {
-        const priceInUsd = getTokenPrice(marketData, token, "usd");
-        if (priceInUsd > 0) {
-            const usdToCurrencyRate = getUsdToCurrencyRate(marketData, currencyKey);
-            if (usdToCurrencyRate > 0) {
-                return priceInUsd * usdToCurrencyRate;
+        // Check if we have a pre-fetched conversion rate in the enhanced market data
+        const conversionRate = (marketData as any)?._currencyConversionRate;
+        const targetCurrency = (marketData as any)?._targetCurrency;
+
+        if (conversionRate && targetCurrency === currencyKey) {
+            // Use the pre-fetched conversion rate
+            const priceInUsd = getTokenPrice(marketData, token, "usd");
+            if (priceInUsd > 0) {
+                return priceInUsd * conversionRate;
+            }
+        } else {
+            // Fall back to trying to extract from market data
+            const priceInUsd = getTokenPrice(marketData, token, "usd");
+            if (priceInUsd > 0) {
+                const usdToCurrencyRate = getUsdToCurrencyRate(marketData, currencyKey);
+                if (usdToCurrencyRate > 0) {
+                    return priceInUsd * usdToCurrencyRate;
+                }
             }
         }
     }
@@ -728,6 +741,14 @@ const convertUsdRateToCurrency = (marketData: any, currency: string, usdRate: nu
 
     if (normalizedCurrency === "usd") {
         return usdRate;
+    }
+
+    // Check if we have a pre-fetched conversion rate in the enhanced market data
+    const conversionRate = (marketData as any)?._currencyConversionRate;
+    const targetCurrency = (marketData as any)?._targetCurrency;
+
+    if (conversionRate && targetCurrency === normalizedCurrency) {
+        return usdRate * conversionRate;
     }
 
     const referenceTokens = ["hive", "hbd", "btc", "eth"];
@@ -2023,16 +2044,33 @@ export const portfolioV2 = async (req: express.Request, res: express.Response) =
         const enginePromise = fetchEngineTokensWithBalance(username);
         const spkPromise = fetchSpkData(username);
 
-        const [globalProps, accountData, marketData, pointsData, engineData, spkData] = await Promise.all([
+        // Fetch currency conversion rate if not USD
+        const currencyRatePromise = normalizedCurrency !== "usd"
+            ? apiRequestData(`market-data/currency-rate/${normalizedCurrency}/usd`)
+                .catch((err) => {
+                    console.warn(`Failed to fetch ${normalizedCurrency}/USD rate:`, err);
+                    return null;
+                })
+            : Promise.resolve(1.0);
+
+        const [globalProps, accountData, marketData, pointsData, engineData, spkData, currencyRate] = await Promise.all([
             globalPropsPromise,
             accountPromise,
             marketPromise,
             pointsPromise,
             enginePromise,
             spkPromise,
+            currencyRatePromise,
         ]);
 
-        const hivePrice = getTokenPrice(marketData, "hive", normalizedCurrency);
+        // Add currency conversion rate to market data for getTokenPrice to use
+        const enhancedMarketData = {
+            ...marketData,
+            _currencyConversionRate: typeof currencyRate === "number" ? currencyRate : (currencyRate as any)?.rate || 1.0,
+            _targetCurrency: normalizedCurrency,
+        };
+
+        const hivePrice = getTokenPrice(enhancedMarketData, "hive", normalizedCurrency);
 
         const wallets: PortfolioItem[] = [];
 
@@ -2045,13 +2083,13 @@ export const portfolioV2 = async (req: express.Request, res: express.Response) =
                 : undefined;
 
         wallets.push(
-            ...buildPointsLayer(pointsData, marketData, normalizedCurrency),
-            ...buildHiveLayer(accountData, globalProps, marketData, normalizedCurrency),
-            ...buildSpkLayer(spkData, marketData, normalizedCurrency),
+            ...buildPointsLayer(pointsData, enhancedMarketData, normalizedCurrency),
+            ...buildHiveLayer(accountData, globalProps, enhancedMarketData, normalizedCurrency),
+            ...buildSpkLayer(spkData, enhancedMarketData, normalizedCurrency),
         );
 
         wallets.push(
-            ...buildEngineLayer(engineData, marketData, normalizedCurrency, hivePrice, engineOptions),
+            ...buildEngineLayer(engineData, enhancedMarketData, normalizedCurrency, hivePrice, engineOptions),
         );
 
         const chainOptions =
@@ -2060,7 +2098,7 @@ export const portfolioV2 = async (req: express.Request, res: express.Response) =
                 : {
                     onlyEnabled: onlyEnabledFlag,
                 };
-        const chainWallets = await buildChainLayer(accountData, marketData, normalizedCurrency, chainOptions);
+        const chainWallets = await buildChainLayer(accountData, enhancedMarketData, normalizedCurrency, chainOptions);
         wallets.push(...chainWallets);
 
         const filteredWallets = wallets.filter((item) => item && Number.isFinite(item.balance));
