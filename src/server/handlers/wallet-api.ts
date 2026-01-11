@@ -81,6 +81,7 @@ interface PortfolioItem {
     layer: PortfolioLayer;
     balance: number;
     fiatRate: number;
+    fiatCurrency: string;
     precision: number;
     address?: string;
     error?: string;
@@ -695,6 +696,7 @@ const makePortfolioItem = (
     layer: PortfolioLayer,
     balance: number,
     fiatRate: number,
+    fiatCurrency: string,
     precision: number,
     options: PortfolioItemOptions = {},
     iconUrl?: string,
@@ -721,6 +723,7 @@ const makePortfolioItem = (
         layer,
         balance: totalBalance,
         fiatRate: normalizedRate,
+        fiatCurrency: fiatCurrency.toUpperCase(),
         precision,
         iconUrl,
         actions,
@@ -1179,6 +1182,7 @@ const buildPointsLayer = (pointsData: any, marketData: any, currency: string): P
         "points",
         balance,
         price,
+        currency,
         3,
         options,
         iconUrl,
@@ -1297,6 +1301,7 @@ const buildHiveLayer = (
         "hive",
         0,
         hivePrice,
+        currency,
         3,
         stakedOptions,
         ASSET_ICON_URLS.HIVE,
@@ -1310,14 +1315,14 @@ const buildHiveLayer = (
 
     return [
         stakedHiveItem,
-        makePortfolioItem("Hive", "HIVE", "hive", hiveBalance, hivePrice, 3, {
+        makePortfolioItem("Hive", "HIVE", "hive", hiveBalance, hivePrice, currency, 3, {
             savings: hiveSavings,
             pendingRewards: pendingHive,
         },
             ASSET_ICON_URLS.HIVE,
             HIVE_ACTIONS
         ),
-        makePortfolioItem("Hive Dollar", "HBD", "hive", hbdBalance, hbdPrice, 3, {
+        makePortfolioItem("Hive Dollar", "HBD", "hive", hbdBalance, hbdPrice, currency, 3, {
             savings: hbdSavings,
             pendingRewards: pendingHbd,
             ...(hbdApr !== undefined ? { apr: hbdApr } : {}),
@@ -1423,6 +1428,7 @@ const buildEngineLayer = (
                 "engine",
                 balance,
                 fiatRate,
+                currency,
                 precision,
                 itemOptions,
                 iconUrl,
@@ -1479,7 +1485,7 @@ const buildSpkLayer = (spkData: any, marketData: any, currency: string): Portfol
 
     if (spkBalance !== null) {
         const spkPrice = getTokenPrice(marketData, "spk", currency);
-        items.push(makePortfolioItem("SPK", "SPK", "spk", spkBalance, spkPrice, 3,
+        items.push(makePortfolioItem("SPK", "SPK", "spk", spkBalance, spkPrice, currency, 3,
             {},
             ASSET_ICON_URLS.SPK,
             SPK_ACTIONS));
@@ -1521,7 +1527,7 @@ const buildSpkLayer = (spkData: any, marketData: any, currency: string): Portfol
         const larynxPrice = getTokenPrice(marketData, "larynx", currency);
 
         items.push(
-            makePortfolioItem("LARYNX", "LARYNX", "spk", liquid, larynxPrice, 3, {
+            makePortfolioItem("LARYNX", "LARYNX", "spk", liquid, larynxPrice, currency, 3, {
                 staked,
             },
                 ASSET_ICON_URLS.SPK_PLACEHOLDER,
@@ -1585,6 +1591,7 @@ const buildChainLayer = async (
                     "chain",
                     balance,
                     price,
+                    currency,
                     decimals,
                     { address: wallet.address },
                     iconUrl,
@@ -1600,6 +1607,7 @@ const buildChainLayer = async (
                     "chain",
                     0,
                     price,
+                    currency,
                     decimals,
                     { address: wallet.address, error: errorMessage },
                     config.iconUrl || ASSET_ICON_URLS.CHAIN_PLACEHOLDER,
