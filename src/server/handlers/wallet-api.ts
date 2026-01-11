@@ -81,6 +81,7 @@ interface PortfolioItem {
     layer: PortfolioLayer;
     balance: number;
     fiatRate: number;
+    precision: number;
     address?: string;
     error?: string;
     pendingRewards?: number;
@@ -694,6 +695,7 @@ const makePortfolioItem = (
     layer: PortfolioLayer,
     balance: number,
     fiatRate: number,
+    precision: number,
     options: PortfolioItemOptions = {},
     iconUrl?: string,
     actions?: TokenAction[],
@@ -719,6 +721,7 @@ const makePortfolioItem = (
         layer,
         balance: totalBalance,
         fiatRate: normalizedRate,
+        precision,
         iconUrl,
         actions,
         extraData,
@@ -1176,6 +1179,7 @@ const buildPointsLayer = (pointsData: any, marketData: any, currency: string): P
         "points",
         balance,
         price,
+        3,
         options,
         iconUrl,
         ECENCY_ACTIONS
@@ -1293,6 +1297,7 @@ const buildHiveLayer = (
         "hive",
         0,
         hivePrice,
+        3,
         stakedOptions,
         ASSET_ICON_URLS.HIVE,
         HP_ACTIONS,
@@ -1305,14 +1310,14 @@ const buildHiveLayer = (
 
     return [
         stakedHiveItem,
-        makePortfolioItem("Hive", "HIVE", "hive", hiveBalance, hivePrice, {
+        makePortfolioItem("Hive", "HIVE", "hive", hiveBalance, hivePrice, 3, {
             savings: hiveSavings,
             pendingRewards: pendingHive,
         },
             ASSET_ICON_URLS.HIVE,
             HIVE_ACTIONS
         ),
-        makePortfolioItem("Hive Dollar", "HBD", "hive", hbdBalance, hbdPrice, {
+        makePortfolioItem("Hive Dollar", "HBD", "hive", hbdBalance, hbdPrice, 3, {
             savings: hbdSavings,
             pendingRewards: pendingHbd,
             ...(hbdApr !== undefined ? { apr: hbdApr } : {}),
@@ -1370,6 +1375,7 @@ const buildEngineLayer = (
         const symbol = typeof token.symbol === "string" && token.symbol ? token.symbol : rawSymbol;
         const name = typeof token.name === "string" && token.name ? token.name : symbol;
         const iconUrl = typeof token.icon === "string" && token.icon ? token.icon : ASSET_ICON_URLS.ENGINE_PLACEHOLDER;
+        const precision = typeof token.precision === "number" ? token.precision : 0;
 
         const pendingRewards = typeof token.pendingRewards === "number" ? token.pendingRewards : undefined;
 
@@ -1417,6 +1423,7 @@ const buildEngineLayer = (
                 "engine",
                 balance,
                 fiatRate,
+                precision,
                 itemOptions,
                 iconUrl,
                 actions,
@@ -1472,7 +1479,7 @@ const buildSpkLayer = (spkData: any, marketData: any, currency: string): Portfol
 
     if (spkBalance !== null) {
         const spkPrice = getTokenPrice(marketData, "spk", currency);
-        items.push(makePortfolioItem("SPK", "SPK", "spk", spkBalance, spkPrice,
+        items.push(makePortfolioItem("SPK", "SPK", "spk", spkBalance, spkPrice, 3,
             {},
             ASSET_ICON_URLS.SPK,
             SPK_ACTIONS));
@@ -1514,7 +1521,7 @@ const buildSpkLayer = (spkData: any, marketData: any, currency: string): Portfol
         const larynxPrice = getTokenPrice(marketData, "larynx", currency);
 
         items.push(
-            makePortfolioItem("LARYNX", "LARYNX", "spk", liquid, larynxPrice, {
+            makePortfolioItem("LARYNX", "LARYNX", "spk", liquid, larynxPrice, 3, {
                 staked,
             },
                 ASSET_ICON_URLS.SPK_PLACEHOLDER,
@@ -1578,6 +1585,7 @@ const buildChainLayer = async (
                     "chain",
                     balance,
                     price,
+                    decimals,
                     { address: wallet.address },
                     iconUrl,
                     CHAIN_ACTIONS
@@ -1592,6 +1600,7 @@ const buildChainLayer = async (
                     "chain",
                     0,
                     price,
+                    decimals,
                     { address: wallet.address, error: errorMessage },
                     config.iconUrl || ASSET_ICON_URLS.CHAIN_PLACEHOLDER,
                     CHAIN_ACTIONS
