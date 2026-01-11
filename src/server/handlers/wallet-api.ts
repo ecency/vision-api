@@ -81,7 +81,7 @@ interface PortfolioItem {
     layer: PortfolioLayer;
     balance: number;
     fiatRate: number;
-    fiatCurrency: string;
+    currency: string;
     precision: number;
     address?: string;
     error?: string;
@@ -537,6 +537,11 @@ const getTokenPrice = (marketData: any, token: string, currency: string): number
     const tokenKey = token.toLowerCase();
     const upperToken = token.toUpperCase();
 
+    // If token and currency are the same, return 1.0 (e.g., BTC price in BTC = 1.0)
+    if (tokenKey === currencyKey) {
+        return 1.0;
+    }
+
     const containers = collectContainers(marketData, 3);
     const candidates: any[] = [];
 
@@ -696,7 +701,7 @@ const makePortfolioItem = (
     layer: PortfolioLayer,
     balance: number,
     fiatRate: number,
-    fiatCurrency: string,
+    currency: string,
     precision: number,
     options: PortfolioItemOptions = {},
     iconUrl?: string,
@@ -723,7 +728,7 @@ const makePortfolioItem = (
         layer,
         balance: totalBalance,
         fiatRate: normalizedRate,
-        fiatCurrency: fiatCurrency.toUpperCase(),
+        currency: currency.toUpperCase(),
         precision,
         iconUrl,
         actions,
