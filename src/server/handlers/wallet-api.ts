@@ -300,6 +300,73 @@ const normalizeCurrency = (currency?: string): string => {
     return currency.trim().toLowerCase() || "usd";
 };
 
+const getUsdToCurrencyRate = (marketData: any, currency: string): number => {
+    const currencyKey = currency.toLowerCase();
+
+    // If currency is USD, rate is 1.0
+    if (currencyKey === "usd") {
+        return 1.0;
+    }
+
+    // Try to get direct USD to currency rate from market data
+    const containers = collectContainers(marketData, 3);
+
+    // Try reference tokens to calculate USD/Currency rate
+    const referenceTokens = ["hive", "btc", "eth", "hbd"];
+
+    for (const reference of referenceTokens) {
+        const tokenKey = reference.toLowerCase();
+        const candidates: any[] = [];
+
+        // Find candidates for this reference token
+        for (const container of containers) {
+            if (!container || typeof container !== "object") continue;
+
+            if (Array.isArray(container)) {
+                for (const entry of container) {
+                    if (!entry || typeof entry !== "object") continue;
+                    const symbolKeys = ["symbol", "token", "name", "id", "ticker"];
+                    const symbolVal = symbolKeys
+                        .map((key) => (entry as any)[key])
+                        .find((val) => typeof val === "string" && val.trim().toLowerCase() === tokenKey);
+                    if (symbolVal) {
+                        candidates.push(entry);
+                    }
+                }
+            } else {
+                const directMatch = (container as any)[tokenKey] || (container as any)[reference.toUpperCase()];
+                if (directMatch) {
+                    candidates.push(directMatch);
+                }
+            }
+        }
+
+        // Extract USD and target currency prices
+        let priceInUsd: number | null = null;
+        let priceInCurrency: number | null = null;
+
+        for (const candidate of candidates) {
+            if (priceInUsd === null || priceInUsd === 0) {
+                priceInUsd = extractPriceFromValue(candidate, "usd");
+            }
+            if (priceInCurrency === null || priceInCurrency === 0) {
+                priceInCurrency = extractPriceFromValue(candidate, currencyKey);
+            }
+            if (priceInUsd && priceInUsd > 0 && priceInCurrency && priceInCurrency > 0) {
+                break;
+            }
+        }
+
+        if (priceInUsd && priceInUsd > 0 && priceInCurrency && priceInCurrency > 0) {
+            // Calculate USD/Currency rate: price_in_currency / price_in_usd
+            return priceInCurrency / priceInUsd;
+        }
+    }
+
+    // Couldn't find conversion rate
+    return 0;
+};
+
 const parseBoolean = (value: unknown): boolean | undefined => {
     if (value === undefined || value === null) {
         return undefined;
@@ -633,8 +700,19 @@ const getTokenPrice = (marketData: any, token: string, currency: string): number
 
     for (const candidate of candidates) {
         const price = extractPriceFromValue(candidate, currencyKey);
-        if (price !== null) {
+        if (price !== null && price > 0) {
             return price;
+        }
+    }
+
+    // Fallback: If no direct price found and currency is not USD, try USD conversion
+    if (currencyKey !== "usd") {
+        const priceInUsd = getTokenPrice(marketData, token, "usd");
+        if (priceInUsd > 0) {
+            const usdToCurrencyRate = getUsdToCurrencyRate(marketData, currencyKey);
+            if (usdToCurrencyRate > 0) {
+                return priceInUsd * usdToCurrencyRate;
+            }
         }
     }
 
