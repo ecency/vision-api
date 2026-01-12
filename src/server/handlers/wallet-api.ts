@@ -2,7 +2,7 @@ import express from "express";
 
 import { baseApiRequest, pipe, parseToken, getHoursDifferntial } from "../util";
 import { fetchGlobalProps, getAccount } from "./hive-explorer";
-import { apiRequest, apiRequestData, ChainBalanceResponse } from "../helper";
+import { apiRequest, ChainBalanceResponse } from "../helper";
 import { fetchChainBalance } from "./private-api";
 
 import { EngineContracts, EngineIds, EngineMetric, EngineRequestPayload, EngineTables, JSON_RPC, Methods, Token, TokenBalance, TokenStatus } from "../../models/hiveEngine.types";
