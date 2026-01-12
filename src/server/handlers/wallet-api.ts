@@ -3,6 +3,7 @@ import express from "express";
 import { baseApiRequest, pipe, parseToken, getHoursDifferntial } from "../util";
 import { fetchGlobalProps, getAccount } from "./hive-explorer";
 import { apiRequest, ChainBalanceResponse } from "../helper";
+import { fetchChainBalance } from "./private-api";
 
 import { EngineContracts, EngineIds, EngineMetric, EngineRequestPayload, EngineTables, JSON_RPC, Methods, Token, TokenBalance, TokenStatus } from "../../models/hiveEngine.types";
 import { convertEngineToken, convertRewardsStatus } from "../../models/converters";
@@ -1643,6 +1644,35 @@ const buildSpkLayer = (spkData: any, marketData: any, currency: string): Portfol
     return items;
 };
 
+// Helper to process items with concurrency limit
+const processWithConcurrencyLimit = async <T, R>(
+    items: T[],
+    processor: (item: T) => Promise<R>,
+    concurrencyLimit: number
+): Promise<R[]> => {
+    const results: R[] = [];
+    const executing: Set<Promise<void>> = new Set();
+
+    for (const [index, item] of items.entries()) {
+        const promise = processor(item)
+            .then((result) => {
+                results[index] = result;
+            })
+            .finally(() => {
+                executing.delete(promise);
+            });
+
+        executing.add(promise);
+
+        if (executing.size >= concurrencyLimit) {
+            await Promise.race(executing);
+        }
+    }
+
+    await Promise.all(Array.from(executing));
+    return results;
+};
+
 const buildChainLayer = async (
     accountData: any,
     marketData: any,
@@ -1655,39 +1685,24 @@ const buildChainLayer = async (
         return [];
     }
 
-    const items = await Promise.all(
-        wallets.map(async (wallet) => {
+    // Limit concurrent balance requests to 3 to avoid overwhelming the service
+    // and prevent 502 errors from proxies/load balancers
+    const items = await processWithConcurrencyLimit(
+        wallets,
+        async (wallet) => {
             const chain = wallet.chain.toLowerCase();
             const config = CHAIN_CONFIG[chain];
             const decimals = wallet.decimals !== undefined ? wallet.decimals : config.decimals;
 
             try {
-                // Use shorter timeout for portfolio balance queries (10s instead of default 30s)
-                // to prevent the entire portfolio request from timing out
-                const response = await apiRequest(
-                    `balance/${chain}/${encodeURIComponent(wallet.address)}`,
-                    "GET",
-                    {},
-                    {},
-                    10000
-                );
+                // Call fetchChainBalance directly instead of making HTTP request
+                // This eliminates proxy overhead, double timeouts, and 502 errors
+                const data = await fetchChainBalance(chain, wallet.address);
 
-                if (response.status !== 200) {
-                    const payload = response.data as any;
-                    const message =
-                        payload && typeof payload === "object"
-                            ? payload.error?.message || payload.error || payload.message
-                            : typeof payload === "string"
-                                ? payload
-                                : null;
-                    throw new Error(message || `Chain balance request failed (${response.status})`);
-                }
-
-                const data = response.data as ChainBalanceResponse | undefined;
                 const balance = convertChainBalanceToAmount(data, decimals);
                 const price = getTokenPrice(marketData, wallet.symbol, currency);
 
-                const iconUrl = config.iconUrl || ASSET_ICON_URLS.CHAIN_PLACEHOLDER
+                const iconUrl = config.iconUrl || ASSET_ICON_URLS.CHAIN_PLACEHOLDER;
 
                 return makePortfolioItem(
                     wallet.name || config.name,
@@ -1718,7 +1733,8 @@ const buildChainLayer = async (
                     CHAIN_ACTIONS
                 );
             }
-        }),
+        },
+        3 // Max 3 concurrent requests
     );
 
     return items.filter(Boolean);
