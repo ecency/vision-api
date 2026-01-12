@@ -2,7 +2,7 @@ import express from "express";
 
 import { baseApiRequest, pipe, parseToken, getHoursDifferntial } from "../util";
 import { fetchGlobalProps, getAccount } from "./hive-explorer";
-import { apiRequest, ChainBalanceResponse } from "../helper";
+import { apiRequest, apiRequestData, ChainBalanceResponse } from "../helper";
 import { fetchChainBalance } from "./private-api";
 
 import { EngineContracts, EngineIds, EngineMetric, EngineRequestPayload, EngineTables, JSON_RPC, Methods, Token, TokenBalance, TokenStatus } from "../../models/hiveEngine.types";
@@ -467,6 +467,18 @@ const extractPriceFromValue = (
     }
     visited.add(value);
 
+    // Handle market-data/latest structure: token.quotes.{currency}.price
+    if (value.quotes && typeof value.quotes === "object") {
+        const quotesObj = value.quotes;
+        const currencyQuote = quotesObj[currencyKey];
+        if (currencyQuote && typeof currencyQuote === "object") {
+            const price = currencyQuote.price;
+            if (typeof price === "number" && Number.isFinite(price)) {
+                return price;
+            }
+        }
+    }
+
     if (Array.isArray(value)) {
         for (const entry of value) {
             const result = extractPriceFromValue(entry, currencyKey, visited);
@@ -610,6 +622,13 @@ const getTokenPrice = (marketData: any, token: string, currency: string): number
         return 1.0;
     }
 
+    // Debug: Log what we're looking for
+    if (currencyKey !== "usd") {
+        const tokenData = marketData[tokenKey] || marketData[upperToken];
+        const availableQuotes = tokenData?.quotes ? Object.keys(tokenData.quotes) : [];
+        console.log(`Looking for ${tokenKey} price in ${currencyKey}. Available quotes:`, availableQuotes);
+    }
+
     const containers = collectContainers(marketData, 3);
     const candidates: any[] = [];
 
@@ -706,26 +725,17 @@ const getTokenPrice = (marketData: any, token: string, currency: string): number
         }
     }
 
-    // Fallback: If no direct price found and currency is not USD, try USD conversion
+    // Fallback: If no direct price found and currency is not USD, try to derive from USD price
     if (currencyKey !== "usd") {
-        // Check if we have a pre-fetched conversion rate in the enhanced market data
-        const conversionRate = (marketData as any)?._currencyConversionRate;
-        const targetCurrency = (marketData as any)?._targetCurrency;
+        // Get USD price first
+        const priceInUsd = getTokenPrice(marketData, token, "usd");
 
-        if (conversionRate && targetCurrency === currencyKey) {
-            // Use the pre-fetched conversion rate
-            const priceInUsd = getTokenPrice(marketData, token, "usd");
-            if (priceInUsd > 0) {
-                return priceInUsd * conversionRate;
-            }
-        } else {
-            // Fall back to trying to extract from market data
-            const priceInUsd = getTokenPrice(marketData, token, "usd");
-            if (priceInUsd > 0) {
-                const usdToCurrencyRate = getUsdToCurrencyRate(marketData, currencyKey);
-                if (usdToCurrencyRate > 0) {
-                    return priceInUsd * usdToCurrencyRate;
-                }
+        if (priceInUsd > 0) {
+            // Try to get the USD-to-target-currency rate from market data
+            // This uses reference tokens (HIVE, BTC, ETH, HBD) to calculate the rate
+            const usdToCurrencyRate = getUsdToCurrencyRate(marketData, currencyKey);
+            if (usdToCurrencyRate > 0) {
+                return priceInUsd * usdToCurrencyRate;
             }
         }
     }
@@ -744,13 +754,7 @@ const convertUsdRateToCurrency = (marketData: any, currency: string, usdRate: nu
         return usdRate;
     }
 
-    // Check if we have a pre-fetched conversion rate in the enhanced market data
-    const conversionRate = (marketData as any)?._currencyConversionRate;
-    const targetCurrency = (marketData as any)?._targetCurrency;
-
-    if (conversionRate && targetCurrency === normalizedCurrency) {
-        return usdRate * conversionRate;
-    }
+    // Try to derive conversion rate from market data using reference tokens
 
     const referenceTokens = ["hive", "hbd", "btc", "eth"];
 
@@ -2055,38 +2059,27 @@ export const portfolioV2 = async (req: express.Request, res: express.Response) =
     try {
         const globalPropsPromise = fetchGlobalProps();
         const accountPromise = getAccount(username);
-        const marketPromise = apiRequestData(`market-data/latest`);
+        // Pass currency parameter to market-data/latest to get prices in the target currency
+        const marketPromise = apiRequestData(`market-data/latest?currency=${normalizedCurrency}`);
         const pointsPromise = apiRequestData(`users/${username}`);
         const enginePromise = fetchEngineTokensWithBalance(username);
         const spkPromise = fetchSpkData(username);
 
-        // Fetch currency conversion rate if not USD
-        const currencyRatePromise = normalizedCurrency !== "usd"
-            ? apiRequestData(`market-data/currency-rate/${normalizedCurrency}/usd`)
-                .catch((err) => {
-                    console.warn(`Failed to fetch ${normalizedCurrency}/USD rate:`, err);
-                    return null;
-                })
-            : Promise.resolve(1.0);
-
-        const [globalProps, accountData, marketData, pointsData, engineData, spkData, currencyRate] = await Promise.all([
+        const [globalProps, accountData, marketData, pointsData, engineData, spkData] = await Promise.all([
             globalPropsPromise,
             accountPromise,
             marketPromise,
             pointsPromise,
             enginePromise,
             spkPromise,
-            currencyRatePromise,
         ]);
 
-        // Add currency conversion rate to market data for getTokenPrice to use
-        const enhancedMarketData = {
-            ...marketData,
-            _currencyConversionRate: typeof currencyRate === "number" ? currencyRate : (currencyRate as any)?.rate || 1.0,
-            _targetCurrency: normalizedCurrency,
-        };
+        console.log(`Portfolio v2 currency:`, {
+            requestedCurrency: normalizedCurrency,
+            marketDataKeys: Object.keys(marketData || {}).slice(0, 10)
+        });
 
-        const hivePrice = getTokenPrice(enhancedMarketData, "hive", normalizedCurrency);
+        const hivePrice = getTokenPrice(marketData, "hive", normalizedCurrency);
 
         const wallets: PortfolioItem[] = [];
 
@@ -2099,13 +2092,13 @@ export const portfolioV2 = async (req: express.Request, res: express.Response) =
                 : undefined;
 
         wallets.push(
-            ...buildPointsLayer(pointsData, enhancedMarketData, normalizedCurrency),
-            ...buildHiveLayer(accountData, globalProps, enhancedMarketData, normalizedCurrency),
-            ...buildSpkLayer(spkData, enhancedMarketData, normalizedCurrency),
+            ...buildPointsLayer(pointsData, marketData, normalizedCurrency),
+            ...buildHiveLayer(accountData, globalProps, marketData, normalizedCurrency),
+            ...buildSpkLayer(spkData, marketData, normalizedCurrency),
         );
 
         wallets.push(
-            ...buildEngineLayer(engineData, enhancedMarketData, normalizedCurrency, hivePrice, engineOptions),
+            ...buildEngineLayer(engineData, marketData, normalizedCurrency, hivePrice, engineOptions),
         );
 
         const chainOptions =
@@ -2114,7 +2107,7 @@ export const portfolioV2 = async (req: express.Request, res: express.Response) =
                 : {
                     onlyEnabled: onlyEnabledFlag,
                 };
-        const chainWallets = await buildChainLayer(accountData, enhancedMarketData, normalizedCurrency, chainOptions);
+        const chainWallets = await buildChainLayer(accountData, marketData, normalizedCurrency, chainOptions);
         wallets.push(...chainWallets);
 
         const filteredWallets = wallets.filter((item) => item && Number.isFinite(item.balance));

@@ -2704,7 +2704,9 @@ export const marketData = async (req: express.Request, res: express.Response) =>
 };
 
 export const marketDataLatest = async (req: express.Request, res: express.Response) => {
-    pipe(apiRequest(`market-data/latest`, "GET"), res);
+    const { currency } = req.query;
+    const queryString = currency ? `?currency=${currency}` : '';
+    pipe(apiRequest(`market-data/latest${queryString}`, "GET"), res);
 };
 
 export const report = async (req: express.Request, res: express.Response) => {
