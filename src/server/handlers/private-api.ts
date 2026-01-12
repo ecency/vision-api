@@ -8,6 +8,7 @@ import {
     apiRequest,
     getPromotedEntries,
     ChainBalanceResponse,
+    BalanceProvider,
     parseBalanceProvider,
     fetchChainzBalance,
     fetchBlockstreamBalance,
