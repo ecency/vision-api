@@ -399,7 +399,7 @@ const makeApiAuth = () => {
     }
 }
 
-export const apiRequest = (endpoint: string, method: Method, extraHeaders: any = {}, payload: any = {}, timeout?: number): Promise<AxiosResponse> | Promise<any> => {
+export const apiRequest = (endpoint: string, method: Method, extraHeaders: any = {}, payload: any = {}, params: any = {}, timeout?: number): Promise<AxiosResponse> | Promise<any> => {
     const apiAuth = makeApiAuth();
     if (!apiAuth) {
         return new Promise((resolve, reject) => {
@@ -416,7 +416,7 @@ export const apiRequest = (endpoint: string, method: Method, extraHeaders: any =
         ...extraHeaders
     }
 
-    return baseApiRequest(url, method, headers, payload, {}, timeout)
+    return baseApiRequest(url, method, headers, payload, params, timeout)
 }
 
 interface Entry{

@@ -2255,7 +2255,7 @@ export const images = async (req: express.Request, res: express.Response) => {
         return;
     }
 
-    pipe(apiRequest(`images/${username}`, "GET"), res);
+    pipe(apiRequest(`images/${username}`, "GET", {}, {}, req.query), res);
 }
 
 export const imagesDelete = async (req: express.Request, res: express.Response) => {
@@ -2285,7 +2285,7 @@ export const drafts = async (req: express.Request, res: express.Response) => {
         res.status(401).send("Unauthorized");
         return;
     }
-    pipe(apiRequest(`drafts/${username}`, "GET"), res);
+    pipe(apiRequest(`drafts/${username}`, "GET", {}, {}, req.query), res);
 }
 
 export const draftsAdd = async (req: express.Request, res: express.Response) => {
@@ -2326,7 +2326,7 @@ export const bookmarks = async (req: express.Request, res: express.Response) => 
         res.status(401).send("Unauthorized");
         return;
     }
-    pipe(apiRequest(`bookmarks/${username}`, "GET"), res);
+    pipe(apiRequest(`bookmarks/${username}`, "GET", {}, {}, req.query), res);
 }
 
 export const bookmarksAdd = async (req: express.Request, res: express.Response) => {
@@ -2356,7 +2356,7 @@ export const schedules = async (req: express.Request, res: express.Response) => 
         res.status(401).send("Unauthorized");
         return;
     }
-    pipe(apiRequest(`schedules/${username}`, "GET"), res);
+    pipe(apiRequest(`schedules/${username}`, "GET", {}, {}, req.query), res);
 }
 
 export const schedulesAdd = async (req: express.Request, res: express.Response) => {
@@ -2398,7 +2398,7 @@ export const favorites = async (req: express.Request, res: express.Response) => 
         res.status(401).send("Unauthorized");
         return;
     }
-    pipe(apiRequest(`favorites/${username}`, "GET"), res);
+    pipe(apiRequest(`favorites/${username}`, "GET", {}, {}, req.query), res);
 }
 
 export const favoritesCheck = async (req: express.Request, res: express.Response) => {
@@ -2438,7 +2438,7 @@ export const fragments = async (req: express.Request, res: express.Response) => 
         res.status(401).send("Unauthorized");
         return;
     }
-    pipe(apiRequest(`fragments/${username}`, "GET"), res);
+    pipe(apiRequest(`fragments/${username}`, "GET", {}, {}, req.query), res);
 }
 
 export const fragmentsAdd = async (req: express.Request, res: express.Response) => {
