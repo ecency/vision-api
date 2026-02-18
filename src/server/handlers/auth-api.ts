@@ -17,7 +17,10 @@ const b64uLookup: Record<string, string> = {
 
 export const hsTokenRefresh = async (req: express.Request, res: express.Response) => {
     const {code} = req.body;
-    if (!decodeToken(code)) res.status(401).send("Unauthorized");
+    if (!decodeToken(code)) {
+        res.status(401).send("Unauthorized");
+        return;
+    }
 
     pipe(baseApiRequest(getTokenUrl(code, config.hsClientSecret), "GET"), res);
 };

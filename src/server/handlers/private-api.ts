@@ -71,8 +71,11 @@ const validateCode = async (req: express.Request): Promise<string | false> => {
         return false;
     }
 
+    // Normalize base64url → standard base64 (client encodes with b64uEnc which replaces +→-, /→_, =→.)
+    const normalizedCode = trimmedCode.replace(/-/g, '+').replace(/_/g, '/').replace(/\./g, '=');
+
     try {
-        const buffer = Buffer.from(trimmedCode, "base64");
+        const buffer = Buffer.from(normalizedCode, "base64");
 
         if (buffer.length === 0) {
             return false;

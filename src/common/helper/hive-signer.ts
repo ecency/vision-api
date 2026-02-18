@@ -24,9 +24,11 @@ export interface HiveSignerMessage {
 }
 
 export const decodeToken = (code: string): HiveSignerMessage | null => {
-    const buff = new Buffer(code, "base64");
+    // Normalize base64url → standard base64 (client encodes with b64uEnc which replaces +→-, /→_, =→.)
+    const normalizedCode = code.replace(/-/g, '+').replace(/_/g, '/').replace(/\./g, '=');
+    const buff = Buffer.from(normalizedCode, "base64");
     try {
-        const s = buff.toString("ascii");
+        const s = buff.toString("utf-8");
         return JSON.parse(s);
     } catch (e) {
         return null;
