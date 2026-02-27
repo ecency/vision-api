@@ -133,6 +133,8 @@ server
     .post("^/private-api/boosted-plus-account$", privateApi.boostedPlusAccount)
     .post("^/private-api/boost-options$", privateApi.boostOptions)
     .post("^/private-api/boosted-post$", privateApi.boostedPost)
+    .post("^/private-api/ai-generate-price$", privateApi.aiGeneratePrice)
+    .post("^/private-api/ai-generate-image$", privateApi.aiGenerateImage)
     .post("^/private-api/usr-activity$", privateApi.activities)
     .post("^/private-api/get-game$", privateApi.gameGet)
     .post("^/private-api/post-game$", privateApi.gamePost)

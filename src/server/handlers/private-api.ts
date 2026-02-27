@@ -2901,3 +2901,23 @@ export const walletsChkUser = async (req: express.Request, res: express.Response
 export const proposalActive = async (req: express.Request, res: express.Response) => {
     res.send(ACTIVE_PROPOSAL_META);
 }
+
+export const aiGeneratePrice = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req);
+    if (!username) {
+        res.status(401).send("Unauthorized");
+        return;
+    }
+    pipe(apiRequest(`ai-image-price`, "GET"), res);
+}
+
+export const aiGenerateImage = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req);
+    if (!username) {
+        res.status(401).send("Unauthorized");
+        return;
+    }
+    const { prompt, aspect_ratio } = req.body;
+    const data = { us: username, prompt, aspect_ratio };
+    pipe(apiRequest(`ai-image-generate`, "POST", {}, data), res);
+}
