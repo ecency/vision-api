@@ -2921,3 +2921,23 @@ export const aiGenerateImage = async (req: express.Request, res: express.Respons
     const data = { us: username, prompt, aspect_ratio };
     pipe(apiRequest(`ai-image-generate`, "POST", {}, data), res);
 }
+
+export const aiAssistPrice = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req);
+    if (!username) {
+        res.status(401).send("Unauthorized");
+        return;
+    }
+    pipe(apiRequest(`ai-assist-price?us=${username}`, "GET"), res);
+}
+
+export const aiAssist = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req);
+    if (!username) {
+        res.status(401).send("Unauthorized");
+        return;
+    }
+    const { action, text } = req.body;
+    const data = { us: username, action, text };
+    pipe(apiRequest(`ai-assist`, "POST", {}, data), res);
+}
