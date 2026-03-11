@@ -2713,12 +2713,33 @@ export const marketDataLatest = async (req: express.Request, res: express.Respon
 };
 
 export const report = async (req: express.Request, res: express.Response) => {
-    res.send({
-        status: 200,
-        body: {
-            status: 'ok'
-        }
-    });
+    const { type, author, permlink, reporter, notes } = req.body;
+
+    if (!type || !author) {
+        res.status(400).send("Missing required fields: type, author");
+        return;
+    }
+
+    if (type !== 'post' && type !== 'account') {
+        res.status(400).send("Invalid report type. Must be 'post' or 'account'");
+        return;
+    }
+
+    if (type === 'post' && !permlink) {
+        res.status(400).send("Missing required field: permlink for post reports");
+        return;
+    }
+
+    const data: Record<string, string> = { type, author };
+    if (type === 'post') {
+        data.permlink = permlink;
+    }
+    data.reporter = reporter || 'anonymous';
+    if (notes) {
+        data.notes = notes;
+    }
+
+    pipe(apiRequest("report", "POST", {}, data), res);
 };
 
 export const requestDelete = async (req: express.Request, res: express.Response) => {
