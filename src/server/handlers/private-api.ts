@@ -2027,6 +2027,107 @@ export const broadcast = async (req: express.Request, res: express.Response) => 
     }
 };
 
+/**
+ * Allowed JSON-RPC methods per chain for the RPC proxy.
+ * Only read-only / transaction-building methods are allowed.
+ * Signing and broadcasting should use the dedicated /broadcast endpoint.
+ */
+const ALLOWED_RPC_METHODS: Record<string, Set<string>> = {
+    sol: new Set([
+        "getLatestBlockhash",
+        "getBalance",
+        "getBlockHeight",
+        "getFeeForMessage",
+        "getMinimumBalanceForRentExemption",
+        "getRecentPrioritizationFees",
+    ]),
+    eth: new Set([
+        "eth_chainId",
+        "eth_gasPrice",
+        "eth_estimateGas",
+        "eth_getBalance",
+        "eth_blockNumber",
+        "eth_getTransactionCount",
+    ]),
+    bnb: new Set([
+        "eth_chainId",
+        "eth_gasPrice",
+        "eth_estimateGas",
+        "eth_getBalance",
+        "eth_blockNumber",
+        "eth_getTransactionCount",
+    ]),
+};
+
+/**
+ * Generic JSON-RPC proxy for supported chains.
+ * Forwards allowed read-only RPC calls to Chainstack nodes.
+ *
+ * POST /private-api/rpc/:chain
+ * Body: standard JSON-RPC payload { jsonrpc, id, method, params }
+ */
+export const chainRpc = async (req: express.Request, res: express.Response) => {
+    const { chain } = req.params;
+
+    if (!chain || !CHAIN_PARAM_REGEX.test(chain)) {
+        res.status(400).json({ error: "Invalid chain parameter" });
+        return;
+    }
+
+    const normalizedChain = chain.toLowerCase();
+    const allowedMethods = ALLOWED_RPC_METHODS[normalizedChain];
+
+    if (!allowedMethods) {
+        res.status(400).json({ error: `RPC proxy not available for chain: ${chain}` });
+        return;
+    }
+
+    const body = req.body;
+    if (!body || typeof body !== "object" || !body.method) {
+        res.status(400).json({ error: "Invalid JSON-RPC payload" });
+        return;
+    }
+
+    if (!allowedMethods.has(body.method)) {
+        res.status(403).json({ error: `Method not allowed: ${body.method}` });
+        return;
+    }
+
+    const handler = CHAIN_HANDLERS[normalizedChain];
+    if (!handler) {
+        res.status(400).json({ error: "Unsupported chain" });
+        return;
+    }
+
+    try {
+        const nodes = await fetchChainstackNodes();
+        const node = handler.selectNode(nodes);
+
+        if (!node) {
+            res.status(502).json({ error: "No Chainstack node available for requested chain" });
+            return;
+        }
+
+        const endpoint = ensureHttpsEndpoint(node);
+        const config = buildNodeAxiosConfig(node);
+
+        const response = await axios.post(endpoint, body, config);
+        res.setHeader("x-provider", "chainstack");
+        res.status(200).json(response.data);
+    } catch (err) {
+        console.error(`chainRpc(${normalizedChain}): error`, err);
+
+        if (axios.isAxiosError(err) && err.response) {
+            const { status, data } = err.response;
+            res.status(status).json(data !== undefined ? data : { error: "RPC request failed" });
+            return;
+        }
+
+        const msg = err instanceof Error ? err.message : "Unknown error";
+        res.status(502).json({ error: msg });
+    }
+};
+
 export const leaderboard = async (req: express.Request, res: express.Response) => {
     const { duration } = req.params;
     pipe(apiRequest(`leaderboard?duration=${duration}`, "GET"), res);
