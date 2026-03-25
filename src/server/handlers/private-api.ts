@@ -3039,8 +3039,8 @@ export const aiGenerateImage = async (req: express.Request, res: express.Respons
         res.status(401).send("Unauthorized");
         return;
     }
-    const { prompt, aspect_ratio } = req.body;
-    const data = { us: username, prompt, aspect_ratio };
+    const { prompt, aspect_ratio, power } = req.body;
+    const data = { us: username, prompt, aspect_ratio, power };
     pipe(apiRequest(`ai-image-generate`, "POST", {}, data), res);
 }
 
