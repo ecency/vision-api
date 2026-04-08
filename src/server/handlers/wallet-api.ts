@@ -2060,7 +2060,11 @@ export const portfolioV2 = async (req: express.Request, res: express.Response) =
         const globalPropsPromise = fetchGlobalProps();
         const accountPromise = getAccount(username);
         // Pass currency parameter to market-data/latest to get prices in the target currency
-        const marketPromise = apiRequestData(`market-data/latest?currency=${normalizedCurrency}`);
+        // Skip currency param for USD since it's the base currency (prices are already in USD)
+        const marketEndpoint = normalizedCurrency === "usd"
+            ? `market-data/latest`
+            : `market-data/latest?currency=${normalizedCurrency}`;
+        const marketPromise = apiRequestData(marketEndpoint);
         const pointsPromise = apiRequestData(`users/${username}`);
         const enginePromise = fetchEngineTokensWithBalance(username);
         const spkPromise = fetchSpkData(username);

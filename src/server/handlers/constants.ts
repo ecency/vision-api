@@ -18,6 +18,7 @@ export const bots = [
         "hive-177745",
         "hivebits",
         "hivebuzz",
+        "hive-br.voter",
         "hivecurators",
         "hivegifbot",
         "hivepakistan",
