@@ -23,11 +23,11 @@ interface TokenAction {
 
 const ECENCY_ACTIONS = ['ecency_point_transfer', 'promote', 'boost'].map(actionId => ({ id: actionId }));
 
-const HIVE_ACTIONS: Array<TokenAction> = [
+const buildHiveActions = (savings: number): Array<TokenAction> => [
     'transfer',
     'transfer_to_savings',
     'transfer_to_vesting',
-    'transfer_from_savings',
+    ...(savings > 0 ? ['transfer_from_savings'] : []),
     'swap_token',
     'recurrent_transfer',
 ].map(actionId => ({ id: actionId }));
@@ -37,12 +37,13 @@ const HP_ACTIONS = [
     'withdraw_vesting'
 ].map(actionId => ({ id: actionId }));
 
-const HBD_ACTIONS = [
+const buildHbdActions = (savings: number): Array<TokenAction> => [
     'transfer',
     'transfer_to_savings',
     'convert',
-    'transfer_from_savings',
+    ...(savings > 0 ? ['transfer_from_savings'] : []),
     'swap_token',
+    'recurrent_transfer',
 ].map(actionId => ({ id: actionId }));
 
 const SPK_ACTIONS = [
@@ -1429,7 +1430,7 @@ const buildHiveLayer = (
             pendingRewards: pendingHive,
         },
             ASSET_ICON_URLS.HIVE,
-            HIVE_ACTIONS
+            buildHiveActions(hiveSavings)
         ),
         makePortfolioItem("Hive Dollar", "HBD", "hive", hbdBalance, hbdPrice, currency, 3, {
             savings: hbdSavings,
@@ -1437,7 +1438,7 @@ const buildHiveLayer = (
             ...(hbdApr !== undefined ? { apr: hbdApr } : {}),
         },
             ASSET_ICON_URLS.HBD,
-            HBD_ACTIONS),
+            buildHbdActions(hbdSavings)),
     ];
 };
 
