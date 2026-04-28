@@ -48,7 +48,7 @@ import {
       precision: token?.precision || 0,
       stakingEnabled: token?.stakingEnabled || false,
       delegationEnabled: token?.delegationEnabled || false,
-      stakedBalance: stake + delegationsIn - delegationsOut,
+      stakedBalance: stake,
       unclaimedBalance,
       pendingRewards,
       balance,
