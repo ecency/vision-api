@@ -2241,7 +2241,8 @@ export const createAccount = async (req: express.Request, res: express.Response)
     const headers = { 'X-Real-IP-V': req.headers['x-forwarded-for'] || '' };
     const payload = { username, email, referral };
 
-    pipe(apiRequest(`signup/account-create`, "POST", headers, payload), res);
+    // On-chain account creation/broadcast can take longer than the default.
+    pipe(apiRequest(`signup/account-create`, "POST", headers, payload, {}, 30000), res);
 };
 
 export const createAccountFriend = async (req: express.Request, res: express.Response) => {
@@ -2250,7 +2251,8 @@ export const createAccountFriend = async (req: express.Request, res: express.Res
     const headers = { 'X-Real-IP-V': req.headers['x-forwarded-for'] || '' };
     const payload = { username, email, friend };
 
-    pipe(apiRequest(`signup/account-create-friend`, "POST", headers, payload), res);
+    // On-chain account creation/broadcast can take longer than the default.
+    pipe(apiRequest(`signup/account-create-friend`, "POST", headers, payload, {}, 30000), res);
 };
 
 export const notifications = async (req: express.Request, res: express.Response) => {
@@ -2900,7 +2902,8 @@ export const purchaseOrder = async (req: express.Request, res: express.Response)
     }
 
     const data = { platform, product, receipt, user, meta };
-    pipe(apiRequest(`purchase-order`, "POST", {}, data), res);
+    // External payment/receipt validation can be slow.
+    pipe(apiRequest(`purchase-order`, "POST", {}, data, {}, 30000), res);
 };
 
 export const chats = async (req: express.Request, res: express.Response) => {
@@ -3041,7 +3044,8 @@ export const aiGenerateImage = async (req: express.Request, res: express.Respons
     }
     const { prompt, aspect_ratio, power } = req.body;
     const data = { us: username, prompt, aspect_ratio, power };
-    pipe(apiRequest(`ai-image-generate`, "POST", {}, data), res);
+    // AI image generation legitimately takes 10-60s+; keep it long.
+    pipe(apiRequest(`ai-image-generate`, "POST", {}, data, {}, 120000), res);
 }
 
 export const aiAssistPrice = async (req: express.Request, res: express.Response) => {
@@ -3061,5 +3065,6 @@ export const aiAssist = async (req: express.Request, res: express.Response) => {
     }
     const { action, text } = req.body;
     const data = { us: username, action, text };
-    pipe(apiRequest(`ai-assist`, "POST", {}, data), res);
+    // AI assist generation can take a long time; keep it long.
+    pipe(apiRequest(`ai-assist`, "POST", {}, data, {}, 120000), res);
 }
