@@ -16,8 +16,13 @@ export const pipe = async (promise: Promise<AxiosResponse>, res: express.Respons
     } catch (e) {
         console.error("pipe(): error while processing API call:", e);
 
+        // Upstream timeout (axios ECONNABORTED) -> 504 Gateway Timeout, not 500, so
+        // client retry/alerting can distinguish a slow backend from a real server error.
+        const status = e?.code === "ECONNABORTED" ? 504 : 500;
+        const message = status === 504 ? "Upstream Timeout" : "Server Error";
+
         if (!res.headersSent) {
-            res.status(500).send("Server Error");
+            res.status(status).send(message);
         } else {
             console.warn("pipe(): headers already sent, cannot send error response");
         }

@@ -161,9 +161,13 @@ server
 server.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
     console.error("Unhandled server error:", err);
 
-    if (!res.headersSent) {
-        res.status(500).send("Server Error");
+    // If the response has already started, delegate to Express's default handler
+    // (which closes the connection) - otherwise the error is swallowed and the socket can hang.
+    if (res.headersSent) {
+        return next(err);
     }
+
+    res.status(500).send("Server Error");
 });
 
 
