@@ -25,7 +25,12 @@ export const pipe = async (promise: Promise<AxiosResponse>, res: express.Respons
 };
 
 
-export const baseApiRequest = (url: string, method: Method, headers: any = {}, payload: any = {}, params: any = {}, timeout: number = 30000): Promise<AxiosResponse> => {
+// Default upstream timeout. Kept short so a single slow backend can't pile up
+// requests on this single-replica proxy and saturate it (post-tips/leaderboard
+// 502 incident). Genuinely-slow endpoints pass an explicit longer timeout.
+export const DEFAULT_TIMEOUT = 8000;
+
+export const baseApiRequest = (url: string, method: Method, headers: any = {}, payload: any = {}, params: any = {}, timeout: number = DEFAULT_TIMEOUT): Promise<AxiosResponse> => {
     const requestConf: AxiosRequestConfig = {
         url,
         method,

@@ -17,7 +17,8 @@ export const search = async (req: express.Request, res: express.Response) => {
     if (votes) payload.votes = votes;
     if (include_nsfw) payload.include_nsfw = include_nsfw;
 
-    pipe(baseApiRequest(url, "POST", headers, payload), res);
+    // Search can be moderately slow; allow more than the default.
+    pipe(baseApiRequest(url, "POST", headers, payload, {}, 15000), res);
 }
 
 
@@ -27,7 +28,7 @@ export const searchFollower = async (req: express.Request, res: express.Response
     const url = `${config.searchApiAddr}/search-follower/${following}`;
     const headers = {'Authorization': config.searchApiToken};
 
-    pipe(baseApiRequest(url, "POST", headers, {q: q}), res);
+    pipe(baseApiRequest(url, "POST", headers, {q: q}, {}, 15000), res);
 }
 
 export const searchFollowing = async (req: express.Request, res: express.Response) => {
@@ -36,7 +37,7 @@ export const searchFollowing = async (req: express.Request, res: express.Respons
     const url = `${config.searchApiAddr}/search-following/${follower}`;
     const headers = {'Authorization': config.searchApiToken};
 
-    pipe(baseApiRequest(url, "POST", headers, {q}), res);
+    pipe(baseApiRequest(url, "POST", headers, {q}, {}, 15000), res);
 }
 
 export const searchAccount = async (req: express.Request, res: express.Response) => {
@@ -45,7 +46,7 @@ export const searchAccount = async (req: express.Request, res: express.Response)
     const url = `${config.searchApiAddr}/search-account`;
     const headers = {'Authorization': config.searchApiToken};
 
-    pipe(baseApiRequest(url, "POST", headers, {q, limit, random}), res);
+    pipe(baseApiRequest(url, "POST", headers, {q, limit, random}, {}, 15000), res);
 }
 
 export const searchTag = async (req: express.Request, res: express.Response) => {
@@ -54,7 +55,7 @@ export const searchTag = async (req: express.Request, res: express.Response) => 
     const url = `${config.searchApiAddr}/search-tag`;
     const headers = {'Authorization': config.searchApiToken};
 
-    pipe(baseApiRequest(url, "POST", headers, {q, limit, random}), res);
+    pipe(baseApiRequest(url, "POST", headers, {q, limit, random}, {}, 15000), res);
 }
 
 export const searchPath = async (req: express.Request, res: express.Response) => {
@@ -63,5 +64,5 @@ export const searchPath = async (req: express.Request, res: express.Response) =>
     const url = `${config.searchApiAddr}/search-path`;
     const headers = {'Authorization': config.searchApiToken};
 
-    pipe(baseApiRequest(url, "POST", headers, {q}), res);
+    pipe(baseApiRequest(url, "POST", headers, {q}, {}, 15000), res);
 }

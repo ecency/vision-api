@@ -155,4 +155,16 @@ server
     .get("*", fallbackHandler);
 
 
+// Global error-handling middleware. Registered after the routes/catch-all so it
+// catches anything thrown/forwarded by the handlers. Guards res.headersSent so
+// it never tries to respond twice (pipe() already streams responses).
+server.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error("Unhandled server error:", err);
+
+    if (!res.headersSent) {
+        res.status(500).send("Server Error");
+    }
+});
+
+
 export default server;

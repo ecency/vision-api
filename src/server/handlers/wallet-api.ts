@@ -1794,7 +1794,8 @@ export const echartapi = async (req: express.Request, res: express.Response) => 
     const url = `${ENGINE_CHART_URL}`;
     const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency' };
 
-    pipe(baseApiRequest(url, "GET", headers, undefined, params), res);
+    // External Hive Engine chart API can be slow.
+    pipe(baseApiRequest(url, "GET", headers, undefined, params, 30000), res);
 }
 
 export const engineAccountHistory = (req: express.Request, res: express.Response) => {
@@ -1803,7 +1804,8 @@ export const engineAccountHistory = (req: express.Request, res: express.Response
     const url = `${ENGINE_ACCOUNT_HISTORY_URL}`;
     const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency' };
 
-    pipe(baseApiRequest(url, "GET", headers, undefined, params), res);
+    // External Hive Engine account-history API can be slow.
+    pipe(baseApiRequest(url, "GET", headers, undefined, params, 30000), res);
 }
 
 
@@ -1811,7 +1813,8 @@ export const engineAccountHistory = (req: express.Request, res: express.Response
 const engineContractsRequest = (data: EngineRequestPayload, url: string) => {
     const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency' };
 
-    return baseApiRequest(url, "POST", headers, data)
+    // External Hive Engine contracts node can be slow.
+    return baseApiRequest(url, "POST", headers, data, {}, 30000)
 }
 
 //raw engine rewards api call
@@ -1819,7 +1822,8 @@ const engineRewardsRequest = (username: string, params: any) => {
     const url = `${ENGINE_REWARDS_URL}/@${username}`;
     const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency' };
 
-    return baseApiRequest(url, "GET", headers, undefined, params)
+    // External Hive Engine SCOT rewards API can be slow.
+    return baseApiRequest(url, "GET", headers, undefined, params, 30000)
 }
 
 
@@ -1985,7 +1989,8 @@ const fetchEngineTokensWithBalance = async (username: string) => {
 const fetchSpkData = async (username: string) => {
     try {
         const url = `${BASE_SPK_URL}/@${username}`
-        const response = await baseApiRequest(url, 'GET')
+        // External SPK network node can be slow.
+        const response = await baseApiRequest(url, 'GET', {}, {}, {}, 30000)
         if (!response.data) {
             throw new Error("Invalid spk data");
         }
