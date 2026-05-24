@@ -427,6 +427,13 @@ export const fetchPromotedEntries = async (limit=200,short_content=0): Promise<E
     // fetch list from api
     const list: { author: string, permlink: string, post_data?: Entry }[] = (await apiRequest(`promoted-posts?limit=${limit}&short_content=${short_content}`, 'GET')).data;
 
+    // baseApiRequest treats any HTTP status as success, so when the upstream is
+    // unhealthy `data` can be a non-array error body. Guard before sorting so we
+    // degrade to no promotions instead of throwing "sort is not a function".
+    if (!Array.isArray(list)) {
+        return [];
+    }
+
     // random sort & random pick 18 (6*3)
     const promoted = list.sort(() => Math.random() - 0.5).filter((x, i) => i < 18);
 
