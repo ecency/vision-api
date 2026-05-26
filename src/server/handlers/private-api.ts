@@ -2235,6 +2235,11 @@ export const portfolio = async (req: express.Request, res: express.Response) => 
     pipe(apiRequest(u, "GET"), res);
 };
 
+export const quests = async (req: express.Request, res: express.Response) => {
+    const { username } = req.body;
+    pipe(apiRequest(`users/${username}/quests`, "GET"), res);
+};
+
 export const createAccount = async (req: express.Request, res: express.Response) => {
     const { username, email, referral } = req.body;
 
