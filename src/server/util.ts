@@ -51,14 +51,30 @@ export const baseApiRequest = (url: string, method: Method, headers: any = {}, p
 }
 
 
-export const parseToken = (strVal: string) => {
-    // checks if first part of string is float
-    const regex = /^\-?[0-9]+(e[0-9]+)?(\.[0-9]+)? .*$/;
-    if (!regex.test(strVal)) {
+export const parseToken = (
+    val: string | { amount?: string | number; precision?: number | string } | null | undefined
+  ): number => {
+    // condenser_api (what dhive calls) returns string assets like "123.456 HIVE".
+    // database_api / NAI responses encode the same value as { amount, precision }.
+    // Accept both forms so a balance never silently parses to 0 if the upstream
+    // asset representation changes.
+    if (val && typeof val === 'object') {
+      const amount = Number(val.amount);
+      const precision = Number(val.precision) || 0;
+      return Number.isFinite(amount) ? amount / Math.pow(10, precision) : 0;
+    }
+
+    if (typeof val !== 'string') {
       return 0;
     }
 
-    return Number(parseFloat(strVal.split(' ')[0]));
+    // checks if first part of string is float
+    const regex = /^\-?[0-9]+(e[0-9]+)?(\.[0-9]+)? .*$/;
+    if (!regex.test(val)) {
+      return 0;
+    }
+
+    return Number(parseFloat(val.split(' ')[0]));
   };
 
 
