@@ -1,18 +1,34 @@
-import { baseApiRequest, parseAsset, parseToken } from '../util';
+import { Client } from '@hiveio/dhive';
+import { parseToken } from '../util';
 
 
-const BASE_URL = 'https://hivexplorer.com/api';
+// Fetch chain data directly from Hive RPC nodes (dhive handles failover across the
+// list, preferring our own node first) instead of routing through an external REST
+// gateway, which is a single point of failure for the portfolio endpoints.
+const client = new Client([
+    "https://hapi.ecency.com",
+    "https://api.hive.blog",
+    "https://techcoderx.com",
+    "https://api.deathwing.me",
+    "https://rpc.mahdiyari.info",
+    "https://hive-api.arcange.eu",
+    "https://api.openhive.network",
+    "https://hiveapi.actifit.io",
+    "https://hive-api.3speak.tv",
+    "https://api.syncad.com",
+    "https://api.c0ff33a.uk"
+], {
+    timeout: 2000,
+    failoverThreshold: 2,
+    consoleOnFailover: false
+});
 
 
 export const fetchGlobalProps = async () => {
-    let globalDynamic;
+    let globalDynamic: any;
 
     try {
-        const _globalPropsUrl = `${BASE_URL}/get_dynamic_global_properties`;
-
-        const globalDynamicResp = await baseApiRequest(_globalPropsUrl, 'GET');
-
-        globalDynamic = globalDynamicResp.data;
+        globalDynamic = await client.database.getDynamicGlobalProperties();
 
         if (!globalDynamic) {
             throw new Error("Invalid global props data")
@@ -102,10 +118,8 @@ export const fetchGlobalProps = async () => {
 */
 export const getAccount = async (username: string) => {
     try {
-        const url = `${BASE_URL}/get_accounts?names=["${username}"]`;
-        const response = await baseApiRequest(url, 'GET');
+        const data = await client.database.getAccounts([username]);
 
-        const data = response.data
         if (data.length) {
             return data[0];
         }
