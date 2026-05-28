@@ -66,3 +66,20 @@ export const searchPath = async (req: express.Request, res: express.Response) =>
 
     pipe(baseApiRequest(url, "POST", headers, {q}, {}, 15000), res);
 }
+
+export const searchSimilar = async (req: express.Request, res: express.Response) => {
+    const {author, permlink, title, body, tags, since, include_nsfw} = req.body;
+
+    const url = `${config.searchApiAddr}/similar`;
+    const headers = {'Authorization': config.searchApiToken};
+
+    const payload: { author: string, permlink: string, title?: string, body?: string, tags?: string[], since?: string, include_nsfw?: number } = {author, permlink};
+
+    if (title) payload.title = title;
+    if (body) payload.body = body;
+    if (tags) payload.tags = tags;
+    if (since) payload.since = since;
+    if (include_nsfw) payload.include_nsfw = include_nsfw;
+
+    pipe(baseApiRequest(url, "POST", headers, payload, {}, 15000), res);
+}

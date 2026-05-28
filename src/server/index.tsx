@@ -25,6 +25,7 @@ server
     .post("^/search-api/search-account$", searchApi.searchAccount)
     .post("^/search-api/search-tag$", searchApi.searchTag)
     .post("^/search-api/search-path$", searchApi.searchPath)
+    .post("^/search-api/similar$", searchApi.searchSimilar)
 
     // Auth Api
     .post("^/auth-api/hs-token-refresh$", authApi.hsTokenRefresh)
