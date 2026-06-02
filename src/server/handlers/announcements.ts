@@ -7,6 +7,8 @@
   path - which path it should show, supports regex on location
   auth - should there be authorized/logged in user to show announcement,
   ops - hive uri format operation for mobile app signing
+  proposal_ids - hive proposal ids for an inline support prompt; web builds the
+                 update_proposal_votes operation from these, mobile uses ops
 */
 
 export const announcements = [
@@ -18,6 +20,7 @@ export const announcements = [
         "button_link": "/proposals/379",
         "path": "/@.+/(blog|posts|wallet|points|engine|permissions|spk)",
         "auth": true,
+        "proposal_ids": [379],
         "ops": "hive://sign/op/WyJ1cGRhdGVfcHJvcG9zYWxfdm90ZXMiLHsidm90ZXIiOiAiX19zaWduZXIiLCJwcm9wb3NhbF9pZHMiOiBbMzc5XSwiYXBwcm92ZSI6dHJ1ZSwiZXh0ZW5zaW9ucyI6IFtdfV0."
     }
     /*{
