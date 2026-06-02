@@ -10,6 +10,16 @@
 */
 
 export const announcements = [
+    {
+        "id": 110,
+        "title": "Support Ecency! ❤️",
+        "description": "New proposal to support Ecency and its future development. Every vote and support counts!",
+        "button_text": "Support now",
+        "button_link": "/proposals/379",
+        "path": "/@.+/(blog|posts|wallet|points|engine|permissions|spk)",
+        "auth": true,
+        "ops": "hive://sign/op/WyJ1cGRhdGVfcHJvcG9zYWxfdm90ZXMiLHsidm90ZXIiOiAiX19zaWduZXIiLCJwcm9wb3NhbF9pZHMiOiBbMzc5XSwiYXBwcm92ZSI6dHJ1ZSwiZXh0ZW5zaW9ucyI6IFtdfV0."
+    }
     /*{
       "id": 101,
       "title": "Happy Ho ho ho holidays! 🎉",
