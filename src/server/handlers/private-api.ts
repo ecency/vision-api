@@ -2240,10 +2240,21 @@ export const quests = async (req: express.Request, res: express.Response) => {
     pipe(apiRequest(`users/${username}/quests`, "GET"), res);
 };
 
+/**
+ * Resolve the originating client IP for the account-create endpoints from the
+ * proxy-set X-Real-IP header. X-Forwarded-For is not used here because it can
+ * carry client-supplied values; there is no X-Forwarded-For fallback. Returns ''
+ * when the header is absent.
+ */
+export const signupClientIp = (req: express.Request): string => {
+    const realIp = req.headers['x-real-ip'];
+    return (Array.isArray(realIp) ? realIp[0] : realIp) || '';
+};
+
 export const createAccount = async (req: express.Request, res: express.Response) => {
     const { username, email, referral } = req.body;
 
-    const headers = { 'X-Real-IP-V': req.headers['x-forwarded-for'] || '' };
+    const headers = { 'X-Real-IP-V': signupClientIp(req) };
     const payload = { username, email, referral };
 
     // On-chain account creation/broadcast can take longer than the default.
@@ -2253,7 +2264,7 @@ export const createAccount = async (req: express.Request, res: express.Response)
 export const createAccountFriend = async (req: express.Request, res: express.Response) => {
     const { username, email, friend } = req.body;
 
-    const headers = { 'X-Real-IP-V': req.headers['x-forwarded-for'] || '' };
+    const headers = { 'X-Real-IP-V': signupClientIp(req) };
     const payload = { username, email, friend };
 
     // On-chain account creation/broadcast can take longer than the default.
