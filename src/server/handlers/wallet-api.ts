@@ -1813,8 +1813,10 @@ export const engineAccountHistory = (req: express.Request, res: express.Response
 const engineContractsRequest = (data: EngineRequestPayload, url: string) => {
     const headers = { 'Content-type': 'application/json', 'User-Agent': 'Ecency' };
 
-    // External Hive Engine contracts node can be slow.
-    return baseApiRequest(url, "POST", headers, data, {}, 30000)
+    // External Hive Engine contracts node can be slow; cap at 8s to match the
+    // edge worker budget (a slower response is masked as 502 anyway) and to free
+    // the single vapi replica instead of holding it for up to 30s.
+    return baseApiRequest(url, "POST", headers, data, {}, 8000)
 }
 
 //raw engine rewards api call
@@ -2051,6 +2053,28 @@ export const portfolio = async (req: express.Request, res: express.Response) => 
 
 }
 
+// Fail-fast wrapper: resolves to `fallback` if `p` doesn't settle within `ms`,
+// so one slow/flaky upstream leg can't push portfolioV2 past the edge worker's
+// ~8s budget (which would otherwise be masked as a generic 502). The portfolio
+// layer builders already null-tolerate, so a timed-out leg degrades to partial.
+const withTimeout = <T, F>(p: Promise<T>, ms: number, fallback: F): Promise<T | F> =>
+    new Promise<T | F>((resolve) => {
+        let settled = false;
+        const timer = setTimeout(() => {
+            if (!settled) { settled = true; resolve(fallback); }
+        }, ms);
+        p.then((value) => {
+            if (!settled) { settled = true; clearTimeout(timer); resolve(value); }
+        }).catch(() => {
+            if (!settled) { settled = true; clearTimeout(timer); resolve(fallback); }
+        });
+    });
+
+// Fast Hive/internal legs (RPC + internal API, sub-second) vs slow EXTERNAL
+// layers (Hive Engine, multi-chain). FAST + SLOW stays under the worker's 8s.
+const FAST_LEG_TIMEOUT = 3000;
+const SLOW_LEG_TIMEOUT = 4500;
+
 export const portfolioV2 = async (req: express.Request, res: express.Response) => {
     const { username, currency, onlyEnabled } = req.body || {};
 
@@ -2072,26 +2096,28 @@ export const portfolioV2 = async (req: express.Request, res: express.Response) =
             : `market-data/latest?currency=${normalizedCurrency}`;
         const marketPromise = apiRequestData(marketEndpoint);
         const pointsPromise = apiRequestData(`users/${username}`);
+        // Hive Engine is the slow/flaky external leg — start it now so it runs
+        // concurrently with the fast Hive legs below.
         const enginePromise = fetchEngineTokensWithBalance(username);
-        const spkPromise = fetchSpkData(username);
+        // SPK intentionally removed from the portfolio overview (feature being
+        // discontinued). The standalone SPK wallet feature is unaffected.
 
-        const [globalProps, accountData, marketData, pointsData, engineData, spkData] = await Promise.all([
-            globalPropsPromise,
-            accountPromise,
-            marketPromise,
-            pointsPromise,
-            enginePromise,
-            spkPromise,
+        // Phase 1 — fast Hive/internal legs (RPC + internal API). Fail-fast so a
+        // momentary RPC hiccup degrades to a partial portfolio instead of a 502.
+        const [globalProps, accountData, marketData, pointsData] = await Promise.all([
+            withTimeout(globalPropsPromise, FAST_LEG_TIMEOUT, null),
+            withTimeout(accountPromise, FAST_LEG_TIMEOUT, null),
+            withTimeout(marketPromise, FAST_LEG_TIMEOUT, null),
+            withTimeout(pointsPromise, FAST_LEG_TIMEOUT, null),
         ]);
-
-        console.log(`Portfolio v2 currency:`, {
-            requestedCurrency: normalizedCurrency,
-            marketDataKeys: Object.keys(marketData || {}).slice(0, 10)
-        });
 
         const hivePrice = getTokenPrice(marketData, "hive", normalizedCurrency);
 
         const wallets: PortfolioItem[] = [];
+        wallets.push(
+            ...buildPointsLayer(pointsData, marketData, normalizedCurrency),
+            ...buildHiveLayer(accountData, globalProps, marketData, normalizedCurrency),
+        );
 
         const engineOptions =
             onlyEnabledFlag === true
@@ -2101,23 +2127,30 @@ export const portfolioV2 = async (req: express.Request, res: express.Response) =
                 }
                 : undefined;
 
-        wallets.push(
-            ...buildPointsLayer(pointsData, marketData, normalizedCurrency),
-            ...buildHiveLayer(accountData, globalProps, marketData, normalizedCurrency),
-            ...buildSpkLayer(spkData, marketData, normalizedCurrency),
-        );
-
-        wallets.push(
-            ...buildEngineLayer(engineData, marketData, normalizedCurrency, hivePrice, engineOptions),
-        );
-
         const chainOptions =
             onlyEnabledFlag === undefined
                 ? undefined
                 : {
                     onlyEnabled: onlyEnabledFlag,
                 };
-        const chainWallets = await buildChainLayer(accountData, marketData, normalizedCurrency, chainOptions);
+
+        // Phase 2 — the two slow EXTERNAL layers in parallel, each fail-fast. A
+        // degraded Hive Engine or crypto node returns a partial portfolio rather
+        // than blowing the worker budget. buildChainLayer needs account+market,
+        // so it can only start now; running it alongside engine keeps wall-clock
+        // at ~one SLOW_LEG_TIMEOUT (FAST + SLOW < 8s total).
+        const [engineData, chainWallets] = await Promise.all([
+            withTimeout(enginePromise, SLOW_LEG_TIMEOUT, [] as any[]),
+            withTimeout(
+                buildChainLayer(accountData, marketData, normalizedCurrency, chainOptions),
+                SLOW_LEG_TIMEOUT,
+                [] as any[]
+            ),
+        ]);
+
+        wallets.push(
+            ...buildEngineLayer(engineData, marketData, normalizedCurrency, hivePrice, engineOptions),
+        );
         wallets.push(...chainWallets);
 
         const filteredWallets = wallets.filter((item) => item && Number.isFinite(item.balance));
