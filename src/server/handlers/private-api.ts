@@ -2252,10 +2252,12 @@ export const signupClientIp = (req: express.Request): string => {
 };
 
 export const createAccount = async (req: express.Request, res: express.Response) => {
-    const { username, email, referral } = req.body;
+    const { username, email, referral, captcha_token } = req.body;
 
     const headers = { 'X-Real-IP-V': signupClientIp(req) };
-    const payload = { username, email, referral };
+    // Forward the Turnstile token for server-side verification in onboard. Inert until
+    // onboard's CAPTCHA_MODE is soft/hard, so this is safe to ship ahead of enforcement.
+    const payload = { username, email, referral, captcha_token };
 
     // On-chain account creation/broadcast can take longer than the default.
     pipe(apiRequest(`signup/account-create`, "POST", headers, payload, {}, 30000), res);
