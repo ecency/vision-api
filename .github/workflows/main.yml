@@ -3,6 +3,13 @@ on:
   push:
     branches:
       - main
+
+# Serialize runs on a ref and cancel superseded ones, so an older run can't roll prod
+# back to its (older) image after a newer run has already deployed.
+concurrency:
+  group: vapi-cicd-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   deps:
     runs-on: ubuntu-24.04
@@ -23,6 +30,8 @@ jobs:
   build:
     needs: deps
     runs-on: ubuntu-24.04
+    outputs:
+      digest: ${{ steps.docker_build.outputs.digest }}
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
     steps:
@@ -49,4 +58,56 @@ jobs:
       -
         name: Image digest
         run: echo ${{ steps.docker_build.outputs.digest }}
+
+  # Roll the freshly-pushed image out to the running `vision_vapi` swarm service in each
+  # region, so a vision-api change (e.g. rotating Feature Spotlight content) ships on its
+  # own instead of waiting for the next vision-next deploy. Mirrors the converge-wait that
+  # vision-next uses for `vision_web`. Assumes the swarm service is named `vision_vapi`
+  # (stack `vision`, service `vapi`) — verify once with `docker service ls`.
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        region: [EU, US, SG]
+    steps:
+      - name: Deploy vision_vapi (${{ matrix.region }})
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
+        with:
+          host: ${{ secrets[format('SSH_HOST_{0}', matrix.region)] }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          envs: IMAGE_DIGEST
+          script: |
+            # Deploy the exact image digest THIS run built — never the mutable :latest tag —
+            # so out-of-order :latest writes from overlapping runs cannot move prod.
+            if [ -z "$IMAGE_DIGEST" ]; then
+              echo "::error::missing build digest; refusing to deploy a mutable tag"
+              exit 1
+            fi
+            IMAGE="ecency/api@${IMAGE_DIGEST}"
+            if ! docker pull "$IMAGE"; then
+              echo "::error::failed to pull $IMAGE"
+              exit 1
+            fi
+            # --detach=false blocks until the rollout reaches a terminal state, so the
+            # UpdateStatus read afterwards is THIS rollout's, not a stale prior 'completed'.
+            docker service update --image "$IMAGE" --with-registry-auth --detach=false vision_vapi
+            upd_rc=$?
+            state="$(docker service inspect vision_vapi --format '{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}' 2>/dev/null || echo "")"
+            case "$state" in
+              rollback_*|paused)
+                echo "::error::vision_vapi rolled back (UpdateStatus=$state); prod still on the previous image"
+                exit 1 ;;
+            esac
+            if [ "$upd_rc" -ne 0 ] && [ "$state" != "completed" ]; then
+              echo "::error::vision_vapi update failed (rc=$upd_rc, UpdateStatus=${state:-none})"
+              exit 1
+            fi
+            echo "vision_vapi on $IMAGE (UpdateStatus=${state:-none})"
+            docker system prune -f
 
