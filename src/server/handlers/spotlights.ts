@@ -15,6 +15,7 @@
   button_link - internal route ("/waves") or external url the button opens
   path        - which path(s) it should show on, supports regex on location; omit = everywhere
   auth        - require logged-in user (default true); set false to also show to anon
+  platforms   - which platform(s) may show it: "web" (website) and/or "mobile" (mobile app). omit = both
   start       - ISO date (UTC); do not show before this. Bare "YYYY-MM-DD" = that day at 00:00Z
   end         - ISO date (UTC); inclusive — bare "YYYY-MM-DD" shows through the END of that day
   weight      - higher wins when multiple are active
@@ -31,6 +32,7 @@ export interface Spotlight {
     button_link: string;
     path?: string | string[];
     auth?: boolean;
+    platforms?: ("web" | "mobile")[];
     start?: string;
     end?: string;
     weight?: number;
