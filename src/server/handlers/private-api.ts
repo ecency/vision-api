@@ -4,6 +4,7 @@ import axios, { AxiosRequestConfig } from "axios";
 import { cryptoUtils, Signature, Client } from '@hiveio/dhive'
 
 import { announcements } from "./announcements";
+import { spotlights, Spotlight } from "./spotlights";
 import {
     apiRequest,
     getPromotedEntries,
@@ -2135,6 +2136,25 @@ export const leaderboard = async (req: express.Request, res: express.Response) =
 
 export const getAnnouncement = async (req: express.Request, res: express.Response) => {
     res.send(announcements)
+}
+
+export const getSpotlight = async (req: express.Request, res: express.Response) => {
+    const now = Date.now();
+    // Bare ISO dates ("YYYY-MM-DD") parse as UTC midnight. `start` is inclusive from the
+    // beginning of its day; `end` is inclusive through the END of its day, so an item with
+    // end "2026-06-30" still shows throughout June 30 (UTC). A malformed date fails open
+    // (the item stays visible) rather than silently hiding a live spotlight.
+    const dayMs = 86_400_000;
+    const isBareDate = (d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d);
+    const active = spotlights.filter((s: Spotlight) => {
+        const startMs = s.start ? new Date(s.start).getTime() : NaN;
+        const endMs = s.end ? new Date(s.end).getTime() : NaN;
+        const endBoundary = s.end && isBareDate(s.end) ? endMs + dayMs - 1 : endMs;
+        const startsOk = !s.start || Number.isNaN(startMs) || startMs <= now;
+        const endsOk = !s.end || Number.isNaN(endMs) || endBoundary >= now;
+        return startsOk && endsOk;
+    });
+    res.send(active);
 }
 
 export const referrals = async (req: express.Request, res: express.Response) => {
