@@ -50,3 +50,50 @@ jobs:
         name: Image digest
         run: echo ${{ steps.docker_build.outputs.digest }}
 
+  # Roll the freshly-pushed image out to the running `vision_vapi` swarm service in each
+  # region, so a vision-api change (e.g. rotating Feature Spotlight content) ships on its
+  # own instead of waiting for the next vision-next deploy. Mirrors the converge-wait that
+  # vision-next uses for `vision_web`. Assumes the swarm service is named `vision_vapi`
+  # (stack `vision`, service `vapi`) — verify once with `docker service ls`.
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        region: [EU, US, SG]
+    steps:
+      - name: Deploy vision_vapi (${{ matrix.region }})
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets[format('SSH_HOST_{0}', matrix.region)] }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: |
+            api_pull="$(docker pull ecency/api:latest)"; printf '%s\n' "$api_pull"
+            if printf '%s' "$api_pull" | grep -q 'Image is up to date'; then
+              echo "vision_vapi image unchanged; no rollout expected"
+            else
+              docker service update --image ecency/api:latest --with-registry-auth vision_vapi
+              # service update returns before Swarm populates UpdateStatus, so wait for
+              # `completed`; fail fast on rollback/pause; fail on timeout in any other state.
+              state=""
+              for i in $(seq 1 60); do
+                state="$(docker service inspect vision_vapi --format '{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}' 2>/dev/null || echo "")"
+                case "$state" in
+                  completed) break ;;
+                  rollback_*|paused)
+                    echo "::error::vision_vapi rolled back (UpdateStatus=$state); prod still on the previous image"
+                    exit 1 ;;
+                esac
+                sleep 5
+              done
+              if [ "$state" != "completed" ]; then
+                echo "::error::vision_vapi did not converge within ~5m (UpdateStatus=${state:-empty})"
+                exit 1
+              fi
+              echo "vision_vapi converged (UpdateStatus=completed)"
+            fi
+            docker system prune -f
+
