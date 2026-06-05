@@ -56,6 +56,7 @@ server
     .get("^/private-api/referrals/:username$", privateApi.referrals)
     .get("^/private-api/referrals/:username/stats$", privateApi.referralsStats)
     .get("^/private-api/announcements$", privateApi.getAnnouncement)
+    .get("^/private-api/spotlights$", privateApi.getSpotlight)
     .get("^/private-api/chats-pub/:username$", privateApi.chatsPub)
     .get("^/private-api/channel/:username$", privateApi.channelGet)
     .get("^/private-api/proposal/active$", privateApi.proposalActive)
