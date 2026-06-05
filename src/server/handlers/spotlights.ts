@@ -2,7 +2,7 @@
   Feature Spotlight content - single source of truth for the "did you know?" cards.
   Edit this array (set start/end or bump weight) to rotate the spotlight; vision-api's
   own CI deploys it. Mirrors announcements.ts. The server filters by the start/end
-  window only; auth/path/dismiss are applied client-side (web + mobile).
+  window only; guestsOnly/path/dismiss are applied client-side (web + mobile).
   Keep this Spotlight interface in sync with @ecency/sdk (types/spotlight.ts) - clients
   parse exactly this wire shape.
 
@@ -14,10 +14,10 @@
   button_text - actionable button text
   button_link - internal route ("/waves") or external url the button opens
   path        - which path(s) it should show on, supports regex on location; omit = everywhere
-  auth        - require logged-in user (default true); set false to also show to anon
+  guestsOnly  - show only to signed-out visitors; omit = logged-in users only
   platforms   - which platform(s) may show it: "web" (website) and/or "mobile" (mobile app). omit = both
   start       - ISO date (UTC); do not show before this. Bare "YYYY-MM-DD" = that day at 00:00Z
-  end         - ISO date (UTC); inclusive - bare "YYYY-MM-DD" shows through the END of that day
+  end         - ISO date (UTC); inclusive - bare "YYYY-MM-DD" shows through the END of that day. Omit = never expires
   weight      - higher wins when multiple are active
   locales     - optional per-language overrides for title/description/button_text
 */
@@ -31,7 +31,7 @@ export interface Spotlight {
     button_text: string;
     button_link: string;
     path?: string | string[];
-    auth?: boolean;
+    guestsOnly?: boolean;
     platforms?: ("web" | "mobile")[];
     start?: string;
     end?: string;
@@ -40,22 +40,42 @@ export interface Spotlight {
 }
 
 export const spotlights: Spotlight[] = [
-    // Guest signup prompt for anonymous visitors. NOTE: auth:false also shows to logged-in
-    // users, so this is kept at weight 1. As long as a higher-weight auth:true card is always
-    // active (the schedule below keeps continuous coverage), logged-in users see the
-    // educational card and only signed-out visitors see this one. Keep coverage continuous,
-    // or remove this card, otherwise logged-in users will see "Sign up" during any gap.
+    // Guest funnel: shown only to signed-out visitors (guestsOnly). These never expire and
+    // descend in weight, so a guest sees the top hook first and the next one each time they
+    // dismiss. Logged-in users never match a guestsOnly card, so there is no overlap with the
+    // educational cards below.
     {
-        id: "signup-2026-summer",
+        id: "guest-signup",
         feature: "signup",
         title: "New to Ecency?",
-        description: "Join in seconds and start earning Points for everything you post and do.",
+        description: "Create your free account and start earning rewards for everything you post.",
         button_text: "Create account",
         button_link: "/signup",
-        auth: false,
+        guestsOnly: true,
         start: "2026-06-05",
-        end: "2026-08-27",
-        weight: 1
+        weight: 10
+    },
+    {
+        id: "guest-earn",
+        feature: "signup",
+        title: "Get paid to post",
+        description: "On Ecency the rewards go to creators, not the platform. Your posts, your earnings.",
+        button_text: "Join free",
+        button_link: "/signup",
+        guestsOnly: true,
+        start: "2026-06-05",
+        weight: 9
+    },
+    {
+        id: "guest-own",
+        feature: "signup",
+        title: "Own your content",
+        description: "No ads, no gatekeepers. Your account lives on the blockchain, and it is yours.",
+        button_text: "Get started",
+        button_link: "/signup",
+        guestsOnly: true,
+        start: "2026-06-05",
+        weight: 8
     },
 
     // ---- Jun 5 - 18 ----
@@ -67,7 +87,6 @@ export const spotlights: Spotlight[] = [
         button_text: "Open Waves",
         button_link: "/waves",
         platforms: ["web"],
-        auth: true,
         start: "2026-06-05",
         end: "2026-06-18",
         weight: 10
@@ -80,7 +99,6 @@ export const spotlights: Spotlight[] = [
         button_text: "View trending",
         button_link: "/trending",
         platforms: ["mobile"],
-        auth: true,
         start: "2026-06-05",
         end: "2026-06-18",
         weight: 10
@@ -94,7 +112,6 @@ export const spotlights: Spotlight[] = [
         description: "Join topic-based communities and meet people who share your interests.",
         button_text: "Browse communities",
         button_link: "/communities",
-        auth: true,
         start: "2026-06-19",
         end: "2026-07-02",
         weight: 10
@@ -109,7 +126,6 @@ export const spotlights: Spotlight[] = [
         button_text: "Open Decks",
         button_link: "/decks",
         platforms: ["web"],
-        auth: true,
         start: "2026-07-03",
         end: "2026-07-16",
         weight: 10
@@ -122,7 +138,6 @@ export const spotlights: Spotlight[] = [
         button_text: "View hot",
         button_link: "/hot",
         platforms: ["mobile"],
-        auth: true,
         start: "2026-07-03",
         end: "2026-07-16",
         weight: 10
@@ -136,7 +151,6 @@ export const spotlights: Spotlight[] = [
         description: "Check your HIVE, HBD, Hive Power and Points, then claim your rewards.",
         button_text: "Open wallet",
         button_link: "/wallet",
-        auth: true,
         start: "2026-07-17",
         end: "2026-07-30",
         weight: 10
@@ -150,7 +164,6 @@ export const spotlights: Spotlight[] = [
         description: "Search posts, tags, and creators across Hive, and follow the ones you love.",
         button_text: "Start searching",
         button_link: "/search",
-        auth: true,
         start: "2026-07-31",
         end: "2026-08-13",
         weight: 10
@@ -165,7 +178,6 @@ export const spotlights: Spotlight[] = [
         button_text: "Explore perks",
         button_link: "/perks",
         platforms: ["web"],
-        auth: true,
         start: "2026-08-14",
         end: "2026-08-27",
         weight: 10
@@ -178,7 +190,6 @@ export const spotlights: Spotlight[] = [
         button_text: "Open bookmarks",
         button_link: "/bookmarks",
         platforms: ["mobile"],
-        auth: true,
         start: "2026-08-14",
         end: "2026-08-27",
         weight: 10
