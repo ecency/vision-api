@@ -2757,6 +2757,25 @@ export const boostedPlusAccount = async (req: express.Request, res: express.Resp
     pipe(apiRequest(`boosted-plus-accounts/${account}`, "GET"), res);
 }
 
+export const rcDelegationPrice = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req);
+    if (!username) {
+        res.status(401).send("Unauthorized");
+        return;
+    }
+    pipe(apiRequest(`rc-delegation-price`, "GET"), res);
+}
+
+export const rcDelegationActive = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req);
+    if (!username) {
+        res.status(401).send("Unauthorized");
+        return;
+    }
+    // Self-only: always check the authenticated user's own active top-up.
+    pipe(apiRequest(`rc-delegation-active/${username}`, "GET"), res);
+}
+
 export const boostOptions = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req);
     if (!username) {
