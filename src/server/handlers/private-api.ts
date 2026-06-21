@@ -20,6 +20,7 @@ import {
 
 import { pipe } from "../util";
 import { cache } from '../cache';
+import config from "../../config";
 import { ACTIVE_PROPOSAL_META, bots } from "./constants";
 
 import bs58check from "bs58check";
@@ -2774,6 +2775,38 @@ export const rcDelegationActive = async (req: express.Request, res: express.Resp
     }
     // Self-only: always check the authenticated user's own active top-up.
     pipe(apiRequest(`rc-delegation-active/${username}`, "GET"), res);
+}
+
+export const stripeCreateIntent = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req);
+    if (!username) {
+        res.status(401).send("Unauthorized");
+        return;
+    }
+    // `user` is ALWAYS the authenticated caller (never client-supplied). sku/nonce/meta
+    // are validated server-side by ePoints (amount + points come from its catalog, the
+    // nonce is required for idempotency, the sku is points-only). The shared secret
+    // authenticates this hop to ePoints; ePoints never trusts a client-sent price.
+    const { sku, nonce, meta } = req.body as { sku?: string; nonce?: string; meta?: object };
+    const headers = { "X-Internal-Secret": config.stripeInternalSecret };
+    const payload = { user: username, sku, nonce, meta };
+    pipe(apiRequest(`stripe/create-intent`, "POST", headers, payload, {}, 20000), res);
+}
+
+export const stripeOrderStatus = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req);
+    if (!username) {
+        res.status(401).send("Unauthorized");
+        return;
+    }
+    const { payment_intent } = req.body as { payment_intent?: string };
+    if (typeof payment_intent !== "string" || !payment_intent.trim()) {
+        res.status(400).send("payment_intent required");
+        return;
+    }
+    // Owner-scoped: ePoints filters by ?user, so a caller can only read its own order.
+    const headers = { "X-Internal-Secret": config.stripeInternalSecret };
+    pipe(apiRequest(`stripe/order/${encodeURIComponent(payment_intent.trim())}?user=${encodeURIComponent(username)}`, "GET", headers), res);
 }
 
 export const boostOptions = async (req: express.Request, res: express.Response) => {

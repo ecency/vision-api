@@ -137,6 +137,8 @@ server
     .post("^/private-api/boosted-plus-account$", privateApi.boostedPlusAccount)
     .post("^/private-api/rc-delegation-price$", privateApi.rcDelegationPrice)
     .post("^/private-api/rc-delegation-active$", privateApi.rcDelegationActive)
+    .post("^/private-api/stripe-create-intent$", privateApi.stripeCreateIntent)
+    .post("^/private-api/stripe-order-status$", privateApi.stripeOrderStatus)
     .post("^/private-api/boost-options$", privateApi.boostOptions)
     .post("^/private-api/boosted-post$", privateApi.boostedPost)
     .post("^/private-api/ai-generate-price$", privateApi.aiGeneratePrice)
