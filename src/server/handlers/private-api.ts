@@ -2783,12 +2783,19 @@ export const stripeCreateIntent = async (req: express.Request, res: express.Resp
         res.status(401).send("Unauthorized");
         return;
     }
+    // Fail closed at the route (not a whole-service startup crash): never forward a money
+    // request with an empty/absent shared secret.
+    const secret = config.stripeInternalSecret;
+    if (!secret) {
+        res.status(503).send("payments not configured");
+        return;
+    }
     // `user` is ALWAYS the authenticated caller (never client-supplied). sku/nonce/meta
     // are validated server-side by ePoints (amount + points come from its catalog, the
     // nonce is required for idempotency, the sku is points-only). The shared secret
     // authenticates this hop to ePoints; ePoints never trusts a client-sent price.
     const { sku, nonce, meta } = req.body as { sku?: string; nonce?: string; meta?: object };
-    const headers = { "X-Internal-Secret": config.stripeInternalSecret };
+    const headers = { "X-Internal-Secret": secret };
     const payload = { user: username, sku, nonce, meta };
     pipe(apiRequest(`stripe/create-intent`, "POST", headers, payload, {}, 20000), res);
 }
@@ -2799,14 +2806,19 @@ export const stripeOrderStatus = async (req: express.Request, res: express.Respo
         res.status(401).send("Unauthorized");
         return;
     }
+    const secret = config.stripeInternalSecret;
+    if (!secret) {
+        res.status(503).send("payments not configured");
+        return;
+    }
     const { payment_intent } = req.body as { payment_intent?: string };
     if (typeof payment_intent !== "string" || !payment_intent.trim()) {
         res.status(400).send("payment_intent required");
         return;
     }
     // Owner-scoped: ePoints filters by ?user, so a caller can only read its own order.
-    const headers = { "X-Internal-Secret": config.stripeInternalSecret };
-    pipe(apiRequest(`stripe/order/${encodeURIComponent(payment_intent.trim())}?user=${encodeURIComponent(username)}`, "GET", headers), res);
+    const headers = { "X-Internal-Secret": secret };
+    pipe(apiRequest(`stripe/order/${encodeURIComponent(payment_intent.trim())}?user=${encodeURIComponent(username)}`, "GET", headers, {}, {}, 20000), res);
 }
 
 export const boostOptions = async (req: express.Request, res: express.Response) => {
