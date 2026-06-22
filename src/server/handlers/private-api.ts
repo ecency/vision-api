@@ -2332,7 +2332,14 @@ export const createAccount = async (req: express.Request, res: express.Response)
     }
 
     const headers = { 'X-Real-IP-V': ip };
-    const payload = { username, email, referral, captcha_token };
+    // A Turnstile token is SINGLE-USE. When vapi is the verifier (mode != off) it was already
+    // consumed above, so it must NOT be forwarded for a second verification downstream (that
+    // would read as a duplicate and reject). Downstream captcha MUST be disabled when vapi
+    // enforces -- see the rollout. When off, forward as before so nothing changes.
+    const payload = {
+        username, email, referral,
+        captcha_token: config.captchaMode === "off" ? captcha_token : undefined,
+    };
 
     // On-chain account creation/broadcast can take longer than the default.
     pipe(apiRequest(`signup/account-create`, "POST", headers, payload, {}, 30000), res);
@@ -2898,19 +2905,22 @@ export const stripeCreateAccountIntent = async (req: express.Request, res: expre
         res.status(400).send("invalid product");
         return;
     }
-    if (!(await verifyTurnstile(captcha_token, ip))) {
-        res.status(406).json({ code: 113, message: "Please complete the verification and try again." });
-        return;
-    }
+    // Validate cheap inputs BEFORE the single-use Turnstile check, so a fixable input error
+    // (e.g. a missing username) never burns the user's one-time captcha token.
     const username = typeof meta?.username === "string" ? meta.username.trim().toLowerCase() : "";
     if (!username) {
         res.status(400).send("username required");
         return;
     }
+    if (!(await verifyTurnstile(captcha_token, ip))) {
+        res.status(406).json({ code: 113, message: "Please complete the verification and try again." });
+        return;
+    }
     // `user` carries the new account name as the order identity; the backend re-derives +
-    // re-validates it. Forward the client IP for backend-side rate-limiting / audit.
+    // re-validates it. Forward a NORMALIZED meta.username so meta and `user` agree. Forward the
+    // client IP for backend-side rate-limiting / audit.
     const headers = { "X-Internal-Secret": secret, "X-Real-IP-V": ip };
-    const payload = { user: username, sku, nonce, meta };
+    const payload = { user: username, sku, nonce, meta: meta ? { ...meta, username } : meta };
     pipe(apiRequest(`stripe/create-intent`, "POST", headers, payload, {}, 20000), res);
 }
 
