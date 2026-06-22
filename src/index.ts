@@ -1,4 +1,5 @@
 import express from 'express';
+import config from './config';
 
 let app = require('./server').default;
 
@@ -24,6 +25,11 @@ const server = express()
             return;
         }
         console.log(`> Started on port ${port}`);
+        // Surface the effective account-create captcha enforcement, so a stray CAPTCHA_MODE
+        // (anything but "off" is now "hard") shows up in startup logs instead of being silent.
+        console.log(
+            `> account-create captcha: ${config.captchaMode === 'off' ? 'OFF (break-glass)' : 'hard'}`
+        );
     });
 
 ['SIGINT', 'SIGTERM'].forEach((signal: any) => {
