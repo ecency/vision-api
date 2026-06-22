@@ -2272,13 +2272,74 @@ export const signupClientIp = (req: express.Request): string => {
     return (Array.isArray(realIp) ? realIp[0] : realIp) || '';
 };
 
+/**
+ * Server-side Cloudflare Turnstile verification -- the single captcha verifier for the
+ * account-create and paid-account-create routes. Returns true ONLY on a confirmed-human
+ * token; fails CLOSED on a missing secret/token, provider error, or rejection (a network
+ * blip must never open the gate). The secret is server-side only (config.turnstileSecret).
+ */
+const verifyTurnstile = async (token: unknown, ip: string): Promise<boolean> => {
+    const secret = config.turnstileSecret;
+    if (!secret || typeof token !== "string" || !token.trim()) {
+        return false;
+    }
+    try {
+        const form = new URLSearchParams();
+        form.append("secret", secret);
+        form.append("response", token.trim());
+        if (ip) form.append("remoteip", ip);
+        const r = await axios.post(
+            "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+            form, { timeout: 8000, headers: { "Content-Type": "application/x-www-form-urlencoded" } });
+        return r?.data?.success === true;
+    } catch (err) {
+        console.warn("verifyTurnstile: siteverify error", (err as Error)?.message);
+        return false;
+    }
+};
+
+/**
+ * Apply the account-create captcha gate per config.captchaMode. Returns true when the request
+ * must be REJECTED (only possible in "hard"). "soft" verifies for telemetry but never blocks;
+ * "off" (default) is a no-op so this ships dark. Referrals in captchaBypassReferrals are exempt.
+ */
+const accountCaptchaRejected = async (token: unknown, ip: string, referral: unknown): Promise<boolean> => {
+    const mode = config.captchaMode;
+    if (mode !== "hard" && mode !== "soft") {
+        return false;
+    }
+    if (typeof referral === "string" && config.captchaBypassReferrals.includes(referral)) {
+        return false;
+    }
+    const ok = await verifyTurnstile(token, ip);
+    if (mode === "soft") {
+        const hasToken = typeof token === "string" && token.trim().length > 0;
+        console.log(`captcha soft: ${ok ? "ok" : hasToken ? "reject" : "notoken"}`);
+        return false;
+    }
+    return !ok;
+};
+
 export const createAccount = async (req: express.Request, res: express.Response) => {
     const { username, email, referral, captcha_token } = req.body;
+    const ip = signupClientIp(req);
 
-    const headers = { 'X-Real-IP-V': signupClientIp(req) };
-    // Forward the Turnstile token for server-side verification in onboard. Inert until
-    // onboard's CAPTCHA_MODE is soft/hard, so this is safe to ship ahead of enforcement.
-    const payload = { username, email, referral, captcha_token };
+    // Single server-side captcha gate (config.captchaMode). Ships dark (off) by default; the
+    // token is still forwarded so the transition needs no client change.
+    if (await accountCaptchaRejected(captcha_token, ip, referral)) {
+        res.status(406).json({ code: 113, message: "Please complete the verification and try again." });
+        return;
+    }
+
+    const headers = { 'X-Real-IP-V': ip };
+    // A Turnstile token is SINGLE-USE. When vapi is the verifier (mode != off) it was already
+    // consumed above, so it must NOT be forwarded for a second verification downstream (that
+    // would read as a duplicate and reject). Downstream captcha MUST be disabled when vapi
+    // enforces -- see the rollout. When off, forward as before so nothing changes.
+    const payload = {
+        username, email, referral,
+        captcha_token: config.captchaMode === "off" ? captcha_token : undefined,
+    };
 
     // On-chain account creation/broadcast can take longer than the default.
     pipe(apiRequest(`signup/account-create`, "POST", headers, payload, {}, 30000), res);
@@ -2819,6 +2880,68 @@ export const stripeOrderStatus = async (req: express.Request, res: express.Respo
     // Owner-scoped: ePoints filters by ?user, so a caller can only read its own order.
     const headers = { "X-Internal-Secret": secret };
     pipe(apiRequest(`stripe/order/${encodeURIComponent(payment_intent.trim())}?user=${encodeURIComponent(username)}`, "GET", headers, {}, {}, 20000), res);
+}
+
+export const stripeCreateAccountIntent = async (req: express.Request, res: express.Response) => {
+    // ANONYMOUS paid-account purchase: NO validateCode (the buyer has no Hive account yet).
+    // The captcha is the human gate (ALWAYS enforced for this paid flow, independent of
+    // CAPTCHA_MODE). The backend re-validates the username/email/availability and computes
+    // the amount server-side before charging; this hop only authenticates with the shared
+    // secret and forwards the request.
+    const secret = config.stripeInternalSecret;
+    if (!secret) {
+        res.status(503).send("payments not configured");
+        return;
+    }
+    const ip = signupClientIp(req);
+    const { sku, nonce, meta, captcha_token } = req.body as {
+        sku?: string; nonce?: string;
+        meta?: { username?: string; email?: string; referral?: string };
+        captcha_token?: string;
+    };
+    // This route mints ONLY the accounts rail; never let it create a points order (which the
+    // points route binds to an authenticated caller).
+    if (typeof sku !== "string" || !sku.endsWith("accounts")) {
+        res.status(400).send("invalid product");
+        return;
+    }
+    // Validate cheap inputs BEFORE the single-use Turnstile check, so a fixable input error
+    // (e.g. a missing username) never burns the user's one-time captcha token.
+    const username = typeof meta?.username === "string" ? meta.username.trim().toLowerCase() : "";
+    if (!username) {
+        res.status(400).send("username required");
+        return;
+    }
+    if (!(await verifyTurnstile(captcha_token, ip))) {
+        res.status(406).json({ code: 113, message: "Please complete the verification and try again." });
+        return;
+    }
+    // `user` carries the new account name as the order identity; the backend re-derives +
+    // re-validates it. Forward a NORMALIZED meta.username so meta and `user` agree. Forward the
+    // client IP for backend-side rate-limiting / audit.
+    const headers = { "X-Internal-Secret": secret, "X-Real-IP-V": ip };
+    const payload = { user: username, sku, nonce, meta: meta ? { ...meta, username } : meta };
+    pipe(apiRequest(`stripe/create-intent`, "POST", headers, payload, {}, 20000), res);
+}
+
+export const stripeAccountStatus = async (req: express.Request, res: express.Response) => {
+    // ANONYMOUS status poll: no Hive account yet, so no validateCode owner-binding. Scope by
+    // the buyer-supplied username + payment_intent; the backend filters by ?user, so the order
+    // resolves only when BOTH match what it created. Status is low-sensitivity.
+    const secret = config.stripeInternalSecret;
+    if (!secret) {
+        res.status(503).send("payments not configured");
+        return;
+    }
+    const { payment_intent, username } = req.body as { payment_intent?: string; username?: string };
+    const pi = typeof payment_intent === "string" ? payment_intent.trim() : "";
+    const user = typeof username === "string" ? username.trim().toLowerCase() : "";
+    if (!pi || !user) {
+        res.status(400).send("payment_intent and username required");
+        return;
+    }
+    const headers = { "X-Internal-Secret": secret };
+    pipe(apiRequest(`stripe/order/${encodeURIComponent(pi)}?user=${encodeURIComponent(user)}`, "GET", headers, {}, {}, 20000), res);
 }
 
 export const boostOptions = async (req: express.Request, res: express.Response) => {
