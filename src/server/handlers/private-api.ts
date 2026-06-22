@@ -2299,47 +2299,30 @@ const verifyTurnstile = async (token: unknown, ip: string): Promise<boolean> => 
 };
 
 /**
- * Apply the account-create captcha gate per config.captchaMode. Returns true when the request
- * must be REJECTED (only possible in "hard"). "soft" verifies for telemetry but never blocks;
- * "off" (default) is a no-op so this ships dark. Referrals in captchaBypassReferrals are exempt.
+ * Turnstile gate for account creation. Returns true when the request must be REJECTED.
+ * Enforced for every request by default (config.captchaMode "hard"); an operator can set
+ * "off" as an emergency break-glass, since verification otherwise fails closed.
  */
-const accountCaptchaRejected = async (token: unknown, ip: string, referral: unknown): Promise<boolean> => {
-    const mode = config.captchaMode;
-    if (mode !== "hard" && mode !== "soft") {
+const accountCaptchaRejected = async (token: unknown, ip: string): Promise<boolean> => {
+    if (config.captchaMode === "off") {
         return false;
     }
-    if (typeof referral === "string" && config.captchaBypassReferrals.includes(referral)) {
-        return false;
-    }
-    const ok = await verifyTurnstile(token, ip);
-    if (mode === "soft") {
-        const hasToken = typeof token === "string" && token.trim().length > 0;
-        console.log(`captcha soft: ${ok ? "ok" : hasToken ? "reject" : "notoken"}`);
-        return false;
-    }
-    return !ok;
+    return !(await verifyTurnstile(token, ip));
 };
 
 export const createAccount = async (req: express.Request, res: express.Response) => {
     const { username, email, referral, captcha_token } = req.body;
     const ip = signupClientIp(req);
 
-    // Single server-side captcha gate (config.captchaMode). Ships dark (off) by default; the
-    // token is still forwarded so the transition needs no client change.
-    if (await accountCaptchaRejected(captcha_token, ip, referral)) {
+    // Single server-side Turnstile gate, enforced by default. vapi is the sole verifier, so the
+    // (single-use) token is consumed here and never forwarded downstream.
+    if (await accountCaptchaRejected(captcha_token, ip)) {
         res.status(406).json({ code: 113, message: "Please complete the verification and try again." });
         return;
     }
 
     const headers = { 'X-Real-IP-V': ip };
-    // A Turnstile token is SINGLE-USE. When vapi is the verifier (mode != off) it was already
-    // consumed above, so it must NOT be forwarded for a second verification downstream (that
-    // would read as a duplicate and reject). Downstream captcha MUST be disabled when vapi
-    // enforces -- see the rollout. When off, forward as before so nothing changes.
-    const payload = {
-        username, email, referral,
-        captcha_token: config.captchaMode === "off" ? captcha_token : undefined,
-    };
+    const payload = { username, email, referral };
 
     // On-chain account creation/broadcast can take longer than the default.
     pipe(apiRequest(`signup/account-create`, "POST", headers, payload, {}, 30000), res);
