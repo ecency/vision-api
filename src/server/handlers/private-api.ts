@@ -2250,7 +2250,7 @@ export const wavesFeed = async (req: express.Request, res: express.Response) => 
 
     // container is optional and repeatable (omit for the full combined feed).
     if (Array.isArray(container)) {
-        container.forEach((c) => params.append("container", String(c)));
+        (container as unknown[]).forEach((c) => params.append("container", String(c)));
     } else if (container) {
         params.append("container", String(container));
     }
