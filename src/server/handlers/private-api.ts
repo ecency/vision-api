@@ -2240,10 +2240,12 @@ export const wavesFeed = async (req: express.Request, res: express.Response) => 
     const { limit, cursor, tag, following, container } = req.query;
     const params = new URLSearchParams();
 
-    if (limit) params.set("limit", String(limit));
-    if (cursor) params.set("cursor", String(cursor));
-    if (tag) params.set("tag", String(tag));
-    if (following) params.set("following", String(following));
+    // These are single-value; ignore array input (duplicate params) so a
+    // String([...]) never forwards a comma-joined value to the backend.
+    if (limit && !Array.isArray(limit)) params.set("limit", String(limit));
+    if (cursor && !Array.isArray(cursor)) params.set("cursor", String(cursor));
+    if (tag && !Array.isArray(tag)) params.set("tag", String(tag));
+    if (following && !Array.isArray(following)) params.set("following", String(following));
 
     // container is optional and repeatable (omit for the full combined feed).
     if (Array.isArray(container)) {
