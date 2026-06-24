@@ -61,6 +61,7 @@ server
     .get("^/private-api/channel/:username$", privateApi.channelGet)
     .get("^/private-api/proposal/active$", privateApi.proposalActive)
     .get("^/private-api/pub-notifications/:username", privateApi.publicUnreadNotifications)
+    .get("^/private-api/waves/feed$", privateApi.wavesFeed)
     .get("^/private-api/waves/tags$", privateApi.wavesTags)
     .get("^/private-api/waves/account$", privateApi.wavesAccount)
     .get("^/private-api/waves/following", privateApi.wavesFollowing)
