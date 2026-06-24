@@ -2217,16 +2217,15 @@ export const wavesFollowing = async (req: express.Request, res: express.Response
 
 export const wavesTrendingTags = async (req: express.Request, res: express.Response) => {
     const { container, hours, days } = req.query;
-    let u = `waves/trending/tags?container=${container}`;
+    const params = new URLSearchParams();
 
-    if (hours) {
-        u += `&hours=${hours}`;
-    }
+    // container is optional: omit it for combined trending tags across all
+    // containers (do not forward a literal "undefined").
+    if (container && !Array.isArray(container)) params.set("container", String(container));
+    if (hours && !Array.isArray(hours)) params.set("hours", String(hours));
+    if (days && !Array.isArray(days)) params.set("days", String(days));
 
-    if (days) {
-        u += `&days=${days}`;
-    }
-
+    const u = `waves/trending/tags?${params.toString()}`;
     pipe(apiRequest(u, "GET"), res);
 };
 
