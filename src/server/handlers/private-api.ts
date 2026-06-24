@@ -2236,6 +2236,26 @@ export const wavesTrendingAuthors = async (req: express.Request, res: express.Re
     pipe(apiRequest(u, "GET"), res);
 };
 
+export const wavesFeed = async (req: express.Request, res: express.Response) => {
+    const { limit, cursor, tag, following, container } = req.query;
+    const params = new URLSearchParams();
+
+    if (limit) params.set("limit", String(limit));
+    if (cursor) params.set("cursor", String(cursor));
+    if (tag) params.set("tag", String(tag));
+    if (following) params.set("following", String(following));
+
+    // container is optional and repeatable (omit for the full combined feed).
+    if (Array.isArray(container)) {
+        container.forEach((c) => params.append("container", String(c)));
+    } else if (container) {
+        params.append("container", String(container));
+    }
+
+    const u = `waves/feed?${params.toString()}`;
+    pipe(apiRequest(u, "GET"), res);
+};
+
 export const points = async (req: express.Request, res: express.Response) => {
     const { username } = req.body;
     pipe(apiRequest(`users/${username}`, "GET"), res);
