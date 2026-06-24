@@ -2236,7 +2236,7 @@ export const wavesTrendingAuthors = async (req: express.Request, res: express.Re
 };
 
 export const wavesFeed = async (req: express.Request, res: express.Response) => {
-    const { limit, cursor, tag, following, container } = req.query;
+    const { limit, cursor, tag, following, author, observer, container } = req.query;
     const params = new URLSearchParams();
 
     // These are single-value; ignore array input (duplicate params) so a
@@ -2245,6 +2245,8 @@ export const wavesFeed = async (req: express.Request, res: express.Response) => 
     if (cursor && !Array.isArray(cursor)) params.set("cursor", String(cursor));
     if (tag && !Array.isArray(tag)) params.set("tag", String(tag));
     if (following && !Array.isArray(following)) params.set("following", String(following));
+    if (author && !Array.isArray(author)) params.set("author", String(author));
+    if (observer && !Array.isArray(observer)) params.set("observer", String(observer));
 
     // container is optional and repeatable (omit for the full combined feed).
     if (Array.isArray(container)) {
