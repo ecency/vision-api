@@ -2259,6 +2259,28 @@ export const wavesFeed = async (req: express.Request, res: express.Response) => 
     pipe(apiRequest(u, "GET"), res);
 };
 
+export const wavesShorts = async (req: express.Request, res: express.Response) => {
+    const { limit, cursor, tag, author, observer, container } = req.query;
+    const params = new URLSearchParams();
+
+    // Single-value params; ignore array (duplicate) input as wavesFeed does.
+    if (limit && !Array.isArray(limit)) params.set("limit", String(limit));
+    if (cursor && !Array.isArray(cursor)) params.set("cursor", String(cursor));
+    if (tag && !Array.isArray(tag)) params.set("tag", String(tag));
+    if (author && !Array.isArray(author)) params.set("author", String(author));
+    if (observer && !Array.isArray(observer)) params.set("observer", String(observer));
+
+    // container is optional and repeatable (omit for the full combined shorts feed).
+    if (Array.isArray(container)) {
+        (container as unknown[]).forEach((c) => params.append("container", String(c)));
+    } else if (container) {
+        params.append("container", String(container));
+    }
+
+    const u = `waves/shorts?${params.toString()}`;
+    pipe(apiRequest(u, "GET"), res);
+};
+
 export const points = async (req: express.Request, res: express.Response) => {
     const { username } = req.body;
     pipe(apiRequest(`users/${username}`, "GET"), res);
