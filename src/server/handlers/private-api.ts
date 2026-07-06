@@ -879,6 +879,45 @@ export const quests = async (req: express.Request, res: express.Response) => {
     pipe(apiRequest(`users/${username}/quests`, "GET"), res);
 };
 
+// Resolve the authenticated username from the signed token, or send 401 and return
+// undefined. Used by the spend endpoints, which must never trust a body-supplied user.
+const requireAuthedUsername = async (
+    req: express.Request,
+    res: express.Response
+): Promise<string | undefined> => {
+    const username = await validateCode(req);
+    if (!username) {
+        res.status(401).send("Unauthorized");
+        return undefined;
+    }
+    return username;
+};
+
+// Streak Freeze buys/spends Points, so the username is taken from the authenticated
+// token (validateCode), never from the request body.
+export const streakFreeze = async (req: express.Request, res: express.Response) => {
+    const username = await requireAuthedUsername(req, res);
+    if (!username) {
+        return;
+    }
+    pipe(apiRequest(`users/${username}/streak-freeze`, "GET"), res);
+};
+
+export const streakFreezeBuy = async (req: express.Request, res: express.Response) => {
+    const username = await requireAuthedUsername(req, res);
+    if (!username) {
+        return;
+    }
+    // Require the idempotency key: a spend must never reach ePoints without it (a
+    // missing key drops from the payload and removes double-charge protection on retry).
+    const { idempotency_key } = req.body as { idempotency_key?: unknown };
+    if (typeof idempotency_key !== "string" || !idempotency_key.trim()) {
+        res.status(400).send("idempotency_key is required");
+        return;
+    }
+    pipe(apiRequest(`users/${username}/streak-freeze`, "POST", {}, { idempotency_key }), res);
+};
+
 /**
  * Resolve the originating client IP for the account-create endpoints from the
  * proxy-set X-Real-IP header. X-Forwarded-For is not used here because it can

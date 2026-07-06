@@ -72,6 +72,8 @@ server
     .post("^/private-api/points$", privateApi.points)
     .post("^/private-api/point-list$", privateApi.pointList)
     .post("^/private-api/quests$", privateApi.quests)
+    .post("^/private-api/streak-freeze$", privateApi.streakFreeze)
+    .post("^/private-api/streak-freeze/buy$", privateApi.streakFreezeBuy)
     .post("^/private-api/account-create$", privateApi.createAccount)
     .post("^/private-api/account-create-friend$", privateApi.createAccountFriend)
     .post("^/private-api/subscribe$", privateApi.subscribeNewsletter)
