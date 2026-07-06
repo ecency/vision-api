@@ -70,7 +70,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        region: [EU, US, SG]
+        region: [EU, US]
     steps:
       - name: Deploy vision_vapi (${{ matrix.region }})
         uses: appleboy/ssh-action@v1.0.3
