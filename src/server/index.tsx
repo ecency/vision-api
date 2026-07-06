@@ -45,6 +45,7 @@ server
     .get("^/private-api/received-vesting/:username$", privateApi.receivedVesting)
     .get("^/private-api/received-rc/:username$", privateApi.receivedRC)
     .get("^/private-api/rewarded-communities$", privateApi.rewardedCommunities)
+    .get("^/private-api/pro-members$", privateApi.proMembers)
     .get("^/private-api/balance/:chain/:address$", privateApi.balance)
     .post("^/private-api/rpc/:chain$", privateApi.chainRpc)
     .get("^/private-api/leaderboard/:duration(day|week|month)$", privateApi.leaderboard)

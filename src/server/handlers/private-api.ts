@@ -177,6 +177,12 @@ export const rewardedCommunities = async (req: express.Request, res: express.Res
     pipe(apiRequest(`rewarded-communities`, "GET"), res);
 };
 
+// Public list of Pro usernames for the Pro badge roster. No auth: this is a
+// public, cached list served straight from the backend.
+export const proMembers = async (req: express.Request, res: express.Response) => {
+    pipe(apiRequest(`pro-members`, "GET"), res);
+};
+
 const CHAIN_PARAM_REGEX = /^[a-z0-9-]+$/i;
 
 const PROVIDER_TIMEOUT_MS = 10_000;
