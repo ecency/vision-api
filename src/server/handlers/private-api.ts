@@ -236,7 +236,7 @@ const jsonRpcPost = async (
     const response = await axios.post(
         provider.url,
         { jsonrpc: "2.0", id, method, params },
-        { headers: JSON_RPC_HEADERS, timeout: PROVIDER_TIMEOUT_MS },
+        { headers: { ...JSON_RPC_HEADERS, ...provider.headers }, timeout: PROVIDER_TIMEOUT_MS },
     );
     const data = response.data;
 
@@ -291,25 +291,43 @@ const fetchEvmBalance = async (
 };
 
 const fetchSolanaBalance = async (provider: RpcProvider, address: string): Promise<ChainBalanceResponse> => {
-    const data = await jsonRpcPost(
-        provider,
-        "getBalance",
-        [address, { commitment: "finalized" }],
-        "balance",
-        "Solana balance request failed",
+    // Keep the raw response text: lamports is a u64 and JSON.parse would cap a
+    // balance above 2^53 as a lossy double, so read the integer from the text.
+    const response = await axios.post(
+        provider.url,
+        { jsonrpc: "2.0", id: "balance", method: "getBalance", params: [address, { commitment: "finalized" }] },
+        {
+            headers: { ...JSON_RPC_HEADERS, ...provider.headers },
+            timeout: PROVIDER_TIMEOUT_MS,
+            transformResponse: (raw) => raw,
+        },
     );
 
-    const value = data?.result?.value;
+    const rawText = typeof response.data === "string" ? response.data : "";
 
-    if (typeof value !== "number") {
+    let parsed: any;
+    try {
+        parsed = JSON.parse(rawText);
+    } catch (err) {
         throw new Error("Invalid Solana balance response");
     }
 
+    if (parsed?.error) {
+        throw new Error(parsed.error?.message || "Solana balance request failed");
+    }
+
+    if (typeof parsed?.result?.value !== "number") {
+        throw new Error("Invalid Solana balance response");
+    }
+
+    const match = rawText.match(/"value"\s*:\s*(\d+)/);
+    const balance = match ? match[1] : Math.trunc(parsed.result.value).toString();
+
     return {
         chain: "sol",
-        balance: value.toString(),
+        balance,
         unit: "lamports",
-        raw: data,
+        raw: parsed,
         nodeId: provider.id,
         provider: provider.id,
     };
@@ -529,15 +547,33 @@ export const chainRpc = async (req: express.Request, res: express.Response) => {
     try {
         const result = await tryProviders(normalizedChain, pool, "rpc", async (provider) => {
             const response = await axios.post(provider.url, body, {
-                headers: JSON_RPC_HEADERS,
+                headers: { ...JSON_RPC_HEADERS, ...provider.headers },
                 timeout: PROVIDER_TIMEOUT_MS,
             });
+
+            // A JSON-RPC error body arrives with HTTP 200; treat it as a provider
+            // failure so tryProviders advances to the next pool member (e.g. a
+            // rate-limited node returning {error:{code:-32005}}), but keep the
+            // envelope so a genuine application error can still reach the client
+            // if every provider returns one.
+            if (response.data?.error) {
+                const rpcErr: any = new Error(response.data.error?.message || "RPC error");
+                rpcErr.jsonRpcBody = response.data;
+                throw rpcErr;
+            }
+
             return { providerId: provider.id, data: response.data };
         });
 
         res.setHeader("x-provider", result.providerId);
         res.status(200).json(result.data);
     } catch (err) {
+        // Every provider returned a JSON-RPC error — pass the last envelope through verbatim.
+        if (err && typeof err === "object" && "jsonRpcBody" in err) {
+            res.status(200).json((err as any).jsonRpcBody);
+            return;
+        }
+
         console.error(`chainRpc(${normalizedChain}): error`, err);
 
         if (axios.isAxiosError(err) && err.response) {

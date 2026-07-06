@@ -5,6 +5,9 @@
 export interface RpcProvider {
     id: string;
     url: string;
+    // Extra request headers (e.g. an Authorization bearer for a keyed endpoint),
+    // kept out of the URL so credentials never land in access logs or error traces.
+    headers?: Record<string, string>;
 }
 
 export interface EsploraProvider {
@@ -55,7 +58,10 @@ const heliusKey = (process.env.HELIUS_API_KEY || "").trim();
 export const SOL_RPC_POOL: RpcProvider[] = poolFromEnv("SOL_RPC_URLS") || [
     { id: "publicnode", url: "https://solana-rpc.publicnode.com" },
     { id: "solana-foundation", url: "https://api.mainnet.solana.com" },
-    ...(heliusKey ? [{ id: "helius", url: `https://mainnet.helius-rpc.com/?api-key=${heliusKey}` }] : []),
+    // Pass the Helius key as a bearer header, not a URL query param, so it stays out of logs.
+    ...(heliusKey
+        ? [{ id: "helius", url: "https://mainnet.helius-rpc.com/", headers: { Authorization: `Bearer ${heliusKey}` } }]
+        : []),
 ];
 
 const blockstreamCredsConfigured = Boolean(
