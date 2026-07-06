@@ -57,6 +57,10 @@ Configure the instance using following environment variables:
  * `BLOCKSTREAM_CLIENT_ID`
  * `BLOCKSTREAM_CLIENT_SECRET`
  * `HELIUS_API_KEY`
+ * `ETH_RPC_URLS`
+ * `BNB_RPC_URLS`
+ * `SOL_RPC_URLS`
+ * `BTC_ESPLORA_URLS`
 
 ```bash
 docker run -it --rm -p 3000:3000 -e PRIVATE_API_ADDR=https://api.example.com -e PRIVATE_API_AUTH=verysecretpassword ecency/api:latest

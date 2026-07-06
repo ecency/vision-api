@@ -54,13 +54,15 @@ export const BNB_RPC_POOL: RpcProvider[] = poolFromEnv("BNB_RPC_URLS") || [
 ];
 
 const heliusKey = (process.env.HELIUS_API_KEY || "").trim();
+const heliusRpcUrl = (apiKey: string): string =>
+    `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(apiKey)}`;
 
 export const SOL_RPC_POOL: RpcProvider[] = poolFromEnv("SOL_RPC_URLS") || [
     { id: "publicnode", url: "https://solana-rpc.publicnode.com" },
     { id: "solana-foundation", url: "https://api.mainnet.solana.com" },
-    // Pass the Helius key as a bearer header, not a URL query param, so it stays out of logs.
+    // Helius RPC authenticates with the api-key query parameter.
     ...(heliusKey
-        ? [{ id: "helius", url: "https://mainnet.helius-rpc.com/", headers: { Authorization: `Bearer ${heliusKey}` } }]
+        ? [{ id: "helius", url: heliusRpcUrl(heliusKey) }]
         : []),
 ];
 

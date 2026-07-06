@@ -225,6 +225,19 @@ const tryProviders = async <P extends { id: string }, T>(
     throw lastError;
 };
 
+const logUpstreamError = (context: string, err: unknown) => {
+    if (axios.isAxiosError(err)) {
+        console.error(context, {
+            status: err.response?.status || "none",
+            code: err.code || "none",
+            message: err.message,
+        });
+        return;
+    }
+
+    console.error(context, err);
+};
+
 // Shared JSON-RPC POST used by every EVM/SOL balance and proxy call.
 const jsonRpcPost = async (
     provider: RpcProvider,
@@ -450,7 +463,7 @@ export const balance = async (req: express.Request, res: express.Response) => {
             return;
         }
 
-        console.error("balance(): error while fetching chain balance", err);
+        logUpstreamError("balance(): error while fetching chain balance", err);
 
         if (axios.isAxiosError(err) && err.response) {
             const { status, data } = err.response;
@@ -574,7 +587,7 @@ export const chainRpc = async (req: express.Request, res: express.Response) => {
             return;
         }
 
-        console.error(`chainRpc(${normalizedChain}): error`, err);
+        logUpstreamError(`chainRpc(${normalizedChain}): error`, err);
 
         if (axios.isAxiosError(err) && err.response) {
             const { status, data } = err.response;
