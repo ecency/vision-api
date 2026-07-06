@@ -2306,6 +2306,27 @@ export const quests = async (req: express.Request, res: express.Response) => {
     pipe(apiRequest(`users/${username}/quests`, "GET"), res);
 };
 
+// Streak Freeze buys/spends Points, so the username is taken from the authenticated
+// token (validateCode), never from the request body.
+export const streakFreeze = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req);
+    if (!username) {
+        res.status(401).send("Unauthorized");
+        return;
+    }
+    pipe(apiRequest(`users/${username}/streak-freeze`, "GET"), res);
+};
+
+export const streakFreezeBuy = async (req: express.Request, res: express.Response) => {
+    const username = await validateCode(req);
+    if (!username) {
+        res.status(401).send("Unauthorized");
+        return;
+    }
+    const { idempotency_key } = req.body;
+    pipe(apiRequest(`users/${username}/streak-freeze`, "POST", {}, { idempotency_key }), res);
+};
+
 /**
  * Resolve the originating client IP for the account-create endpoints from the
  * proxy-set X-Real-IP header. X-Forwarded-For is not used here because it can
