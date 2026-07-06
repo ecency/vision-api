@@ -25,10 +25,10 @@
 * `HIVESIGNER_SECRET` -  hivesigner client secret
 * `SEARCH_API_ADDR` - hivesearcher api endpoint
 * `SEARCH_API_SECRET` - hivesearcher api auth token
-* `CHAINSTACK_API_KEY` - Chainstack API key used to enumerate nodes and request balances directly from each network-specific endpoint.
-* `CHAINZ_API_KEY` - Chainz API key used to perform balance lookups when the Chainz provider is requested.
-* `BLOCKSTREAM_CLIENT_ID` - OAuth client identifier used to request temporary access tokens for the Blockstream Explorer Enterprise API fallback.
-* `BLOCKSTREAM_CLIENT_SECRET` - OAuth client secret paired with the client identifier for generating Blockstream access tokens.
+* `BLOCKSTREAM_CLIENT_ID` - optional OAuth client identifier used to request temporary access tokens for the Blockstream Explorer Enterprise API (BTC fallback).
+* `BLOCKSTREAM_CLIENT_SECRET` - optional OAuth client secret paired with the client identifier for generating Blockstream access tokens.
+* `HELIUS_API_KEY` - optional Helius API key added as an extra Solana RPC fallback.
+* `ETH_RPC_URLS` / `BNB_RPC_URLS` / `SOL_RPC_URLS` / `BTC_ESPLORA_URLS` - optional comma-separated endpoint lists overriding the built-in public provider pools (see `src/server/chain-providers.ts`).
 
 ##### Start api in dev
 `$ yarn start`
@@ -54,10 +54,9 @@ Configure the instance using following environment variables:
  * `HIVESIGNER_SECRET`
  * `SEARCH_API_ADDR`
  * `SEARCH_API_SECRET`
- * `CHAINSTACK_API_KEY`
- * `CHAINZ_API_KEY`
  * `BLOCKSTREAM_CLIENT_ID`
  * `BLOCKSTREAM_CLIENT_SECRET`
+ * `HELIUS_API_KEY`
 
 ```bash
 docker run -it --rm -p 3000:3000 -e PRIVATE_API_ADDR=https://api.example.com -e PRIVATE_API_AUTH=verysecretpassword ecency/api:latest

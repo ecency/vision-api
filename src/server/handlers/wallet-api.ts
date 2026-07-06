@@ -122,9 +122,6 @@ const CHAIN_CONFIG: Record<string, ChainConfig> = {
     eth: { name: "Ethereum", symbol: "ETH", decimals: 18, iconUrl: ASSET_ICON_URLS.ETH },
     bnb: { name: "BNB Chain", symbol: "BNB", decimals: 18, iconUrl: ASSET_ICON_URLS.BNB },
     sol: { name: "Solana", symbol: "SOL", decimals: 9, iconUrl: ASSET_ICON_URLS.SOL },
-    tron: { name: "Tron", symbol: "TRX", decimals: 6, aliases: ["trx"], iconUrl: ASSET_ICON_URLS.TRON },
-    ton: { name: "TON", symbol: "TON", decimals: 9, iconUrl: ASSET_ICON_URLS.TON },
-    apt: { name: "Aptos", symbol: "APT", decimals: 8, iconUrl: ASSET_ICON_URLS.APT },
 };
 
 const CHAIN_SYMBOL_LOOKUP = new Map<string, { key: string; config: ChainConfig }>();
