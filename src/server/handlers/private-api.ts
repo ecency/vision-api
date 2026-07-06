@@ -212,6 +212,10 @@ const tryProviders = async <P extends { id: string }, T>(
         try {
             return await fn(provider);
         } catch (err) {
+            if (err instanceof TerminalProviderError) {
+                throw err;
+            }
+
             lastError = err;
             const detail = axios.isAxiosError(err)
                 ? `status=${err.response?.status || "none"} code=${err.code || "none"}`
@@ -285,6 +289,110 @@ const parseHexBalance = (value: unknown): string => {
     return BigInt(`0x${normalized}`).toString();
 };
 
+const findJsonObjectEnd = (text: string, start: number): number => {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+
+    for (let index = start; index < text.length; index += 1) {
+        const char = text[index];
+
+        if (inString) {
+            if (escaped) {
+                escaped = false;
+            } else if (char === "\\") {
+                escaped = true;
+            } else if (char === "\"") {
+                inString = false;
+            }
+            continue;
+        }
+
+        if (char === "\"") {
+            inString = true;
+        } else if (char === "{") {
+            depth += 1;
+        } else if (char === "}") {
+            depth -= 1;
+            if (depth === 0) {
+                return index;
+            }
+        }
+    }
+
+    return -1;
+};
+
+const extractTopLevelNumericProperty = (text: string, property: string): string | null => {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    const keyLiteral = `"${property}"`;
+
+    for (let index = 0; index < text.length; index += 1) {
+        const char = text[index];
+
+        if (inString) {
+            if (escaped) {
+                escaped = false;
+            } else if (char === "\\") {
+                escaped = true;
+            } else if (char === "\"") {
+                inString = false;
+            }
+            continue;
+        }
+
+        if (char === "\"") {
+            if (depth === 0 && text.slice(index, index + keyLiteral.length) === keyLiteral) {
+                let cursor = index + keyLiteral.length;
+                while (/\s/.test(text[cursor] || "")) cursor += 1;
+                if (text[cursor] !== ":") {
+                    inString = true;
+                    continue;
+                }
+                cursor += 1;
+                while (/\s/.test(text[cursor] || "")) cursor += 1;
+
+                const numericMatch = text.slice(cursor).match(/^\d+/);
+                return numericMatch ? numericMatch[0] : null;
+            }
+
+            inString = true;
+        } else if (char === "{" || char === "[") {
+            depth += 1;
+        } else if (char === "}" || char === "]") {
+            depth -= 1;
+        }
+    }
+
+    return null;
+};
+
+const extractSolanaLamports = (rawText: string, parsed: any): string => {
+    if (typeof parsed?.result?.value !== "number") {
+        throw new Error("Invalid Solana balance response");
+    }
+
+    const resultMatch = rawText.match(/"result"\s*:/);
+    if (resultMatch && resultMatch.index !== undefined) {
+        const resultStart = resultMatch.index + resultMatch[0].length;
+        const objectStart = rawText.indexOf("{", resultStart);
+        if (objectStart !== -1) {
+            const objectEnd = findJsonObjectEnd(rawText, objectStart);
+            if (objectEnd !== -1) {
+                const resultObject = rawText.slice(objectStart + 1, objectEnd);
+                const rawLamports = extractTopLevelNumericProperty(resultObject, "value");
+                if (rawLamports) {
+                    return rawLamports;
+                }
+            }
+        }
+    }
+
+    return Math.trunc(parsed.result.value).toString();
+};
+
 const fetchEvmBalance = async (
     chain: string,
     provider: RpcProvider,
@@ -329,12 +437,7 @@ const fetchSolanaBalance = async (provider: RpcProvider, address: string): Promi
         throw new Error(parsed.error?.message || "Solana balance request failed");
     }
 
-    if (typeof parsed?.result?.value !== "number") {
-        throw new Error("Invalid Solana balance response");
-    }
-
-    const match = rawText.match(/"value"\s*:\s*(\d+)/);
-    const balance = match ? match[1] : Math.trunc(parsed.result.value).toString();
+    const balance = extractSolanaLamports(rawText, parsed);
 
     return {
         chain: "sol",
