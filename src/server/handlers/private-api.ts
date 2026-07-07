@@ -1576,10 +1576,14 @@ export const stripeCreateIntent = async (req: express.Request, res: express.Resp
         return;
     }
     // Same boundary guard for the gift recipient (typeof before regex); ePoints does the strict
-    // shape + on-chain existence check before charging.
-    if (gift_recipient !== undefined &&
-        (typeof gift_recipient !== "string" ||
-         !/^(?=.{3,16}$)[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)*$/.test(gift_recipient))) {
+    // shape + on-chain existence check before charging. Hive names are lowercase, so normalize
+    // typed input (trim + lowercase) before validating so a recipient like "Alice" is accepted as
+    // "alice" rather than rejected, and forward the canonical form.
+    const giftRecipient =
+        typeof gift_recipient === "string" ? gift_recipient.trim().toLowerCase() : gift_recipient;
+    if (giftRecipient !== undefined &&
+        (typeof giftRecipient !== "string" ||
+         !/^(?=.{3,16}$)[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)*$/.test(giftRecipient))) {
         res.status(400).send("invalid gift recipient");
         return;
     }
@@ -1588,7 +1592,10 @@ export const stripeCreateIntent = async (req: express.Request, res: express.Resp
         return;
     }
     const headers = { "X-Internal-Secret": secret };
-    const payload = { user: username, sku, nonce, meta, hosting_target, gift_recipient, gift_message };
+    const payload = {
+        user: username, sku, nonce, meta, hosting_target,
+        gift_recipient: giftRecipient, gift_message,
+    };
     pipe(apiRequest(`stripe/create-intent`, "POST", headers, payload, {}, 20000), res);
 }
 
