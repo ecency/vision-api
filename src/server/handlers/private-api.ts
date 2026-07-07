@@ -1507,6 +1507,14 @@ export const stripeCreateIntent = async (req: express.Request, res: express.Resp
     const { sku, nonce, meta, hosting_target } = req.body as {
         sku?: string; nonce?: string; meta?: object; hosting_target?: string;
     };
+    // hosting_target is client-supplied and crosses into the trusted internal request. Reject a
+    // malformed value at this boundary before forwarding (ePoints also validates it and only honours
+    // it on the hosting rail from the trusted create-intent path). Absent -> the buyer's own blog.
+    if (hosting_target !== undefined &&
+        !/^(?=.{3,16}$)[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)*$/.test(hosting_target)) {
+        res.status(400).send("invalid hosting target");
+        return;
+    }
     const headers = { "X-Internal-Secret": secret };
     const payload = { user: username, sku, nonce, meta, hosting_target };
     pipe(apiRequest(`stripe/create-intent`, "POST", headers, payload, {}, 20000), res);
