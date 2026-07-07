@@ -1557,8 +1557,12 @@ export const stripeCreateIntent = async (req: express.Request, res: express.Resp
     // hosting_target is optional: on the hosting rail it activates a DIFFERENT tenant than the
     // buyer (e.g. a community hive-NNNNN whose owner pays); ePoints validates it and ignores it
     // on every non-hosting rail. The buyer (user) stays the authenticated caller.
-    const { sku, nonce, meta, hosting_target } = req.body as {
+    // gift_recipient / gift_message (Points gift rail): the buyer pays and the Points are credited
+    // to gift_recipient instead of the buyer. Optional; ePoints validates + verifies the recipient
+    // exists before charging and ignores these on non-Points skus.
+    const { sku, nonce, meta, hosting_target, gift_recipient, gift_message } = req.body as {
         sku?: string; nonce?: string; meta?: object; hosting_target?: string;
+        gift_recipient?: string; gift_message?: string;
     };
     // hosting_target is client-supplied and crosses into the trusted internal request. Reject a
     // malformed value at this boundary before forwarding (ePoints also validates it and only honours
@@ -1571,8 +1575,27 @@ export const stripeCreateIntent = async (req: express.Request, res: express.Resp
         res.status(400).send("invalid hosting target");
         return;
     }
+    // Same boundary guard for the gift recipient (typeof before regex); ePoints does the strict
+    // shape + on-chain existence check before charging. Hive names are lowercase, so normalize
+    // typed input (trim + lowercase) before validating so a recipient like "Alice" is accepted as
+    // "alice" rather than rejected, and forward the canonical form.
+    const giftRecipient =
+        typeof gift_recipient === "string" ? gift_recipient.trim().toLowerCase() : gift_recipient;
+    if (giftRecipient !== undefined &&
+        (typeof giftRecipient !== "string" ||
+         !/^(?=.{3,16}$)[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)*$/.test(giftRecipient))) {
+        res.status(400).send("invalid gift recipient");
+        return;
+    }
+    if (gift_message !== undefined && (typeof gift_message !== "string" || gift_message.length > 200)) {
+        res.status(400).send("invalid gift message");
+        return;
+    }
     const headers = { "X-Internal-Secret": secret };
-    const payload = { user: username, sku, nonce, meta, hosting_target };
+    const payload = {
+        user: username, sku, nonce, meta, hosting_target,
+        gift_recipient: giftRecipient, gift_message,
+    };
     pipe(apiRequest(`stripe/create-intent`, "POST", headers, payload, {}, 20000), res);
 }
 
