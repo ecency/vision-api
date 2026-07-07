@@ -1501,9 +1501,25 @@ export const stripeCreateIntent = async (req: express.Request, res: express.Resp
     // are validated server-side by ePoints (amount + points come from its catalog, the
     // nonce is required for idempotency, the sku is points-only). The shared secret
     // authenticates this hop to ePoints; ePoints never trusts a client-sent price.
-    const { sku, nonce, meta } = req.body as { sku?: string; nonce?: string; meta?: object };
+    // hosting_target is optional: on the hosting rail it activates a DIFFERENT tenant than the
+    // buyer (e.g. a community hive-NNNNN whose owner pays); ePoints validates it and ignores it
+    // on every non-hosting rail. The buyer (user) stays the authenticated caller.
+    const { sku, nonce, meta, hosting_target } = req.body as {
+        sku?: string; nonce?: string; meta?: object; hosting_target?: string;
+    };
+    // hosting_target is client-supplied and crosses into the trusted internal request. Reject a
+    // malformed value at this boundary before forwarding (ePoints also validates it and only honours
+    // it on the hosting rail from the trusted create-intent path). Absent -> the buyer's own blog.
+    if (hosting_target !== undefined &&
+        (typeof hosting_target !== "string" ||
+         !/^(?=.{3,16}$)[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)*$/.test(hosting_target))) {
+        // typeof guard first: req.body is JSON, so a non-string (e.g. ["hive-1"]) would otherwise be
+        // coerced by RegExp.test and forwarded as a non-string, defeating the boundary check.
+        res.status(400).send("invalid hosting target");
+        return;
+    }
     const headers = { "X-Internal-Secret": secret };
-    const payload = { user: username, sku, nonce, meta };
+    const payload = { user: username, sku, nonce, meta, hosting_target };
     pipe(apiRequest(`stripe/create-intent`, "POST", headers, payload, {}, 20000), res);
 }
 
