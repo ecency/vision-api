@@ -70,7 +70,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        region: [EU, US]
+        # ALPHA is the staging origin; it runs the same vision_vapi service and
+        # tracks main so staging cannot drift behind production again.
+        region: [EU, US, ALPHA]
     steps:
       - name: Deploy vision_vapi (${{ matrix.region }})
         uses: appleboy/ssh-action@v1.0.3
