@@ -40,6 +40,9 @@
     "jest": "^26.0.0"
   },
   "jest": {
+    "moduleNameMapper": {
+      "^axios$": "axios/dist/node/axios.cjs"
+    },
     "transform": {
       "\\.(ts|tsx)$": "ts-jest",
       "\\.css$": "<rootDir>/node_modules/razzle/config/jest/cssTransform.js",
