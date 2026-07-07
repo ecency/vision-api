@@ -1501,9 +1501,14 @@ export const stripeCreateIntent = async (req: express.Request, res: express.Resp
     // are validated server-side by ePoints (amount + points come from its catalog, the
     // nonce is required for idempotency, the sku is points-only). The shared secret
     // authenticates this hop to ePoints; ePoints never trusts a client-sent price.
-    const { sku, nonce, meta } = req.body as { sku?: string; nonce?: string; meta?: object };
+    // hosting_target is optional: on the hosting rail it activates a DIFFERENT tenant than the
+    // buyer (e.g. a community hive-NNNNN whose owner pays); ePoints validates it and ignores it
+    // on every non-hosting rail. The buyer (user) stays the authenticated caller.
+    const { sku, nonce, meta, hosting_target } = req.body as {
+        sku?: string; nonce?: string; meta?: object; hosting_target?: string;
+    };
     const headers = { "X-Internal-Secret": secret };
-    const payload = { user: username, sku, nonce, meta };
+    const payload = { user: username, sku, nonce, meta, hosting_target };
     pipe(apiRequest(`stripe/create-intent`, "POST", headers, payload, {}, 20000), res);
 }
 
