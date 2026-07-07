@@ -1511,7 +1511,10 @@ export const stripeCreateIntent = async (req: express.Request, res: express.Resp
     // malformed value at this boundary before forwarding (ePoints also validates it and only honours
     // it on the hosting rail from the trusted create-intent path). Absent -> the buyer's own blog.
     if (hosting_target !== undefined &&
-        !/^(?=.{3,16}$)[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)*$/.test(hosting_target)) {
+        (typeof hosting_target !== "string" ||
+         !/^(?=.{3,16}$)[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)*$/.test(hosting_target))) {
+        // typeof guard first: req.body is JSON, so a non-string (e.g. ["hive-1"]) would otherwise be
+        // coerced by RegExp.test and forwarded as a non-string, defeating the boundary check.
         res.status(400).send("invalid hosting target");
         return;
     }
