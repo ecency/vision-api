@@ -1202,6 +1202,59 @@ export const bookmarksDelete = async (req: express.Request, res: express.Respons
     pipe(apiRequest(`bookmarks/${username}/${id}`, "DELETE"), res);
 }
 
+/**
+ * Parse and validate the support-settings payload. Both fields must be integers
+ * within 0..100 (booleans, strings and floats are rejected). Returns the parsed
+ * pair, or null when the payload is invalid. Exported for unit tests.
+ */
+export const parseSupportSettingsPayload = (
+    body: unknown
+): { beneficiary_percent: number; curation_percent: number } | null => {
+    const { beneficiary_percent, curation_percent } = (body || {}) as {
+        beneficiary_percent?: unknown;
+        curation_percent?: unknown;
+    };
+    const isPercent = (v: unknown): v is number =>
+        typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 100;
+    if (!isPercent(beneficiary_percent) || !isPercent(curation_percent)) {
+        return null;
+    }
+    return { beneficiary_percent, curation_percent };
+};
+
+// Support settings are per-user opt-ins, so the username is taken from the
+// authenticated token (validateCode), never from the request body.
+export const supportSettings = async (req: express.Request, res: express.Response) => {
+    const username = await requireAuthedUsername(req, res);
+    if (!username) {
+        return;
+    }
+    pipe(apiRequest(`support-settings/${username}`, "GET"), res);
+};
+
+export const supportSettingsUpdate = async (req: express.Request, res: express.Response) => {
+    const username = await requireAuthedUsername(req, res);
+    if (!username) {
+        return;
+    }
+    const parsed = parseSupportSettingsPayload(req.body);
+    if (!parsed) {
+        res.status(400).send(
+            "beneficiary_percent and curation_percent must be integers between 0 and 100"
+        );
+        return;
+    }
+    const { beneficiary_percent, curation_percent } = parsed;
+    pipe(
+        apiRequest(`support-settings/${username}`, "PUT", {}, {
+            username,
+            beneficiary_percent,
+            curation_percent
+        }),
+        res
+    );
+};
+
 export const schedules = async (req: express.Request, res: express.Response) => {
     const username = await validateCode(req);
     if (!username) {
