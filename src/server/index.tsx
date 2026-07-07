@@ -113,6 +113,8 @@ server
     .post("^/private-api/bookmarks$", privateApi.bookmarks)
     .post("^/private-api/bookmarks-add$", privateApi.bookmarksAdd)
     .post("^/private-api/bookmarks-delete$", privateApi.bookmarksDelete)
+    .post("^/private-api/support-settings$", privateApi.supportSettings)
+    .post("^/private-api/support-settings-update$", privateApi.supportSettingsUpdate)
     .post("^/private-api/schedules$", privateApi.schedules)
     .post("^/private-api/schedules-add$", privateApi.schedulesAdd)
     .post("^/private-api/schedules-delete$", privateApi.schedulesDelete)
