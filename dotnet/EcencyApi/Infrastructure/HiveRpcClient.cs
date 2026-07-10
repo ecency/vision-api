@@ -99,12 +99,15 @@ public sealed class HiveRpcClient
 
     // ---- typed helpers matching the dhive calls the handlers make --------
 
-    public async Task<JsonArray?> GetAccounts(IEnumerable<string> names)
+    public async Task<JsonArray?> GetAccounts(IEnumerable<string?> names)
     {
         var nameArr = new JsonArray();
         foreach (var n in names)
         {
-            nameArr.Add(n);
+            // A null name serializes to JSON null (matches dhive: getAccounts([undefined])
+            // -> params [null]). Hive's get_accounts(["null"]) is a real account (@null);
+            // get_accounts([null]) is empty — so this distinction is load-bearing.
+            nameArr.Add(n is null ? null : JsonValue.Create(n));
         }
         var result = await Call("condenser_api", "get_accounts", new JsonArray(nameArr));
         return result as JsonArray;

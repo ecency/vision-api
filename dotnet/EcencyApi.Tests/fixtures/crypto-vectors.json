@@ -1468,5 +1468,27 @@
    "signedJson": "{\"signed_message\":{\"type\":\"code\",\"app\":\"some.other.app\"},\"authors\":[\"dave\"],\"timestamp\":1751912345,\"signatures\":[\"20444c2f18c89cb31c5ab51269613ba21219a71ec209d3448d5c4a42168471b0e5673afd209b11ac6726e96426cbf3c26ac0feec494773be8d55907aba49706cf3\"]}",
    "code": "eyJzaWduZWRfbWVzc2FnZSI6eyJ0eXBlIjoiY29kZSIsImFwcCI6InNvbWUub3RoZXIuYXBwIn0sImF1dGhvcnMiOlsiZGF2ZSJdLCJ0aW1lc3RhbXAiOjE3NTE5MTIzNDUsInNpZ25hdHVyZXMiOlsiMjA0NDRjMmYxOGM4OWNiMzFjNWFiNTEyNjk2MTNiYTIxMjE5YTcxZWMyMDlkMzQ0OGQ1YzRhNDIxNjg0NzFiMGU1NjczYWZkMjA5YjExYWM2NzI2ZTk2NDI2Y2JmM2MyNmFjMGZlZWM0OTQ3NzNiZThkNTU5MDdhYmE0OTcwNmNmMyJdfQ.."
   }
+ ],
+ "validateCodeRaw": [
+  {
+   "tokenJson": "{\"signed_message\":{\"type\":\"code\",\"app\":\"ecency.app\"},\"authors\":[\"alice\"],\"timestamp\":1751900000,\"signatures\":[\"ab\"]}",
+   "rawMessage": "{\"signed_message\":{\"type\":\"code\",\"app\":\"ecency.app\"},\"authors\":[\"alice\"],\"timestamp\":1751900000}",
+   "digestHex": "5290d7673a06a74f856d8d142764739972d85430654b23fff2c5c301a2a718f5"
+  },
+  {
+   "tokenJson": "{\"signed_message\":{\"app\":\"ecency.app\",\"type\":\"code\"},\"authors\":[\"bob.tester\"],\"timestamp\":1751900000.123,\"signatures\":[\"cd\"]}",
+   "rawMessage": "{\"signed_message\":{\"app\":\"ecency.app\",\"type\":\"code\"},\"authors\":[\"bob.tester\"],\"timestamp\":1751900000.123}",
+   "digestHex": "2f21a9d85298d934988f4ce2767c895d74dc087e88b1ed7b7191ef9eed7a3a36"
+  },
+  {
+   "tokenJson": "{\"timestamp\":1700000000.5,\"signatures\":[\"ef\"],\"signed_message\":{\"type\":\"login\",\"app\":\"éçency 漢字\"},\"authors\":[\"carol-x1\"]}",
+   "rawMessage": "{\"signed_message\":{\"type\":\"login\",\"app\":\"éçency 漢字\"},\"authors\":[\"carol-x1\"],\"timestamp\":1700000000.5}",
+   "digestHex": "9db55ab9b1ce6ba382895edd40e8550a3fa7ce4e2c9a5c5c76082db7a4664a73"
+  },
+  {
+   "tokenJson": "{\"signed_message\":{\"type\":\"code\",\"app\":\"x\",\"extra\":{\"z\":1,\"a\":[1.5,2e3,0.001]}},\"authors\":[\"dave\",\"eve\"],\"timestamp\":1e10,\"signatures\":[\"01\"]}",
+   "rawMessage": "{\"signed_message\":{\"type\":\"code\",\"app\":\"x\",\"extra\":{\"z\":1,\"a\":[1.5,2000,0.001]}},\"authors\":[\"dave\",\"eve\"],\"timestamp\":10000000000}",
+   "digestHex": "2dce017b549431ac1706c97580275fa41e490df5d1053425e8e24a81ee267d17"
+  }
  ]
 }

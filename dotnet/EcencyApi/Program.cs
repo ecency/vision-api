@@ -2,6 +2,23 @@ using EcencyApi;
 using EcencyApi.Handlers;
 using Microsoft.Extensions.FileProviders;
 
+// Docker HEALTHCHECK entrypoint: poll our own /healthcheck.json, exit 0/1.
+// Mirrors the Node healthCheck.js behavior without needing curl in the image.
+if (args.Contains("--healthcheck"))
+{
+    try
+    {
+        var hcPort = int.TryParse(Environment.GetEnvironmentVariable("API_PORT"), out var hp) ? hp : 4000;
+        using var hc = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        var resp = await hc.GetAsync($"http://localhost:{hcPort}/healthcheck.json");
+        return (int)resp.StatusCode == 200 ? 0 : 1;
+    }
+    catch
+    {
+        return 1;
+    }
+}
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.WebHost.ConfigureKestrel(options =>
@@ -63,3 +80,5 @@ Console.WriteLine(
     $"> account-create captcha: {(Config.CaptchaMode == "off" ? "OFF (break-glass)" : "hard")}");
 
 app.Run($"http://0.0.0.0:{port}");
+
+return 0;

@@ -107,6 +107,30 @@ public class HiveCryptoTests
         }
     }
 
+    [Fact]
+    public void ValidateCodeReserialization_MatchesNode()
+    {
+        foreach (var v in Vectors["validateCodeRaw"]!.AsArray())
+        {
+            var token = (JsonObject)JsonNode.Parse(v!["tokenJson"]!.GetValue<string>())!;
+
+            // The exact re-serialization validateCode performs:
+            // JSON.stringify({signed_message, authors, timestamp}) with the
+            // parsed nodes (nested key order preserved from the token).
+            var raw = new JsonObject
+            {
+                ["signed_message"] = token["signed_message"]!.DeepClone(),
+                ["authors"] = token["authors"]!.DeepClone(),
+                ["timestamp"] = token["timestamp"]!.DeepClone(),
+            };
+
+            var rawMessage = JsJson.Stringify(raw);
+            Assert.Equal(v["rawMessage"]!.GetValue<string>(), rawMessage);
+            Assert.Equal(v["digestHex"]!.GetValue<string>(),
+                Convert.ToHexStringLower(HiveCrypto.Sha256Utf8(rawMessage)));
+        }
+    }
+
     [Theory]
     [InlineData("{\"a\":1,\"b\":\"x\"}")]
     [InlineData("{\"b\":2,\"a\":1}")] // property order preserved, not sorted

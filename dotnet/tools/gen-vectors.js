@@ -92,4 +92,22 @@ for (const [l, app, timestamp] of [
     });
 }
 
+
+// validateCode-style re-serialization vectors: token JSON (as a client might
+// b64u-encode it) -> the exact rawMessage Node re-serializes and hashes.
+// Exercises nested key-order preservation, fractional timestamps, unicode.
+const tokenJsons = [
+    '{"signed_message":{"type":"code","app":"ecency.app"},"authors":["alice"],"timestamp":1751900000,"signatures":["ab"]}',
+    '{"signed_message":{"app":"ecency.app","type":"code"},"authors":["bob.tester"],"timestamp":1751900000.123,"signatures":["cd"]}',
+    '{"timestamp":1700000000.5,"signatures":["ef"],"signed_message":{"type":"login","app":"éçency 漢字"},"authors":["carol-x1"]}',
+    '{"signed_message":{"type":"code","app":"x","extra":{"z":1,"a":[1.5,2e3,0.001]}},"authors":["dave","eve"],"timestamp":1e10,"signatures":["01"]}',
+];
+out.validateCodeRaw = tokenJsons.map((t) => {
+    const decoded = JSON.parse(t);
+    const { signed_message, authors, timestamp } = decoded;
+    const rawMessage = JSON.stringify({ signed_message, authors, timestamp });
+    const digest = cryptoUtils.sha256(rawMessage);
+    return { tokenJson: t, rawMessage, digestHex: digest.toString("hex") };
+});
+
 process.stdout.write(JSON.stringify(out, null, 1));
