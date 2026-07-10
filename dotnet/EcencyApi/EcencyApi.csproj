@@ -17,4 +17,8 @@
     <Content Include="public/**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="EcencyApi.Tests" />
+  </ItemGroup>
+
 </Project>
