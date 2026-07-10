@@ -28,13 +28,11 @@ import { ACTIVE_PROPOSAL_META, bots } from "./constants";
 
 const client = new Client([
     "https://api.hive.blog",
+    "https://rpc.mahdiyari.info",
+    "https://api.openhive.network",
     "https://techcoderx.com",
     "https://api.deathwing.me",
-    "https://rpc.mahdiyari.info",
-    "https://hive-api.arcange.eu",
-    "https://api.openhive.network",
     "https://hiveapi.actifit.io",
-    "https://hive-api.3speak.tv",
     "https://api.syncad.com",
     "https://api.c0ff33a.uk"
 ], {

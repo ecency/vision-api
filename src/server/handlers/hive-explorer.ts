@@ -6,15 +6,12 @@ import { parseToken } from '../util';
 // list, preferring our own node first) instead of routing through an external REST
 // gateway, which is a single point of failure for the portfolio endpoints.
 const client = new Client([
-    "https://hapi.ecency.com",
     "https://api.hive.blog",
+    "https://rpc.mahdiyari.info",
+    "https://api.openhive.network",
     "https://techcoderx.com",
     "https://api.deathwing.me",
-    "https://rpc.mahdiyari.info",
-    "https://hive-api.arcange.eu",
-    "https://api.openhive.network",
     "https://hiveapi.actifit.io",
-    "https://hive-api.3speak.tv",
     "https://api.syncad.com",
     "https://api.c0ff33a.uk"
 ], {
