@@ -148,20 +148,100 @@ same CPU budget**.
 - Duplicate query-string keys are forwarded first-value-wins (Express would
   array-serialize); none of the proxied endpoints use repeated params.
 
-## Build & run
+## Getting started
+
+### Prerequisites
+
+.NET 10 SDK (only for building from source — the Docker image needs nothing
+but Docker). Install on Linux with Microsoft's install script:
 
 ```bash
-dotnet build EcencyApi/EcencyApi.csproj
-dotnet test  EcencyApi.Tests/EcencyApi.Tests.csproj
-API_PORT=4000 PRIVATE_API_ADDR=... dotnet run --project EcencyApi
-
-# container (same image contract as the Node build)
-docker build -t ecency/api-csharp -f Dockerfile .
+curl -fsSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 10.0 --install-dir ~/.dotnet
+export PATH="$HOME/.dotnet:$PATH"
+dotnet --version   # 10.0.x
 ```
 
-Environment variables are unchanged from the Node service (see `Config.cs` /
-`docker-compose.yml`): `PRIVATE_API_ADDR`, `PRIVATE_API_AUTH`,
-`HIVESIGNER_SECRET`, `SEARCH_API_ADDR`, `SEARCH_API_SECRET`,
-`STRIPE_INTERNAL_SECRET`, `TURNSTILE_SECRET`, `CAPTCHA_MODE`,
-`BLOCKSTREAM_CLIENT_ID/SECRET`, `HELIUS_API_KEY`,
-`ETH_RPC_URLS`, `BNB_RPC_URLS`, `SOL_RPC_URLS`, `BTC_ESPLORA_URLS`.
+Or grab an installer from https://dotnet.microsoft.com/download/dotnet/10.0.
+
+### Build and test
+
+Run from this `dotnet/` directory:
+
+```bash
+dotnet build EcencyApi/EcencyApi.csproj          # compile
+dotnet test  EcencyApi.Tests/EcencyApi.Tests.csproj   # 40 tests: crypto vectors, failover, JS semantics
+```
+
+### Run locally
+
+Configuration comes entirely from environment variables — the same set, with
+the same defaults, as the Node service (`Config.cs` mirrors `src/config.ts`):
+
+| variable | purpose | default |
+|---|---|---|
+| `API_PORT` | listen port | `4000` |
+| `PRIVATE_API_ADDR` | internal private API base URL | placeholder |
+| `PRIVATE_API_AUTH` | base64-encoded JSON object of auth headers for the private API | placeholder |
+| `HIVESIGNER_SECRET` | HiveSigner OAuth client secret | placeholder |
+| `SEARCH_API_ADDR` / `SEARCH_API_SECRET` | search backend + token | placeholder |
+| `STRIPE_INTERNAL_SECRET` | shared secret for the Stripe money endpoints; unset = those routes fail closed with 503 | unset |
+| `TURNSTILE_SECRET` | Cloudflare Turnstile secret for account-create captcha | unset |
+| `CAPTCHA_MODE` | `hard` (default) or `off` (operator break-glass) | `hard` |
+| `BLOCKSTREAM_CLIENT_ID` / `BLOCKSTREAM_CLIENT_SECRET` | optional Blockstream enterprise esplora auth | unset |
+| `HELIUS_API_KEY` | optional extra Solana RPC provider | unset |
+| `ETH_RPC_URLS` / `BNB_RPC_URLS` / `SOL_RPC_URLS` / `BTC_ESPLORA_URLS` | comma-separated overrides for the chain provider pools | built-in pools |
+| `PUBLIC_DIR` | static assets directory | `<app>/public` |
+
+```bash
+API_PORT=4000 \
+PRIVATE_API_ADDR=https://example.com/api \
+PRIVATE_API_AUTH=$(printf '{"Authorization":"..."}' | base64 -w0) \
+HIVESIGNER_SECRET=... \
+SEARCH_API_ADDR=https://search.example.com \
+SEARCH_API_SECRET=... \
+dotnet run --project EcencyApi -c Release
+```
+
+Verify it's up:
+
+```bash
+curl http://localhost:4000/healthcheck.json
+# {"status":200,"body":{"status":"ok"}}
+```
+
+### Run in Docker (drop-in for the Node image)
+
+The image keeps the Node build's contract: port 4000, the same env vars, and a
+built-in `HEALTHCHECK` that polls `/healthcheck.json`.
+
+```bash
+docker build -t ecency/api-csharp -f Dockerfile .
+
+docker run -d --name vapi-csharp -p 4000:4000 \
+  -e PRIVATE_API_ADDR=... -e PRIVATE_API_AUTH=... \
+  -e HIVESIGNER_SECRET=... \
+  -e SEARCH_API_ADDR=... -e SEARCH_API_SECRET=... \
+  ecency/api-csharp
+```
+
+For swarm, `docker-compose.yml` in this directory is a drop-in equivalent of
+the repo-root stack file (same service shape, ports, env list, and deploy
+policy) pointing at the C# image.
+
+### Publish a self-contained build (no Docker)
+
+```bash
+dotnet publish EcencyApi/EcencyApi.csproj -c Release -o /opt/vapi-csharp
+API_PORT=4000 ... dotnet /opt/vapi-csharp/EcencyApi.dll
+```
+
+### Regenerate crypto golden vectors
+
+Only needed if the dhive dependency of the Node service changes:
+
+```bash
+# point at a checkout that has the Node service's node_modules installed
+VAPI_NODE_MODULES=/path/to/vision-api/node_modules \
+  node tools/gen-vectors.js > EcencyApi.Tests/fixtures/crypto-vectors.json
+dotnet test EcencyApi.Tests/EcencyApi.Tests.csproj
+```
