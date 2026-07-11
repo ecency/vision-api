@@ -88,7 +88,7 @@ Two layers of verification:
   `parseFloat("")` is `NaN`, etc.) that the wallet numeric parity depends on.
 - `HiveRpcFailoverTests` exercise the failover against local stub nodes.
 
-**2. Differential HTTP parity** (`parity/`): fires an identical catalog of 305
+**2. Differential HTTP parity** (`parity/`): fires an identical catalog of 301
 request variants (every route × empty/populated/bad-auth bodies, plus error and
 fallback probes) at the running Node image and the C# build, then diffs status,
 content-type, and body.
@@ -115,7 +115,8 @@ python3 parity/driver.py run csharp http://127.0.0.1:14001
 python3 parity/driver.py diff node csharp node2
 ```
 
-Latest result: **0 real mismatches / 305 cases.** 6 cases compare "loose"
+Latest result: **0 unexplained mismatches / 301 cases** (the intentional
+divergences listed above are recorded in the harness). A handful of cases compare "loose"
 (status + content-type only) because they are inherently nondeterministic —
 timestamped HiveSigner tokens, random promoted-entry shuffles, and live
 portfolio data. The full `portfolio-v2` aggregation was additionally compared
@@ -288,7 +289,8 @@ Only needed if the dhive dependency of the Node service changes:
 
 ```bash
 # the repo no longer carries Node dependencies; install the two packages anywhere
-mkdir -p /tmp/vectors && cd /tmp/vectors && npm install @hiveio/dhive js-base64
+(mkdir -p /tmp/vectors && cd /tmp/vectors && npm install @hiveio/dhive js-base64)
+# then run from this dotnet/ directory:
 VAPI_NODE_MODULES=/tmp/vectors/node_modules \
   node tools/gen-vectors.js > EcencyApi.Tests/fixtures/crypto-vectors.json
 dotnet test EcencyApi.Tests/EcencyApi.Tests.csproj

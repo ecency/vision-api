@@ -2,3 +2,7 @@
 .idea
 logs
 *.log
+.env*
+node_modules/
+coverage/
+build/

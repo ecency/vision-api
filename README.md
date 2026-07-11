@@ -6,7 +6,7 @@ health-aware failover across Hive RPC nodes.
 
 Implemented in **C# / ASP.NET Core (.NET 10)** under [`dotnet/`](dotnet/). It
 replaced the original Node/Express implementation as a verified drop-in
-(byte-identical responses across a 300-case differential parity suite; the
+(byte-identical responses across a 301-case differential parity suite; the
 history of that migration is in the git log and `dotnet/README.md`). The last
 Node build remains available as the `ecency/api:node-legacy` image tag.
 
@@ -33,7 +33,7 @@ cd dotnet
 docker build -t ecency/api -f Dockerfile .
 docker run -it --rm -p 4000:4000 \
   -e PRIVATE_API_ADDR=https://api.example.com \
-  -e PRIVATE_API_AUTH=verysecret \
+  -e PRIVATE_API_AUTH=$(printf '{"Authorization":"<token>"}' | base64 -w0) \
   ecency/api
 ```
 
@@ -61,8 +61,11 @@ Deploy with the example stack file (which also bounds container log size):
 
 ```bash
 cd dotnet
-docker stack deploy -c docker-compose.yml vision-api
+docker stack deploy -c docker-compose.yml vision
 ```
+
+This creates the `vision_vapi` service that the deployment and rollback
+commands below refer to.
 
 ## Deployment & rollback
 
@@ -93,4 +96,4 @@ results, and how to regenerate the crypto golden vectors.
 To report a non-critical issue, please file an issue on this GitHub project.
 
 [//]: # 'LINKS'
-[ecency_vision]: https://github.com/ecency/vision
+[ecency_vision]: https://github.com/ecency/vision-next
