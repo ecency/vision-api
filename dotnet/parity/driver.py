@@ -210,6 +210,13 @@ KNOWN_DIVERGENCES = {
     "/auth-api/hs-token-refresh::min":
         "Node hangs the socket (unhandled promise rejection: code.replace on undefined) "
         "when `code` is missing; the C# port returns 401 Unauthorized instead.",
+    "/private-api/request-delete::min":
+        "Old route table sent request-delete to the report handler (400 for the mobile "
+        "payload); it now returns the account-deletion acknowledgment stub (200).",
+    "/private-api/request-delete::pop":
+        "Same request-delete rerouting as ::min.",
+    "/private-api/request-delete::badcode":
+        "Same request-delete rerouting as ::min.",
 }
 
 

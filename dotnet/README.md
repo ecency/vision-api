@@ -43,27 +43,36 @@ dotnet/
   Dockerfile                 drop-in image build
 ```
 
-## Node failover (dhive parity + rate-limit handling)
+## Node failover (health-aware, adopted from @ecency/sdk)
 
-`HiveRpcClient` reproduces the dhive `Client` behavior the Node service relies
-on (`timeout: 2000`, `failoverThreshold: 2`) and adds explicit rate-limit
-handling:
+`HiveRpcClient` keeps the dhive `Client` parameters the Node service used
+(`timeout: 2000`, `failoverThreshold: 2`) but replaces dhive's simple ring
+failover with a health tracker adopted from the vision-next SDK's
+`NodeHealthTracker` (simplified for a proxy's call rates):
 
-- Requests walk the node ring from a **sticky index** (the last node that
-  answered), so a healthy node keeps serving subsequent calls.
-- **Transient failures** (timeout, network error, 5xx, non-JSON body) get up to
-  `failoverThreshold` attempts on a node before advancing.
-- **Rate-limit / overload** responses (429, 502, 503, 504) advance to the next
-  node **immediately** — a throttled node won't recover in the few ms a local
-  retry would take.
-- **RPC-level errors** (a JSON `error` field) surface without failover — that's
-  a real application error, not an unhealthy node (matches dhive).
+- **Per-node health state**: consecutive failures, rate-limit parking, and a
+  latency EWMA order the pool best-first on every call.
+- **429 parks the node** for the server's `Retry-After` when present, else an
+  escalating window (10s doubling to 60s max; the streak resets after 120s
+  without a throttle). Parked nodes sort last but remain a final resort.
+- **Recent failures deprioritize** (30s window) — one bad response moves
+  traffic away without banning the node; it re-enters when the window lapses.
+- **Latency EWMA ranking** (alpha 0.3, trusted after 3 samples, stale after
+  5 min): a proven-slow node (>1s) is demoted behind unexplored nodes; config
+  order breaks ties so cold start behaves like the configured list.
+- **Overload responses** (429/502/503/504) advance to the next node
+  immediately — no wasted local retry on a throttled node.
+- **RPC-level errors** (a JSON `error` field) surface without failover — an
+  application error, not an unhealthy node (matches dhive).
+
+Not adopted from the SDK (overkill at proxy call rates, documented for later:
+request hedging, per-API failure profiles, head-block staleness checks).
 
 The chain-balance providers (`ChainProviders.cs` / `PrivateApi.Chain.cs`) have
 their own equivalent provider-pool failover for the EVM/Solana/BTC endpoints.
 
-Covered by `EcencyApi.Tests/HiveRpcFailoverTests.cs` (rate-limit rollover,
-sticky node, timeout rollover, all-down error).
+Covered by `EcencyApi.Tests/HiveRpcFailoverTests.cs` (rate-limit parking,
+failure deprioritization, timeout rollover, EWMA demotion, all-down error).
 
 ## Verifying identical responses
 
@@ -137,8 +146,19 @@ same CPU budget**.
 - **`/auth-api/hs-token-refresh` with a missing `code`.** The Node handler calls
   `code.replace(...)` on `undefined`, throwing inside an async Express handler —
   an unhandled rejection that leaves the request hanging with no response. The
-  C# port returns `401 Unauthorized` instead. This is the single deliberate
-  behavior change (a latent Node bug); it's recorded in the parity harness.
+  C# port returns `401 Unauthorized` instead.
+- **`/private-api/request-delete`** now returns the account-deletion
+  acknowledgment stub (200 `{status, body}`). Hive accounts cannot be deleted
+  on-chain; the endpoint exists to satisfy the app-store account-deletion
+  requirement, but the old route table pointed it at the report handler, whose
+  validation rejected the mobile payload with 400.
+- **`/private-api/post-reblogs` and `/private-api/post-reblog-count` were
+  removed.** They had no client callers and no traffic, and read `:author` /
+  `:permlink` route params their POST routes never declared, so they always
+  queried `undefined/undefined` upstream.
+
+All three are recorded in the parity harness (`KNOWN_DIVERGENCES` /
+route-table-driven catalog).
 
 ## Remaining edges (low-risk, documented)
 

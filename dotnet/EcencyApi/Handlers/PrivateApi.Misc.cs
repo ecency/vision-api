@@ -239,22 +239,20 @@ public static partial class PrivateApi
         await Upstream.Pipe(ApiClient.ApiRequest("report", HttpMethod.Post, null, data), ctx);
     }
 
-    public static async Task Reblogs(HttpContext ctx)
+    /// <summary>
+    /// Account-deletion acknowledgment stub. Hive accounts cannot be deleted
+    /// on-chain; this endpoint satisfies the app-store account-deletion
+    /// requirement by acknowledging the request. (The Node route table pointed
+    /// this at the report handler, whose validation rejected the mobile payload
+    /// with 400 — this wires the stub the code intended.)
+    /// </summary>
+    public static async Task RequestDelete(HttpContext ctx)
     {
-        // Route is wired as POST /private-api/post-reblogs with no :author/:permlink
-        // params, so req.params is empty in Node and the upstream path is literally
-        // "post-reblogs/undefined/undefined" — replicated as-is.
-        var author = MiscRouteParam(ctx, "author");
-        var permlink = MiscRouteParam(ctx, "permlink");
-        await Upstream.Pipe(ApiClient.ApiRequest($"post-reblogs/{author}/{permlink}", HttpMethod.Get), ctx);
-    }
-
-    public static async Task ReblogCount(HttpContext ctx)
-    {
-        // Same empty-req.params situation as Reblogs (POST route without params).
-        var author = MiscRouteParam(ctx, "author");
-        var permlink = MiscRouteParam(ctx, "permlink");
-        await Upstream.Pipe(ApiClient.ApiRequest($"post-reblog-count/{author}/{permlink}", HttpMethod.Get), ctx);
+        await ctx.SendJson(200, new JsonObject
+        {
+            ["status"] = 200,
+            ["body"] = new JsonObject { ["status"] = "ok" },
+        });
     }
 
     public static async Task Tips(HttpContext ctx)

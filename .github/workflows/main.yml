@@ -11,6 +11,11 @@ concurrency:
   group: vapi-cicd-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege: no job writes to the repo (images push with Docker Hub
+# credentials, deploys use SSH secrets).
+permissions:
+  contents: read
+
 jobs:
   # Gate every PR and every deploy on the .NET test suite (crypto golden vectors,
   # RPC failover, JS-semantics parity helpers).
@@ -18,6 +23,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          # PR-triggered job; don't leave the token in .git/config
+          persist-credentials: false
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x

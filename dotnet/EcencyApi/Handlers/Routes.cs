@@ -84,9 +84,13 @@ public static class Routes
         app.MapPost("/private-api/subscribe", PrivateApi.SubscribeNewsletter);
         app.MapPost("/private-api/notifications", PrivateApi.Notifications);
         app.MapPost("/private-api/report", PrivateApi.Report);
-        app.MapPost("/private-api/request-delete", PrivateApi.Report);
-        app.MapPost("/private-api/post-reblogs", PrivateApi.Reblogs);
-        app.MapPost("/private-api/post-reblog-count", PrivateApi.ReblogCount);
+        // request-delete is the app-store account-deletion acknowledgment stub
+        // (accounts cannot be deleted on-chain). The Node table misrouted it to
+        // the report handler, which 400'd the mobile payload.
+        app.MapPost("/private-api/request-delete", PrivateApi.RequestDelete);
+        // post-reblogs / post-reblog-count were removed: dead endpoints (no
+        // client callers, no traffic) that also read route params their POST
+        // routes never had, so they always queried "undefined/undefined".
         app.MapPost("/private-api/post-tips", PrivateApi.Tips);
         app.MapPost("/private-api/chats-get", PrivateApi.ChatsGet);
         app.MapPost("/private-api/channels-get", PrivateApi.ChannelsGet);

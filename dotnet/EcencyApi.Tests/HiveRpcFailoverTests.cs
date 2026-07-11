@@ -54,6 +54,15 @@ public class HiveRpcFailoverTests
                     body = Encoding.UTF8.GetBytes("{}");
                     status = 200;
                 }
+                else if (status == -2)
+                {
+                    // Slow but successful: answers correctly after 1.5s (above the
+                    // 1s unproven prior, below any test timeout).
+                    await Task.Delay(1500);
+                    body = Encoding.UTF8.GetBytes(
+                        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[{\"name\":\"served-by\",\"port\":\"" + Url + "\"}]}");
+                    status = 200;
+                }
                 else
                 {
                     body = Encoding.UTF8.GetBytes("rate limited");
@@ -135,6 +144,31 @@ public class HiveRpcFailoverTests
 
         Assert.NotNull(result);
         Assert.Equal("served-by", result![0]!["name"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task ProvenSlowNode_IsDemotedByLatencyEwma()
+    {
+        // Adopted from @ecency/sdk's NodeHealthTracker: once a node's latency
+        // EWMA is trusted (3 samples) and exceeds the unproven prior (1s), an
+        // unexplored node is tried first.
+        await using var slow = new StubNode(() => -2);   // responds 200 after 1.5s
+        await using var fast = new StubNode(() => 200);
+
+        var client = new HiveRpcClient(new[] { slow.Url, fast.Url }, timeoutMs: 5000);
+
+        // three successful-but-slow calls build a trusted ~1500ms EWMA
+        for (var i = 0; i < 3; i++)
+        {
+            await client.Call("condenser_api", "get_accounts", new JsonArray());
+        }
+        Assert.Equal(3, slow.Hits);
+        Assert.Equal(0, fast.Hits);
+
+        // fourth call: slow node scores ~1500 > 1000 prior -> fast node explored first
+        await client.Call("condenser_api", "get_accounts", new JsonArray());
+        Assert.Equal(3, slow.Hits);
+        Assert.True(fast.Hits >= 1);
     }
 
     [Fact]
