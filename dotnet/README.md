@@ -105,6 +105,33 @@ portfolio data. The full `portfolio-v2` aggregation was additionally compared
 field-by-field against the Node output for a real account and matches to full
 double precision (HP/vesting math, delegation adjustments, APR, prices).
 
+## Measured performance vs the Node build
+
+Both services benchmarked side by side on the same host against the same local
+upstream stub (identical ~1.6KB JSON responses), autocannon, 10s runs after
+warmup, zero errors in every run. "Constrained" applies the production stack
+limits (0.9 CPU / 2GB) to both via cgroups.
+
+| scenario | node req/s | C# req/s | node p50/p99 | C# p50/p99 | C# vs node |
+|---|---|---|---|---|---|
+| health (no upstream), c=64 | 3,556 | 28,520 | 16 / 31 ms | 2 / 4 ms | **8.0x** |
+| proxied POST, c=64 | 995 | 16,589 | 63 / 96 ms | 3 / 11 ms | **16.7x** |
+| proxied POST, c=8 | 1,052 | 13,601 | 7 / 14 ms | <1 / 1 ms | **12.9x** |
+| hs-token-create (secp256k1), c=16 | 2,324 | 14,563 | 6 / 16 ms | <1 / 3 ms | **6.3x** |
+| **constrained 0.9 CPU:** health c=64 | 2,318 | 9,596 | 20 / 81 ms | 3 / 80 ms | **4.1x** |
+| **constrained 0.9 CPU:** proxied POST c=64 | 606 | 1,838 | 93 / 237 ms | 23 / 107 ms | **3.0x** |
+
+Memory (RSS): Node ~45 MiB idle / ~49 MiB under load; C# ~76 MiB idle /
+~100-155 MiB under load (Server GC trades memory for throughput; it sizes to
+the cgroup limit in a container). Both fit trivially in the 2GB stack limit.
+
+Notes on why the gap is big: Kestrel uses all cores (Node is one event loop),
+`SocketsHttpHandler` pools upstream connections (the Node service opens a new
+TCP connection per proxied request — Node 16 default agent has keep-alive off),
+and there's no Express middleware overhead. The constrained rows are the
+prod-realistic numbers: **~3x throughput and ~2-4x lower p50 latency at the
+same CPU budget**.
+
 ## Known intentional divergences
 
 - **`/auth-api/hs-token-refresh` with a missing `code`.** The Node handler calls
