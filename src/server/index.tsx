@@ -80,9 +80,10 @@ server
     .post("^/private-api/subscribe$", privateApi.subscribeNewsletter)
     .post("^/private-api/notifications$", privateApi.notifications)
     .post("^/private-api/report$", privateApi.report)
-    .post("^/private-api/request-delete$", privateApi.report)
-    .post("^/private-api/post-reblogs$", privateApi.reblogs)
-    .post("^/private-api/post-reblog-count$", privateApi.reblogCount)
+    // request-delete is the app-store account-deletion acknowledgment stub
+    // (accounts cannot be deleted on-chain); it was misrouted to `report`,
+    // whose validation 400'd the mobile payload.
+    .post("^/private-api/request-delete$", privateApi.requestDelete)
     .post("^/private-api/post-tips$", privateApi.tips)
 
     .post("^/private-api/chats-get$", privateApi.chatsGet)

@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - main
+  pull_request:
 
 # Serialize runs on a ref and cancel superseded ones, so an older run can't roll prod
 # back to its (older) image after a newer run has already deployed.
@@ -10,25 +11,33 @@ concurrency:
   group: vapi-cicd-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege: no job writes to the repo (images push with Docker Hub
+# credentials, deploys use SSH secrets).
+permissions:
+  contents: read
+
 jobs:
-  deps:
+  # Gate every PR and every deploy on the .NET test suite (crypto golden vectors,
+  # RPC failover, JS-semantics parity helpers).
+  test:
     runs-on: ubuntu-24.04
-    strategy:
-      matrix:
-        node-version: [20.12.2]
     steps:
-    - uses: actions/checkout@v2
-    - name: Use Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v1
-      with:
-        node-version: ${{ matrix.node-version }}
-    - name: npm install, lint and/or test
-      run: |
-        yarn
-      env:
-        CI: true
+      - uses: actions/checkout@v4
+        with:
+          # PR-triggered job; don't leave the token in .git/config
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Build
+        run: dotnet build dotnet/EcencyApi/EcencyApi.csproj -c Release
+      - name: Test
+        run: dotnet test dotnet/EcencyApi.Tests/EcencyApi.Tests.csproj -c Release
+
   build:
-    needs: deps
+    # Build/push only on merges to main; PRs stop at the test gate.
+    if: github.event_name == 'push'
+    needs: test
     runs-on: ubuntu-24.04
     outputs:
       digest: ${{ steps.docker_build.outputs.digest }}
@@ -37,24 +46,44 @@ jobs:
     steps:
       -
         name: Check Out Repo
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       -
         name: Login to Docker Hub
-        uses: docker/login-action@v1
-        if: ${{env.DOCKERHUB_USERNAME != 0}}
+        uses: docker/login-action@v3
+        if: ${{ env.DOCKERHUB_USERNAME != 0 }}
         with:
-          username: ${{secrets.DOCKERHUB_USERNAME}}
-          password: ${{secrets.DOCKERHUB_TOKEN}}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       -
+        # One-time, idempotent: before the first C# image overwrites :latest,
+        # preserve the last Node build under a durable tag. Rollback to the
+        # pre-rewrite service is then always `ecency/api:node-legacy`.
+        name: Preserve last Node image as rollback tag
+        if: ${{ env.DOCKERHUB_USERNAME != 0 }}
+        run: |
+          if docker manifest inspect ecency/api:node-legacy >/dev/null 2>&1; then
+            echo "node-legacy tag already exists; skipping"
+          else
+            docker buildx imagetools create --tag ecency/api:node-legacy ecency/api:latest
+            echo "tagged current :latest as ecency/api:node-legacy"
+          fi
+      -
+        # The deployed implementation is the C# service under dotnet/. Every build
+        # is also tagged with the commit SHA, so any previous version can be
+        # redeployed by tag (the deploy boxes prune local images, so rollback
+        # comes from the registry):
+        #   docker service update --image ecency/api:sha-<commit> vision_vapi
         name: Build and push
         id: docker_build
-        uses: docker/build-push-action@v2
-        if: ${{env.DOCKERHUB_USERNAME != 0}}
+        uses: docker/build-push-action@v5
+        if: ${{ env.DOCKERHUB_USERNAME != 0 }}
         with:
-          context: ./
-          file: ./Dockerfile
+          context: ./dotnet
+          file: ./dotnet/Dockerfile
           push: true
-          tags: ecency/api:latest
+          tags: |
+            ecency/api:latest
+            ecency/api:sha-${{ github.sha }}
       -
         name: Image digest
         run: echo ${{ steps.docker_build.outputs.digest }}
@@ -112,4 +141,3 @@ jobs:
             fi
             echo "vision_vapi on $IMAGE (UpdateStatus=${state:-none})"
             docker system prune -f
-
