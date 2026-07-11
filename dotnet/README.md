@@ -93,12 +93,20 @@ request variants (every route × empty/populated/bad-auth bodies, plus error and
 fallback probes) at the running Node image and the C# build, then diffs status,
 content-type, and body.
 
+The request catalog is generated from the route table in
+`EcencyApi/Handlers/Routes.cs` (override with `VAPI_ROUTES_CS`, or point
+`VAPI_INDEX_TSX` at a legacy Express `index.tsx`). The Node reference is the
+`ecency/api:node-legacy` image — run it with a **restart policy**
+(`--restart unless-stopped`): the legacy build crashes outright on the
+malformed hs-token-refresh probe, and without auto-restart the remainder of
+the capture fails.
+
 ```bash
 # 1. mock upstream (records every proxied request)
 python3 parity/mock_upstream.py &
 
-# 2. run Node reference and C# build against the same mock (see parity/ for env)
-#    Node on :14000, C# on :14001
+# 2. run the node-legacy reference and the C# build against the same mock
+#    (see parity/ for env) — Node on :14000, C# on :14001
 
 # 3. capture + diff  (node2 = second Node run, marks nondeterministic cases loose)
 python3 parity/driver.py run node   http://127.0.0.1:14000
@@ -211,6 +219,7 @@ the same defaults, as the Node service (`Config.cs` mirrors `src/config.ts`):
 | `HELIUS_API_KEY` | optional extra Solana RPC provider | unset |
 | `ETH_RPC_URLS` / `BNB_RPC_URLS` / `SOL_RPC_URLS` / `BTC_ESPLORA_URLS` | comma-separated overrides for the chain provider pools | built-in pools |
 | `PUBLIC_DIR` | static assets directory | `<app>/public` |
+| `Logging__LogLevel__Default` | log level; unset defaults to `Warning` (set `Information` for per-request logs) | `Warning` |
 
 ```bash
 API_PORT=4000 \
@@ -278,8 +287,9 @@ API_PORT=4000 ... dotnet /opt/vapi-csharp/EcencyApi.dll
 Only needed if the dhive dependency of the Node service changes:
 
 ```bash
-# point at a checkout that has the Node service's node_modules installed
-VAPI_NODE_MODULES=/path/to/vision-api/node_modules \
+# the repo no longer carries Node dependencies; install the two packages anywhere
+mkdir -p /tmp/vectors && cd /tmp/vectors && npm install @hiveio/dhive js-base64
+VAPI_NODE_MODULES=/tmp/vectors/node_modules \
   node tools/gen-vectors.js > EcencyApi.Tests/fixtures/crypto-vectors.json
 dotnet test EcencyApi.Tests/EcencyApi.Tests.csproj
 ```
