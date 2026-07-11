@@ -459,14 +459,6 @@ public static partial class WalletApi
 
         if (tokenKey == currencyKey) return 1.0;
 
-        if (currencyKey != "usd")
-        {
-            var tokenData = JsVal.Prop(marketData, tokenKey) ?? JsVal.Prop(marketData, upperToken);
-            var quotesNode = JsVal.Prop(tokenData, "quotes");
-            var availableQuotes = quotesNode is JsonObject qo ? string.Join(",", qo.Select(kv => kv.Key)) : "";
-            Console.WriteLine($"Looking for {tokenKey} price in {currencyKey}. Available quotes: {availableQuotes}");
-        }
-
         var containers = CollectContainers(marketData, 3);
         var candidates = new List<JsonNode?>();
         void AddCandidate(JsonNode? v) { if (v != null) candidates.Add(v); }
