@@ -228,6 +228,24 @@ For swarm, `docker-compose.yml` in this directory is a drop-in equivalent of
 the repo-root stack file (same service shape, ports, env list, and deploy
 policy) pointing at the C# image.
 
+### Deployment tags & rollback
+
+CI (`.github/workflows/main.yml`) tests, then builds this Dockerfile on every
+merge to main and pushes it as both `ecency/api:latest` and
+`ecency/api:sha-<commit>`, deploying by immutable digest. Rollback options:
+
+```bash
+# roll back to any previous build (every merge is tagged)
+docker service update --image ecency/api:sha-<previous-commit> vision_vapi
+
+# roll all the way back to the last Node build (preserved once, before the
+# first C# image overwrote :latest)
+docker service update --image ecency/api:node-legacy vision_vapi
+```
+
+The deploy hosts prune unused local images after each rollout, so rollback
+pulls from the registry — which is why every build gets a durable tag.
+
 ### Publish a self-contained build (no Docker)
 
 ```bash
