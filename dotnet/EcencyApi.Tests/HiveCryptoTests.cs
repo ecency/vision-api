@@ -131,6 +131,19 @@ public class HiveCryptoTests
         }
     }
 
+    [Fact]
+    public void NumberFormatting_MatchesV8()
+    {
+        foreach (var v in Vectors["numberFormat"]!.AsArray())
+        {
+            var value = v!["value"]!.GetValue<double>();
+            var expected = v["text"]!.GetValue<string>();
+            // JSON.stringify path (fixture "value" is V8-serialized, so parsing it
+            // and re-serializing must reproduce "text" byte-for-byte)
+            Assert.Equal(expected, JsJson.Stringify(JsonValue.Create(value)));
+        }
+    }
+
     [Theory]
     [InlineData("{\"a\":1,\"b\":\"x\"}")]
     [InlineData("{\"b\":2,\"a\":1}")] // property order preserved, not sorted

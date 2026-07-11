@@ -177,28 +177,16 @@ public sealed class HiveRpcClient
         Call("condenser_api", "get_dynamic_global_properties", new JsonArray());
 }
 
-/// <summary>The two client instances the Node service builds (node lists differ).</summary>
+/// <summary>
+/// The shared RPC client. The Node service built two dhive Clients
+/// (private-api.ts and hive-explorer.ts, the latter with hapi.ecency.com
+/// first) — that node has since been decommissioned, so both collapse into
+/// one client with a single sticky failover state.
+/// </summary>
 public static class HiveClients
 {
-    /// <summary>private-api.ts client (no hapi.ecency.com; used by validateCode).</summary>
     public static readonly HiveRpcClient Default = new(new[]
     {
-        "https://api.hive.blog",
-        "https://techcoderx.com",
-        "https://api.deathwing.me",
-        "https://rpc.mahdiyari.info",
-        "https://hive-api.arcange.eu",
-        "https://api.openhive.network",
-        "https://hiveapi.actifit.io",
-        "https://hive-api.3speak.tv",
-        "https://api.syncad.com",
-        "https://api.c0ff33a.uk",
-    });
-
-    /// <summary>hive-explorer.ts client (prefers our own node first).</summary>
-    public static readonly HiveRpcClient Explorer = new(new[]
-    {
-        "https://hapi.ecency.com",
         "https://api.hive.blog",
         "https://techcoderx.com",
         "https://api.deathwing.me",

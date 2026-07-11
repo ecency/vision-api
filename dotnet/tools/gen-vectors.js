@@ -110,4 +110,15 @@ out.validateCodeRaw = tokenJsons.map((t) => {
     return { tokenJson: t, rawMessage, digestHex: digest.toString("hex") };
 });
 
+
+// JS number-formatting vectors: JSON round-trip through V8 (the oracle for
+// JsJson.FormatNumber's fixed/scientific thresholds).
+const numberCases = [
+    0, -0, 1, -1, 42, 1.5, -2.5, 0.1, 1e6, 123456789,
+    1e20, 1e21, 5e21, -1e21, 1e-6, 0.000001, 1e-7, -1.5e-7, 0.0000015,
+    123456789012345680000, 6.02e23, 1e-300, 1.7976931348623157e308,
+    5e-324, 1751900000.123, 2 ** 53, 2 ** 53 + 2,
+];
+out.numberFormat = numberCases.map((v) => ({ value: v, text: JSON.stringify(v) }));
+
 process.stdout.write(JSON.stringify(out, null, 1));

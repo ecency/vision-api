@@ -8,12 +8,15 @@ the proxies don't forward custom headers) — pairing is done by (path, body has
 Responses are deterministic echoes so both proxies see identical upstreams.
 """
 import json
+import os
 import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import urlparse, parse_qsl
 
-LOG_PATH = "/tmp/claude-0/-root/f686fea4-ddd5-474b-b474-899ed779389c/scratchpad/parity/upstream-log.jsonl"
+LOG_PATH = os.environ.get(
+    "VAPI_UPSTREAM_LOG", str(Path(__file__).resolve().parent / "upstream-log.jsonl"))
 LOCK = threading.Lock()
 
 

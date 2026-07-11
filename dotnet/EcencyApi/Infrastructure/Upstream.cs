@@ -93,7 +93,11 @@ public static class Upstream
         using var req = new HttpRequestMessage(method, finalUrl);
 
         var bodyJson = payload?.ToJsonString(RawJsonOptions) ?? "{}";
-        req.Content = new StringContent(bodyJson, Encoding.UTF8, "application/json");
+        req.Content = new StringContent(bodyJson, Encoding.UTF8);
+        // axios sends bare "application/json" (no charset); keep upstream
+        // requests byte-identical to the Node service.
+        req.Content.Headers.ContentType =
+            new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
 
         if (headers != null)
         {
@@ -240,6 +244,15 @@ public static class Upstream
             return;
         }
 
+        if (json == null || (json is JsonValue nv && nv.TryGetValue<JsonElement>(out var ne)
+                             && ne.ValueKind == JsonValueKind.Null))
+        {
+            // Upstream body "null" parses to JS null; Express res.send(null)
+            // sends an EMPTY body with no Content-Type (verified against the
+            // Node service). Do the same.
+            return;
+        }
+
         if (json is JsonValue value)
         {
             var el = value.GetValue<JsonElement>();
@@ -258,8 +271,8 @@ public static class Upstream
             }
         }
 
-        // Objects, arrays, booleans, null -> res.json()
+        // Objects, arrays, booleans -> res.json()
         ctx.Response.ContentType = "application/json; charset=utf-8";
-        await ctx.Response.WriteAsync(json?.ToJsonString(RawJsonOptions) ?? "null");
+        await ctx.Response.WriteAsync(json!.ToJsonString(RawJsonOptions));
     }
 }

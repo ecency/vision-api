@@ -27,6 +27,21 @@ public static class HttpContextExtensions
         var contentType = ctx.Request.ContentType ?? "";
         var isJson = contentType.Contains("json", StringComparison.OrdinalIgnoreCase);
 
+        // express.urlencoded({limit:'50mb'}) is registered alongside express.json,
+        // so form posts populate req.body with string values. Parse flat key=value
+        // pairs (qs "extended" nesting like a[b]=c is not replicated; no client
+        // sends nested forms).
+        if (!isJson && contentType.Contains("application/x-www-form-urlencoded", StringComparison.OrdinalIgnoreCase))
+        {
+            var form = await ctx.Request.ReadFormAsync();
+            var obj = new JsonObject();
+            foreach (var kv in form)
+            {
+                obj[kv.Key] = kv.Value.Count > 0 ? kv.Value[^1] : "";
+            }
+            return obj;
+        }
+
         if (!isJson || ctx.Request.ContentLength is 0)
         {
             return new JsonObject();

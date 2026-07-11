@@ -117,29 +117,88 @@ public static class JsJson
     }
 
     /// <summary>
-    /// Format a number the way V8's JSON.stringify would after JSON.parse:
-    /// numbers become doubles, printed in shortest round-trip form; integral
-    /// values print without a fractional part; exponent (rare) uses "e+"/"e-".
+    /// Format a number exactly the way V8 does (ECMA-262 Number::toString, which
+    /// JSON.stringify uses): shortest round-trip digits, fixed-point notation for
+    /// decimal exponents in (-6, 21], scientific ("d.ddde±X") outside that range.
+    /// .NET's "R" is shortest-round-trip too but switches to scientific at
+    /// different thresholds (e.g. 1e20 -> "1E+20" while JS prints
+    /// "100000000000000000000"), so the digits are re-rendered per the JS rules.
+    /// Verified against node-generated vectors in EcencyApi.Tests.
     /// </summary>
-    private static string FormatNumber(double d)
+    internal static string FormatNumber(double d)
     {
-
         if (double.IsNaN(d) || double.IsInfinity(d))
         {
             return "null"; // JSON.stringify(NaN/Infinity) -> null
         }
 
-        // .NET Core 3.0+ default double formatting is shortest round-trippable,
-        // same algorithm family as V8. Normalize exponent casing/format.
-        var text = d.ToString("R", CultureInfo.InvariantCulture);
-
-        if (text.Contains('E'))
+        if (d == 0)
         {
-            // .NET: "1E+21" -> JS: "1e+21"
-            text = text.Replace("E", "e");
+            return "0"; // covers -0: JSON.stringify(-0) === "0"
         }
 
-        return text;
+        var negative = d < 0;
+        var r = Math.Abs(d).ToString("R", CultureInfo.InvariantCulture);
+
+        // Decompose the shortest-round-trip form into significant digits and the
+        // decimal exponent n, where value = 0.digits * 10^n (ECMA notation).
+        string digits;
+        int n;
+        var eIdx = r.IndexOf('E');
+        if (eIdx >= 0)
+        {
+            var mant = r[..eIdx];
+            var exp = int.Parse(r[(eIdx + 1)..], CultureInfo.InvariantCulture);
+            var dot = mant.IndexOf('.');
+            var mdigits = dot >= 0 ? mant.Remove(dot, 1) : mant;
+            var intLen = dot >= 0 ? dot : mant.Length;
+            digits = mdigits.TrimEnd('0');
+            if (digits.Length == 0) digits = "0";
+            n = exp + intLen;
+        }
+        else
+        {
+            var dot = r.IndexOf('.');
+            if (dot < 0)
+            {
+                digits = r.TrimEnd('0');
+                if (digits.Length == 0) digits = "0";
+                n = r.Length;
+            }
+            else
+            {
+                var mdigits = r.Remove(dot, 1);
+                var firstSig = 0;
+                while (firstSig < mdigits.Length && mdigits[firstSig] == '0') firstSig++;
+                digits = mdigits[firstSig..].TrimEnd('0');
+                if (digits.Length == 0) digits = "0";
+                n = dot - firstSig;
+            }
+        }
+
+        var k = digits.Length;
+        string result;
+        if (k <= n && n <= 21)
+        {
+            result = digits + new string('0', n - k);
+        }
+        else if (n is > 0 and <= 21)
+        {
+            result = digits[..n] + "." + digits[n..];
+        }
+        else if (n is > -6 and <= 0)
+        {
+            result = "0." + new string('0', -n) + digits;
+        }
+        else
+        {
+            var e = n - 1;
+            var mantissa = k == 1 ? digits : digits[..1] + "." + digits[1..];
+            result = mantissa + "e" + (e >= 0 ? "+" : "-") +
+                     Math.Abs(e).ToString(CultureInfo.InvariantCulture);
+        }
+
+        return negative ? "-" + result : result;
     }
 
     private static void WriteString(StringBuilder sb, string s)
@@ -203,13 +262,22 @@ public static class JsJson
             case JsonValue v:
                 if (v.TryGetValue<string>(out var s)) return s.Length > 0;
                 if (v.TryGetValue<bool>(out var b)) return b;
-                var el = v.GetValue<JsonElement>();
-                if (el.ValueKind == JsonValueKind.Number)
+                // Parsed values are element-backed; programmatically built ones
+                // are CLR-backed and would throw on GetValue<JsonElement>().
+                if (v.TryGetValue<JsonElement>(out var el))
                 {
-                    var d = el.GetDouble();
-                    return d != 0 && !double.IsNaN(d);
+                    if (el.ValueKind == JsonValueKind.Number)
+                    {
+                        var d = el.GetDouble();
+                        return d != 0 && !double.IsNaN(d);
+                    }
+                    return el.ValueKind != JsonValueKind.Null;
                 }
-                return el.ValueKind != JsonValueKind.Null;
+                if (v.TryGetValue<long>(out var l)) return l != 0;
+                if (v.TryGetValue<int>(out var i)) return i != 0;
+                if (v.TryGetValue<double>(out var dbl)) return dbl != 0 && !double.IsNaN(dbl);
+                if (v.TryGetValue<decimal>(out var dec)) return dec != 0;
+                return true;
             default:
                 return false;
         }

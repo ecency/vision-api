@@ -19,6 +19,10 @@ WORKDIR /app
 COPY EcencyApi/public/ ./public/
 COPY --from=build /app ./
 
+# Run as the non-root user the aspnet base image ships; port 4000 is unprivileged.
+RUN chown -R app:app /app
+USER app
+
 ENV API_PORT=4000
 ENV ASPNETCORE_URLS=
 EXPOSE 4000

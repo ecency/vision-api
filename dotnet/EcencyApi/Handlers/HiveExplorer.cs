@@ -10,10 +10,9 @@ namespace EcencyApi.Handlers;
 /// Port of src/server/handlers/hive-explorer.ts — a helper module (no wired
 /// routes) used by the wallet handlers.
 ///
-/// Fetch chain data directly from Hive RPC nodes (HiveClients.Explorer handles
-/// failover across the list, preferring our own node first) instead of routing
-/// through an external REST gateway, which is a single point of failure for the
-/// portfolio endpoints.
+/// Fetch chain data directly from Hive RPC nodes (HiveClients.Default handles
+/// failover across the list) instead of routing through an external REST
+/// gateway, which is a single point of failure for the portfolio endpoints.
 /// </summary>
 public static class HiveExplorer
 {
@@ -23,7 +22,7 @@ public static class HiveExplorer
     {
         try
         {
-            var globalDynamic = await HiveClients.Explorer.GetDynamicGlobalProperties();
+            var globalDynamic = await HiveClients.Default.GetDynamicGlobalProperties();
 
             if (!JsJson.IsTruthy(globalDynamic))
             {
@@ -85,7 +84,7 @@ public static class HiveExplorer
     {
         try
         {
-            var data = await HiveClients.Explorer.GetAccounts(new[] { username });
+            var data = await HiveClients.Default.GetAccounts(new[] { username });
 
             if (data is { Count: > 0 })
             {

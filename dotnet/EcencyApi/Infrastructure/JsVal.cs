@@ -195,14 +195,13 @@ public static class JsVal
         }
     }
 
-    /// <summary>Number -> string the way JS does (shortest round-trip, integral without ".0").</summary>
+    /// <summary>Number -> string per ECMA-262 Number::toString (same digits and
+    /// fixed/scientific thresholds as V8; shared with JsJson.FormatNumber).</summary>
     public static string JsNumberToString(double d)
     {
         if (double.IsNaN(d)) return "NaN";
         if (double.IsPositiveInfinity(d)) return "Infinity";
         if (double.IsNegativeInfinity(d)) return "-Infinity";
-        var text = d.ToString("R", CultureInfo.InvariantCulture);
-        if (text.Contains('E')) text = text.Replace("E", "e");
-        return text;
+        return JsJson.FormatNumber(d);
     }
 }
