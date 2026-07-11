@@ -33,6 +33,15 @@ builder.Services.AddCors();
 builder.Logging.ClearProviders();
 builder.Logging.AddSimpleConsole();
 
+// Quiet by default: ASP.NET's per-request Information logging (~4 lines per
+// request) fills unbounded docker json-file logs on the origin hosts. Warnings
+// and errors only, unless the standard Logging__LogLevel__Default env var is
+// set (then configuration rules apply as usual).
+if (Environment.GetEnvironmentVariable("Logging__LogLevel__Default") is null)
+{
+    builder.Logging.SetMinimumLevel(LogLevel.Warning);
+}
+
 var app = builder.Build();
 
 // Global error handling — the Node app's error middleware sends a plain

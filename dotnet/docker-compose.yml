@@ -1,11 +1,13 @@
-# Drop-in equivalent of the repo-root docker-compose.yml, pointing at the C#
-# image. Same service name, port, env, and swarm deploy policy so it can replace
-# the Node image in the vision_vapi stack with no other changes.
+# Swarm stack file for the API service. Deploy as `docker stack deploy -c
+# docker-compose.yml vision` to create the `vision_vapi` service that CI's
+# digest deploys and the README rollback commands target. The image is the
+# CI-published ecency/api (the build section is for local `docker compose
+# build` convenience; stack deploy ignores it and pulls the image).
 version: '3.7'
 
 services:
-  app:
-    image: ecency/api-csharp:latest
+  vapi:
+    image: ecency/api:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -25,8 +27,16 @@ services:
       - BNB_RPC_URLS
       - SOL_RPC_URLS
       - BTC_ESPLORA_URLS
+      - Logging__LogLevel__Default
     ports:
       - "4000:4000"
+    # Bound container logs so they can never grow unchecked on the host
+    # (the service also defaults to Warning-level logging).
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
     networks:
       default: null
     deploy:

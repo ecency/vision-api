@@ -1,86 +1,99 @@
 # [Ecency vision][ecency_vision] – API
 
-### Build instructions
+The API proxy service behind [Ecency](https://ecency.com) — routes search,
+auth, wallet/portfolio, and private-API traffic to the right backends with
+health-aware failover across Hive RPC nodes.
 
-##### Requirements
+Implemented in **C# / ASP.NET Core (.NET 10)** under [`dotnet/`](dotnet/). It
+replaced the original Node/Express implementation as a verified drop-in
+(byte-identical responses across a 301-case differential parity suite; the
+history of that migration is in the git log and `dotnet/README.md`). The last
+Node build remains available as the `ecency/api:node-legacy` image tag.
 
-- node ^12.0.0
-- yarn
+## Quick start
 
-##### Clone 
-`$ git clone https://github.com/ecency/vision-api`
+Requirements: [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
+(or just Docker).
 
-`$ cd vision-api`
+```bash
+git clone https://github.com/ecency/vision-api
+cd vision-api/dotnet
 
-##### Install dependencies
-`$ yarn`
+dotnet build EcencyApi/EcencyApi.csproj              # compile
+dotnet test  EcencyApi.Tests/EcencyApi.Tests.csproj  # test suite
 
-##### Edit config file or define environment variables
-`$ nano src/config.ts`
+API_PORT=4000 PRIVATE_API_ADDR=... dotnet run --project EcencyApi -c Release
+curl http://localhost:4000/healthcheck.json
+```
 
-##### Environment variables
+Or with Docker:
 
-* `PRIVATE_API_ADDR` - private api endpoint
-* `PRIVATE_API_AUTH` - private api auth
-* `HIVESIGNER_SECRET` -  hivesigner client secret
-* `SEARCH_API_ADDR` - hivesearcher api endpoint
-* `SEARCH_API_SECRET` - hivesearcher api auth token
-* `BLOCKSTREAM_CLIENT_ID` - optional OAuth client identifier used to request temporary access tokens for the Blockstream Explorer Enterprise API (BTC fallback).
-* `BLOCKSTREAM_CLIENT_SECRET` - optional OAuth client secret paired with the client identifier for generating Blockstream access tokens.
-* `HELIUS_API_KEY` - optional Helius API key added as an extra Solana RPC fallback.
-* `ETH_RPC_URLS` / `BNB_RPC_URLS` / `SOL_RPC_URLS` / `BTC_ESPLORA_URLS` - optional comma-separated endpoint lists overriding the built-in public provider pools (see `src/server/chain-providers.ts`).
+```bash
+cd dotnet
+docker build -t ecency/api -f Dockerfile .
+docker run -it --rm -p 4000:4000 \
+  -e PRIVATE_API_ADDR=https://api.example.com \
+  -e PRIVATE_API_AUTH=$(printf '{"Authorization":"<token>"}' | base64 -w0) \
+  ecency/api
+```
 
-##### Start api in dev
-`$ yarn start`
+## Environment variables
 
-##### Pushing new code / Pull requests
+| variable | purpose |
+|---|---|
+| `API_PORT` | listen port (default `4000`) |
+| `PRIVATE_API_ADDR` | private api endpoint |
+| `PRIVATE_API_AUTH` | private api auth (base64-encoded JSON header object) |
+| `HIVESIGNER_SECRET` | hivesigner client secret |
+| `SEARCH_API_ADDR` | hivesearcher api endpoint |
+| `SEARCH_API_SECRET` | hivesearcher api auth token |
+| `STRIPE_INTERNAL_SECRET` | shared secret for the Stripe money endpoints (unset = they fail closed) |
+| `TURNSTILE_SECRET` | Cloudflare Turnstile secret for account-create captcha |
+| `CAPTCHA_MODE` | `hard` (default) or `off` (operator break-glass) |
+| `BLOCKSTREAM_CLIENT_ID` / `BLOCKSTREAM_CLIENT_SECRET` | optional Blockstream Enterprise esplora auth (BTC fallback) |
+| `HELIUS_API_KEY` | optional Helius API key added as an extra Solana RPC fallback |
+| `ETH_RPC_URLS` / `BNB_RPC_URLS` / `SOL_RPC_URLS` / `BTC_ESPLORA_URLS` | optional comma-separated endpoint lists overriding the built-in chain provider pools |
+| `Logging__LogLevel__Default` | log level (default `Warning`; set `Information` for per-request logs) |
 
-- Make sure to branch off your changes from `main` branch.
-- Make sure to run `yarn test` and add tests to your changes.
+## Swarm
+
+Deploy with the example stack file (which also bounds container log size):
+
+```bash
+cd dotnet
+docker stack deploy -c docker-compose.yml vision
+```
+
+This creates the `vision_vapi` service that the deployment and rollback
+commands below refer to.
+
+## Deployment & rollback
+
+CI (`.github/workflows/main.yml`) tests every PR; on merge to main it builds
+the image, pushes `ecency/api:latest` + `ecency/api:sha-<commit>`, and rolls
+out by immutable digest. Roll back by redeploying any previous tag:
+
+```bash
+docker service update --image ecency/api:sha-<previous-commit> vision_vapi
+docker service update --image ecency/api:node-legacy vision_vapi   # pre-rewrite Node build
+```
+
+## Pushing new code / Pull requests
+
+- Branch off your changes from the `main` branch.
+- Run `dotnet test dotnet/EcencyApi.Tests/EcencyApi.Tests.csproj` and add tests
+  for your changes (the test suite gates every PR in CI).
 - Code on!
 
-## Docker
+## More
 
-You can use official `ecency/api:latest` image to run Vision locally, deploy it to staging or even production environment. The simplest way is to run it with following command:
-
-```bash
-docker run -it --rm -p 3000:3000 ecency/vision:latest
-```
-
-Configure the instance using following environment variables:
-
- * `PRIVATE_API_ADDR`
- * `PRIVATE_API_AUTH`
- * `HIVESIGNER_SECRET`
- * `SEARCH_API_ADDR`
- * `SEARCH_API_SECRET`
- * `BLOCKSTREAM_CLIENT_ID`
- * `BLOCKSTREAM_CLIENT_SECRET`
- * `HELIUS_API_KEY`
- * `ETH_RPC_URLS`
- * `BNB_RPC_URLS`
- * `SOL_RPC_URLS`
- * `BTC_ESPLORA_URLS`
-
-```bash
-docker run -it --rm -p 3000:3000 -e PRIVATE_API_ADDR=https://api.example.com -e PRIVATE_API_AUTH=verysecretpassword ecency/api:latest
-```
-
-### Swarm
-
-You can easily deploy a set of vision instances to your production environment, using example `docker-compose.yml` file. Docker Swarm will automatically keep it alive and load balance incoming traffic between the containers:
-
-```bash
-docker stack deploy -c docker-compose.yml vision-api
-```
+`dotnet/README.md` has the full details: architecture and layout, the Hive RPC
+failover design, the differential parity harness, benchmark methodology and
+results, and how to regenerate the crypto golden vectors.
 
 ## Issues
 
 To report a non-critical issue, please file an issue on this GitHub project.
 
-If you find a security issue please report details to: security@ecency.com
-
-We will evaluate the risk and make a patch available before filing the issue.
-
 [//]: # 'LINKS'
-[ecency_vision]: https://ecency.com
+[ecency_vision]: https://github.com/ecency/vision-next

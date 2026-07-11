@@ -19,10 +19,12 @@ import urllib.error
 from pathlib import Path
 
 HERE = Path(__file__).parent
-# The Express route table drives the catalog. Defaults to the TS source two
-# levels up (repo/src/server/index.tsx); override with VAPI_INDEX_TSX.
-INDEX_TSX = Path(os.environ.get(
-    "VAPI_INDEX_TSX", HERE.parent.parent / "src" / "server" / "index.tsx"))
+# The route table drives the catalog. Defaults to the C# Routes.cs one level
+# up; override with VAPI_ROUTES_CS (or point VAPI_INDEX_TSX at a legacy
+# Express index.tsx to test an old Node build).
+ROUTES_CS = Path(os.environ.get(
+    "VAPI_ROUTES_CS", HERE.parent / "EcencyApi" / "Handlers" / "Routes.cs"))
+INDEX_TSX = os.environ.get("VAPI_INDEX_TSX")
 MOCK = os.environ.get("VAPI_MOCK_URL", "http://127.0.0.1:15999")
 
 # ---------------------------------------------------------------- catalog ---
@@ -105,15 +107,24 @@ AUTH_CODE_PROBE = {"code": "eyJub3QiOiJ2YWxpZCJ9"}  # decodes to {"not":"valid"}
 
 
 def load_routes():
-    """Parse .get/.post route lines out of index.tsx."""
-    src = INDEX_TSX.read_text()
+    """Parse the route table: C# Routes.cs (default) or a legacy index.tsx."""
     routes = []
-    for m in re.finditer(r'\.(get|post)\("(\^?[^"]+?)\$?",', src):
-        method, path = m.group(1).upper(), m.group(2).lstrip("^")
-        if path in ("*",):
-            continue
-        # substitute :params (incl. regex-constrained ones)
-        concrete = re.sub(r":(\w+)(\([^)]*\))?", lambda p: PARAM_VALUES.get(p.group(1), "x"), path)
+    if INDEX_TSX:
+        src = Path(INDEX_TSX).read_text()
+        for m in re.finditer(r'\.(get|post)\("(\^?[^"]+?)\$?",', src):
+            method, path = m.group(1).upper(), m.group(2).lstrip("^")
+            if path in ("*",):
+                continue
+            concrete = re.sub(r":(\w+)(\([^)]*\))?",
+                              lambda p: PARAM_VALUES.get(p.group(1), "x"), path)
+            routes.append({"method": method, "path": concrete, "template": path})
+        return routes
+    src = ROUTES_CS.read_text()
+    for m in re.finditer(r'app\.Map(Get|Post)\("([^"]+)"', src):
+        method, path = m.group(1).upper(), m.group(2)
+        # {param} / {param:regex(...)} -> concrete sample values
+        concrete = re.sub(r"\{(\w+)[^}]*\}",
+                          lambda p: PARAM_VALUES.get(p.group(1), "x"), path)
         routes.append({"method": method, "path": concrete, "template": path})
     return routes
 
