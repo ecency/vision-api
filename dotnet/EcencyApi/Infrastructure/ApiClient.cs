@@ -43,7 +43,7 @@ public static class ApiClient
             {
                 headers[kv.Key] = kv.Value switch
                 {
-                    JsonValue v when v.TryGetValue<string>(out var s) => s,
+                    JsonValue v when JsVal.TryGetStringLenient(v, out var s) => s,
                     null => "null",
                     _ => kv.Value.ToJsonString(),
                 };

@@ -50,6 +50,27 @@ public class JsValTests
     }
 
     [Fact]
+    public void LoneSurrogates_ExtractAndSerializeLikeJs()
+    {
+        // JSON.parse accepts lone surrogate escapes (a JS string is arbitrary
+        // UTF-16); System.Text.Json throws InvalidOperationException when
+        // materializing such strings, which turned payloads the Node service
+        // handled fine into 500s. The lenient path must extract them, and
+        // Stringify must re-emit the escape like well-formed JSON.stringify.
+        var node = JsonNode.Parse("{\"app\":\"x\\ud83dy\"}")!;
+
+        var s = JsVal.AsString(node["app"]);
+        Assert.NotNull(s);
+        Assert.Equal(3, s!.Length);
+        Assert.Equal('\ud83d', s[1]);
+
+        Assert.Equal("{\"app\":\"x\\ud83dy\"}", JsJson.Stringify(node));
+
+        // ToJsString (template-literal coercion) must survive it too
+        Assert.Equal("x\ud83dy", JsVal.ToJsString(node["app"]));
+    }
+
+    [Fact]
     public void ToJsString_CoercesLikeJs()
     {
         Assert.Equal("null", JsVal.ToJsString(null));

@@ -27,7 +27,7 @@ public static partial class PrivateApi
         }
         if (node is JsonValue v)
         {
-            if (v.TryGetValue<string>(out var s))
+            if (JsVal.TryGetStringLenient(v, out var s))
             {
                 return s;
             }

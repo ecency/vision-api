@@ -297,7 +297,7 @@ public static partial class PrivateApi
                     JsonObject => "[object Object]",
                     _ => FeedsJsToString(e),
                 }));
-            case JsonValue v when v.TryGetValue<string>(out var s):
+            case JsonValue v when JsVal.TryGetStringLenient(v, out var s):
                 return s;
             case JsonValue v when v.TryGetValue<bool>(out var b):
                 return b ? "true" : "false";

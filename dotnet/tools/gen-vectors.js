@@ -97,6 +97,9 @@ for (const [l, app, timestamp] of [
 // b64u-encode it) -> the exact rawMessage Node re-serializes and hashes.
 // Exercises nested key-order preservation, fractional timestamps, unicode.
 const tokenJsons = [
+    // lone surrogate escape: JSON.parse accepts it; the port must too (and
+    // re-serialize it as the same escape, per well-formed JSON.stringify)
+    '{"signed_message":{"type":"code","app":"x\\ud83dy"},"authors":["mallory"],"timestamp":1752300000,"signatures":["ab"]}',
     '{"signed_message":{"type":"code","app":"ecency.app"},"authors":["alice"],"timestamp":1751900000,"signatures":["ab"]}',
     '{"signed_message":{"app":"ecency.app","type":"code"},"authors":["bob.tester"],"timestamp":1751900000.123,"signatures":["cd"]}',
     '{"timestamp":1700000000.5,"signatures":["ef"],"signed_message":{"type":"login","app":"éçency 漢字"},"authors":["carol-x1"]}',

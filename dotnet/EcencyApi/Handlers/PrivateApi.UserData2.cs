@@ -328,7 +328,7 @@ file static class UserData2Js
                 // Array.prototype.toString: join(","), null/undefined elements -> ""
                 return string.Join(",", arr.Select(el => el == null ? "" : JsString(el)));
             case JsonValue v:
-                if (v.TryGetValue<string>(out var s)) return s;
+                if (JsVal.TryGetStringLenient(v, out var s)) return s;
                 if (v.TryGetValue<bool>(out var b)) return b ? "true" : "false";
                 // numbers: String(n) == JSON.stringify(n) for finite doubles
                 return JsJson.Stringify(node);

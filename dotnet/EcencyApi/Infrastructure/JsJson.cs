@@ -63,7 +63,7 @@ public static class JsJson
 
     private static void WritePrimitive(StringBuilder sb, JsonValue value)
     {
-        if (value.TryGetValue<string>(out var s))
+        if (JsVal.TryGetStringLenient(value, out var s))
         {
             WriteString(sb, s);
             return;
@@ -260,7 +260,7 @@ public static class JsJson
             case JsonArray:
                 return true;
             case JsonValue v:
-                if (v.TryGetValue<string>(out var s)) return s.Length > 0;
+                if (JsVal.TryGetStringLenient(v, out var s)) return s.Length > 0;
                 if (v.TryGetValue<bool>(out var b)) return b;
                 // Parsed values are element-backed; programmatically built ones
                 // are CLR-backed and would throw on GetValue<JsonElement>().

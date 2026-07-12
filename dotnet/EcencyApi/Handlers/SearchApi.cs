@@ -54,7 +54,7 @@ public static class SearchApi
                 // Array.prototype.toString: elements joined with ",", null -> ""
                 return string.Join(",", arr.Select(e => e == null ? "" : JsToString(e)));
             case JsonValue v:
-                if (v.TryGetValue<string>(out var s)) return s;
+                if (JsVal.TryGetStringLenient(v, out var s)) return s;
                 if (v.TryGetValue<bool>(out var b)) return b ? "true" : "false";
                 return JsJson.Stringify(v);
             default:

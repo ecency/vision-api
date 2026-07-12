@@ -259,7 +259,7 @@ public static partial class PrivateApi
 
     private static string ParseHexBalance(JsonNode? value)
     {
-        if (value is not JsonValue jsonValue || !jsonValue.TryGetValue<string>(out var text))
+        if (value is not JsonValue jsonValue || !JsVal.TryGetStringLenient(jsonValue, out var text))
         {
             throw new Exception("Invalid hexadecimal balance response");
         }
@@ -595,7 +595,7 @@ public static partial class PrivateApi
         var data = resp.BodyIsJson ? resp.Json : JsonValue.Create(resp.RawText);
         var obj = data as JsonObject;
 
-        var accessToken = obj?["access_token"] is JsonValue tokenValue && tokenValue.TryGetValue<string>(out var tokenText)
+        var accessToken = obj?["access_token"] is JsonValue tokenValue && JsVal.TryGetStringLenient(tokenValue, out var tokenText)
             ? tokenText
             : null;
 
@@ -1107,7 +1107,7 @@ public static partial class PrivateApi
         null => "null",
         JsonObject => "[object Object]",
         JsonArray arr => string.Join(",", arr.Select(ChainJsString)),
-        JsonValue v when v.TryGetValue<string>(out var s) => s,
+        JsonValue v when JsVal.TryGetStringLenient(v, out var s) => s,
         _ => JsJson.Stringify(node),
     };
 

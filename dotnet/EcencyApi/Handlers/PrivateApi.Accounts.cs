@@ -69,7 +69,7 @@ public static partial class PrivateApi
     private static async Task<bool> VerifyTurnstile(JsonNode? token, string ip)
     {
         var secret = Config.TurnstileSecret;
-        var tokenStr = token is JsonValue tv && tv.TryGetValue<string>(out string? ts) ? ts : null;
+        var tokenStr = token is JsonValue tv && JsVal.TryGetStringLenient(tv, out string? ts) ? ts : null;
         if (string.IsNullOrEmpty(secret) || tokenStr == null || tokenStr.Trim().Length == 0)
         {
             return false;

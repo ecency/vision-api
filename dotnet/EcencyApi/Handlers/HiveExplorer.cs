@@ -128,7 +128,7 @@ public static class HiveExplorer
             return 0d;
         }
 
-        if (val is not JsonValue jv || !jv.TryGetValue<string>(out var s))
+        if (val is not JsonValue jv || !JsVal.TryGetStringLenient(jv, out var s))
         {
             return 0d;
         }
@@ -166,7 +166,7 @@ public static class HiveExplorer
     // TypeError), which the outer catch rewrites to "Failed to get globalProps".
     private static double GetVestAmount(JsonNode? value)
     {
-        if (value is JsonValue jv && jv.TryGetValue<string>(out _))
+        if (value is JsonValue jv && JsVal.TryGetStringLenient(jv, out _))
         {
             return ParseToken(value);
         }
@@ -238,7 +238,7 @@ public static class HiveExplorer
                         {
                             return double.NaN; // "true"/"false" don't parse
                         }
-                        if (ev.TryGetValue<string>(out var es))
+                        if (JsVal.TryGetStringLenient(ev, out var es))
                         {
                             return JsNumberString(es);
                         }
@@ -252,7 +252,7 @@ public static class HiveExplorer
                 {
                     return b ? 1d : 0d;
                 }
-                if (value.TryGetValue<string>(out var str))
+                if (JsVal.TryGetStringLenient(value, out var str))
                 {
                     return JsNumberString(str);
                 }
