@@ -148,7 +148,7 @@ public static partial class PrivateApi
         // Reject a malformed value at this boundary before forwarding (typeof guard first:
         // a non-string must never be coerced by the regex test and forwarded).
         var hostingTargetPresent = body.TryGetPropertyValue("hosting_target", out var hostingTargetNode);
-        var hostingTarget = hostingTargetNode is JsonValue htv && htv.TryGetValue<string>(out var hts)
+        var hostingTarget = hostingTargetNode is JsonValue htv && JsVal.TryGetStringLenient(htv, out var hts)
             ? hts
             : null;
         if (hostingTargetPresent && (hostingTarget == null || !PaymentsHiveNameRegex.IsMatch(hostingTarget)))
@@ -160,7 +160,7 @@ public static partial class PrivateApi
         // lowercase, so normalize typed input (trim + lowercase) before validating so a
         // recipient like "Alice" is accepted as "alice", and forward the canonical form.
         var giftRecipientPresent = body.TryGetPropertyValue("gift_recipient", out var giftRecipientNode);
-        var giftRecipient = giftRecipientNode is JsonValue grv && grv.TryGetValue<string>(out var grs)
+        var giftRecipient = giftRecipientNode is JsonValue grv && JsVal.TryGetStringLenient(grv, out var grs)
             ? grs.Trim().ToLowerInvariant()
             : null;
         if (giftRecipientPresent && (giftRecipient == null || !PaymentsHiveNameRegex.IsMatch(giftRecipient)))
@@ -169,7 +169,7 @@ public static partial class PrivateApi
             return;
         }
         var giftMessagePresent = body.TryGetPropertyValue("gift_message", out var giftMessageNode);
-        var giftMessage = giftMessageNode is JsonValue gmv && gmv.TryGetValue<string>(out var gms)
+        var giftMessage = giftMessageNode is JsonValue gmv && JsVal.TryGetStringLenient(gmv, out var gms)
             ? gms
             : null;
         if (giftMessagePresent && (giftMessage == null || giftMessage.Length > 200))
@@ -392,7 +392,7 @@ public static partial class PrivateApi
     private static async Task<bool> PaymentsVerifyTurnstile(JsonNode? token, string ip)
     {
         var secret = Config.TurnstileSecret;
-        var tokenStr = token is JsonValue tv && tv.TryGetValue<string>(out var ts) ? ts : null;
+        var tokenStr = token is JsonValue tv && JsVal.TryGetStringLenient(tv, out var ts) ? ts : null;
         if (string.IsNullOrEmpty(secret) || tokenStr == null || tokenStr.Trim().Length == 0)
         {
             return false;
@@ -474,7 +474,7 @@ public static partial class PrivateApi
             case JsonObject:
                 return "[object Object]";
             case JsonValue value:
-                if (value.TryGetValue<string>(out var s))
+                if (JsVal.TryGetStringLenient(value, out var s))
                 {
                     return s;
                 }

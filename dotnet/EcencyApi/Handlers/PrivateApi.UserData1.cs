@@ -405,7 +405,7 @@ file static class UserData1Helpers
                 // Array.prototype.toString: elements joined by ",", holes/null -> ""
                 return string.Join(",", arr.Select(item => item == null ? "" : Template(item)));
             default:
-                if (node is JsonValue jv && jv.TryGetValue<string>(out var s))
+                if (node is JsonValue jv && JsVal.TryGetStringLenient(jv, out var s))
                 {
                     return s;
                 }

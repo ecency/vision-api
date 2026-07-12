@@ -37,7 +37,7 @@ public static partial class PrivateApi
     {
         var hasCode = body.TryGetPropertyValue("code", out var codeNode);
         string? code = null;
-        if (codeNode is JsonValue codeValue && codeValue.TryGetValue<string>(out var codeStr))
+        if (codeNode is JsonValue codeValue && JsVal.TryGetStringLenient(codeValue, out var codeStr))
         {
             code = codeStr;
         }
@@ -98,7 +98,7 @@ public static partial class PrivateApi
 
             string? author = null;
             if (authors is { Count: > 0 } && authors[0] is JsonValue authorValue
-                && authorValue.TryGetValue<string>(out var authorStr))
+                && JsVal.TryGetStringLenient(authorValue, out var authorStr))
             {
                 author = authorStr;
             }
@@ -109,7 +109,7 @@ public static partial class PrivateApi
 
             string? signature = null;
             if (signatures is { Count: > 0 } && signatures[0] is JsonValue signatureValue
-                && signatureValue.TryGetValue<string>(out var signatureStr))
+                && JsVal.TryGetStringLenient(signatureValue, out var signatureStr))
             {
                 signature = signatureStr;
             }
@@ -210,7 +210,7 @@ public static partial class PrivateApi
             }
 
             var first = item[0]; // throws for non-indexable nodes, like JS destructuring a non-iterable
-            keys.Add(first is JsonValue v && v.TryGetValue<string>(out var key) ? key : null);
+            keys.Add(first is JsonValue v && JsVal.TryGetStringLenient(v, out var key) ? key : null);
         }
 
         return keys;

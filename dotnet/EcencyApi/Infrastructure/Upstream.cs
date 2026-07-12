@@ -203,7 +203,7 @@ public static class Upstream
         }
         catch (UpstreamTimeoutException e)
         {
-            Console.Error.WriteLine($"pipe(): upstream timeout: {e.Message}");
+            Console.Error.WriteLine($"pipe(): upstream timeout on {ctx.Request.Path}: {e.Message}");
             if (!ctx.Response.HasStarted)
             {
                 ctx.Response.StatusCode = 504;
@@ -213,7 +213,7 @@ public static class Upstream
         }
         catch (Exception e)
         {
-            Console.Error.WriteLine($"pipe(): error while processing API call: {e.Message}");
+            Console.Error.WriteLine($"pipe(): error on {ctx.Request.Path}: {e.Message}");
             if (!ctx.Response.HasStarted)
             {
                 ctx.Response.StatusCode = 500;
@@ -224,7 +224,7 @@ public static class Upstream
 
         if (ctx.Response.HasStarted)
         {
-            Console.Error.WriteLine("pipe(): headers already sent, skipping response");
+            Console.Error.WriteLine($"pipe(): headers already sent, skipping response ({ctx.Request.Path})");
             return;
         }
 
@@ -266,7 +266,8 @@ public static class Upstream
                 case JsonValueKind.String:
                     // res.send("str") sends the raw string as text/html
                     ctx.Response.ContentType = "text/html; charset=utf-8";
-                    await ctx.Response.WriteAsync(value.GetValue<string>());
+                    JsVal.TryGetStringLenient(value, out var bodyStr);
+                    await ctx.Response.WriteAsync(bodyStr);
                     return;
             }
         }

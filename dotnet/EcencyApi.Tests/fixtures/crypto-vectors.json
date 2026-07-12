@@ -1471,6 +1471,11 @@
  ],
  "validateCodeRaw": [
   {
+   "tokenJson": "{\"signed_message\":{\"type\":\"code\",\"app\":\"x\\ud83dy\"},\"authors\":[\"mallory\"],\"timestamp\":1752300000,\"signatures\":[\"ab\"]}",
+   "rawMessage": "{\"signed_message\":{\"type\":\"code\",\"app\":\"x\\ud83dy\"},\"authors\":[\"mallory\"],\"timestamp\":1752300000}",
+   "digestHex": "6162f04277a85ad43b614e076d81a317ad873450ff71176ff4715ea0844b5e78"
+  },
+  {
    "tokenJson": "{\"signed_message\":{\"type\":\"code\",\"app\":\"ecency.app\"},\"authors\":[\"alice\"],\"timestamp\":1751900000,\"signatures\":[\"ab\"]}",
    "rawMessage": "{\"signed_message\":{\"type\":\"code\",\"app\":\"ecency.app\"},\"authors\":[\"alice\"],\"timestamp\":1751900000}",
    "digestHex": "5290d7673a06a74f856d8d142764739972d85430654b23fff2c5c301a2a718f5"

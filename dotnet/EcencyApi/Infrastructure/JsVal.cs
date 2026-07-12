@@ -19,7 +19,7 @@ public static class JsVal
     public static bool IsString(JsonNode? n) =>
         n is JsonValue v && v.TryGetValue<JsonElement>(out var e)
             ? e.ValueKind == JsonValueKind.String
-            : n is JsonValue v2 && v2.TryGetValue<string>(out _);
+            : n is JsonValue v2 && JsVal.TryGetStringLenient(v2, out _);
 
     public static bool IsNumber(JsonNode? n)
     {
@@ -41,12 +41,77 @@ public static class JsVal
 
     // ---- accessors -------------------------------------------------------
 
+    /// <summary>
+    /// String extraction tolerant of lone-surrogate \u escapes. JavaScript's
+    /// JSON.parse accepts them (JS strings are arbitrary UTF-16), but
+    /// System.Text.Json throws InvalidOperationException when materializing
+    /// such strings — which turned payloads the Node service handled fine into
+    /// 500s. Falls back to manually unescaping the raw JSON text with JS
+    /// semantics (\uXXXX decodes to the code unit, paired or not).
+    /// </summary>
+    public static bool TryGetStringLenient(JsonValue v, out string value)
+    {
+        try
+        {
+            if (v.TryGetValue<string>(out value!))
+            {
+                return true;
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // incomplete surrogate pair in the JSON text; fall through
+        }
+
+        if (v.TryGetValue<JsonElement>(out var el) && el.ValueKind == JsonValueKind.String)
+        {
+            value = UnescapeJsonStringLenient(el.GetRawText());
+            return true;
+        }
+
+        value = null!;
+        return false;
+    }
+
+    /// <summary>Unescape a raw JSON string literal (including quotes) with JS semantics.</summary>
+    internal static string UnescapeJsonStringLenient(string raw)
+    {
+        var sb = new StringBuilder(raw.Length);
+        for (var i = 1; i < raw.Length - 1; i++)
+        {
+            var c = raw[i];
+            if (c != '\\')
+            {
+                sb.Append(c);
+                continue;
+            }
+            i++;
+            switch (raw[i])
+            {
+                case '"': sb.Append('"'); break;
+                case '\\': sb.Append('\\'); break;
+                case '/': sb.Append('/'); break;
+                case 'b': sb.Append('\b'); break;
+                case 'f': sb.Append('\f'); break;
+                case 'n': sb.Append('\n'); break;
+                case 'r': sb.Append('\r'); break;
+                case 't': sb.Append('\t'); break;
+                case 'u':
+                    sb.Append((char)ushort.Parse(raw.AsSpan(i + 1, 4),
+                        NumberStyles.HexNumber, CultureInfo.InvariantCulture));
+                    i += 4;
+                    break;
+            }
+        }
+        return sb.ToString();
+    }
+
     /// <summary>The JSON string value, or null when the node is not a string.</summary>
     public static string? AsString(JsonNode? n)
     {
         if (n is JsonValue v)
         {
-            if (v.TryGetValue<string>(out var s)) return s;
+            if (JsVal.TryGetStringLenient(v, out var s)) return s;
             if (v.TryGetValue<JsonElement>(out var e) && e.ValueKind == JsonValueKind.String)
                 return e.GetString();
         }
@@ -180,7 +245,7 @@ public static class JsVal
             case JsonObject:
                 return "[object Object]";
             case JsonValue v:
-                if (v.TryGetValue<string>(out var s)) return s;
+                if (JsVal.TryGetStringLenient(v, out var s)) return s;
                 if (v.TryGetValue<bool>(out var b)) return b ? "true" : "false";
                 var num = AsNumber(n);
                 if (num.HasValue) return JsNumberToString(num.Value);

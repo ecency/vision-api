@@ -92,7 +92,7 @@ public static class HttpContextExtensions
 
     /// <summary>Convenience: string body field (undefined -> null).</summary>
     public static string? Str(this JsonObject body, string key) =>
-        body.TryGetPropertyValue(key, out var v) && v is JsonValue val && val.TryGetValue<string>(out var s)
+        body.TryGetPropertyValue(key, out var v) && v is JsonValue val && JsVal.TryGetStringLenient(val, out var s)
             ? s
             : null;
 
