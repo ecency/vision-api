@@ -77,18 +77,15 @@ public static class HttpContextExtensions
         await ctx.Response.WriteAsync(text);
     }
 
-    /// <summary>res.status(code).send(obj) / res.json(obj).</summary>
+    /// <summary>res.status(code).send(obj) / res.json(obj). Serialized with
+    /// JsJson (JSON.stringify parity; tolerates lone surrogates that
+    /// System.Text.Json's writer throws on).</summary>
     public static async Task SendJson(this HttpContext ctx, int status, JsonNode? node)
     {
         ctx.Response.StatusCode = status;
         ctx.Response.ContentType = "application/json; charset=utf-8";
-        await ctx.Response.WriteAsync(node?.ToJsonString(JsonOpts) ?? "null");
+        await ctx.Response.WriteAsync(node is null ? "null" : JsJson.Stringify(node));
     }
-
-    private static readonly JsonSerializerOptions JsonOpts = new()
-    {
-        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-    };
 
     /// <summary>Convenience: string body field (undefined -> null).</summary>
     public static string? Str(this JsonObject body, string key) =>

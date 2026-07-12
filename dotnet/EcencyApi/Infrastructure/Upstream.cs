@@ -92,7 +92,10 @@ public static class Upstream
 
         using var req = new HttpRequestMessage(method, finalUrl);
 
-        var bodyJson = payload?.ToJsonString(RawJsonOptions) ?? "{}";
+        // JsJson.Stringify (not ToJsonString): System.Text.Json's writer throws on
+        // lone-surrogate strings that JS handles fine, and JsJson byte-matches the
+        // JSON.stringify output axios sent upstream.
+        var bodyJson = payload is null ? "{}" : JsJson.Stringify(payload);
         req.Content = new StringContent(bodyJson, Encoding.UTF8);
         // axios sends bare "application/json" (no charset); keep upstream
         // requests byte-identical to the Node service.
@@ -154,11 +157,6 @@ public static class Upstream
             }
         }
     }
-
-    private static readonly JsonSerializerOptions RawJsonOptions = new()
-    {
-        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-    };
 
     public static string AppendQuery(string url, IEnumerable<KeyValuePair<string, string?>>? query)
     {
@@ -274,8 +272,9 @@ public static class Upstream
             }
         }
 
-        // Objects, arrays, booleans -> res.json()
+        // Objects, arrays, booleans -> res.json(); JsJson matches JSON.stringify
+        // (and tolerates lone surrogates that ToJsonString throws on)
         ctx.Response.ContentType = "application/json; charset=utf-8";
-        await ctx.Response.WriteAsync(json!.ToJsonString(RawJsonOptions));
+        await ctx.Response.WriteAsync(JsJson.Stringify(json));
     }
 }

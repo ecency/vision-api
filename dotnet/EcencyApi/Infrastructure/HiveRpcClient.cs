@@ -188,7 +188,9 @@ public sealed class HiveRpcClient
             ["method"] = "call",
             ["params"] = new JsonArray(api, method, @params),
         };
-        var body = request.ToJsonString();
+        // JsJson: a lone-surrogate username from a client token must serialize
+        // (JSON.stringify semantics) instead of throwing in the writer.
+        var body = JsJson.Stringify(request);
 
         Exception? lastError = null;
 
