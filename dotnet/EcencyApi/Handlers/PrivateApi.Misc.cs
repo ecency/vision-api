@@ -107,13 +107,12 @@ public static partial class PrivateApi
             if (!string.IsNullOrEmpty(rec))
             {
                 var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                if (double.TryParse(rec, System.Globalization.NumberStyles.Float,
+                var withinWindow = double.TryParse(rec, System.Globalization.NumberStyles.Float,
                         System.Globalization.CultureInfo.InvariantCulture, out var recMs)
-                    && nowMs - recMs < 900000)
+                    && nowMs - recMs < 900000;
+
+                if (withinWindow)
                 {
-                    // Node sends 201 here WITHOUT returning; the cache write and the
-                    // upstream usr-activity call below still run (pipe then skips the
-                    // second response) — replicated as-is.
                     await ctx.SendJson(201, new JsonObject());
                 }
                 try
@@ -125,6 +124,15 @@ public static partial class PrivateApi
                 {
                     Console.Error.WriteLine(e);
                     Console.Error.WriteLine("Cache set failed.");
+                }
+                if (withinWindow)
+                {
+                    // The Node implementation was missing this return: it acked the
+                    // rate-limited checkin with 201 but still forwarded the duplicate
+                    // event upstream (pipe then skipped the second response, logging
+                    // "headers already sent" on every occurrence). Short-circuit after
+                    // refreshing the sliding window, as the branch always intended.
+                    return;
                 }
             }
             else
