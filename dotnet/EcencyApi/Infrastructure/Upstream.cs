@@ -266,8 +266,10 @@ public static class Upstream
                 case JsonValueKind.String:
                     // res.send("str") sends the raw string as text/html
                     ctx.Response.ContentType = "text/html; charset=utf-8";
-                    JsVal.TryGetStringLenient(value, out var bodyStr);
-                    await ctx.Response.WriteAsync(bodyStr);
+                    if (JsVal.TryGetStringLenient(value, out var bodyStr))
+                    {
+                        await ctx.Response.WriteAsync(bodyStr);
+                    }
                     return;
             }
         }
