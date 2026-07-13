@@ -180,14 +180,17 @@ public static partial class WalletApi
             var response = await EngineRewardsRequest(username,
                 new[] { new KeyValuePair<string, string?>("hive", "1") });
 
+            // A non-object body (unparseable, or valid JSON that isn't an object) means a
+            // degraded upstream: keep throwing so the catch below logs it.
             if (response.Json is not JsonObject obj)
-                throw new Exception("No rewards data returned");
+                throw new Exception("Unexpected rewards payload");
 
-            var rawValues = obj.Select(kv => kv.Value).ToList();
-            if (rawValues.Count == 0) throw new Exception("No rewards data returned");
-
+            // An empty object is NOT a failure — it is what the upstream returns for an
+            // account with no Hive-Engine activity, which is the common case. It falls
+            // through the loop below to the same empty result the catch used to produce,
+            // minus an error log on every such request.
             var filtered = new JsonArray();
-            foreach (var raw in rawValues)
+            foreach (var raw in obj.Select(kv => kv.Value))
             {
                 var converted = HiveEngine.ConvertRewardsStatus(raw);
                 var pendingToken = JsVal.AsNumber(converted["pendingToken"]);
