@@ -180,14 +180,14 @@ public static partial class WalletApi
             var response = await EngineRewardsRequest(username,
                 new[] { new KeyValuePair<string, string?>("hive", "1") });
 
-            if (response.Json is not JsonObject obj)
-                throw new Exception("No rewards data returned");
-
-            var rawValues = obj.Select(kv => kv.Value).ToList();
-            if (rawValues.Count == 0) throw new Exception("No rewards data returned");
+            // An account with no Hive-Engine activity is the common case, not a failure:
+            // the upstream answers with an empty object, which falls through the loop
+            // below to an empty result. Previously both that and a non-object response
+            // threw into the catch, logging an error on every such request.
+            if (response.Json is not JsonObject obj) return new JsonArray();
 
             var filtered = new JsonArray();
-            foreach (var raw in rawValues)
+            foreach (var raw in obj.Select(kv => kv.Value))
             {
                 var converted = HiveEngine.ConvertRewardsStatus(raw);
                 var pendingToken = JsVal.AsNumber(converted["pendingToken"]);
