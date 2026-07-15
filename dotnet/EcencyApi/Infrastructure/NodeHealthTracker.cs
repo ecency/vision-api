@@ -161,9 +161,11 @@ public sealed class NodeHealthTracker
     {
         if (string.IsNullOrWhiteSpace(header)) return null;
         var t = header.Trim();
-        if (int.TryParse(t, NumberStyles.None, CultureInfo.InvariantCulture, out var seconds))
+        if (long.TryParse(t, NumberStyles.None, CultureInfo.InvariantCulture, out var seconds))
         {
-            return seconds >= 0 ? seconds * 1000 : null;
+            // Clamp before converting: a huge delta-seconds must saturate, not
+            // overflow into a negative park window.
+            return seconds >= 0 ? (int)(Math.Min(seconds, int.MaxValue / 1000L) * 1000) : null;
         }
         if (DateTimeOffset.TryParse(t, CultureInfo.InvariantCulture,
                 DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var when))

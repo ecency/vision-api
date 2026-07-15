@@ -71,7 +71,7 @@ Handlers are `public static async Task Name(HttpContext ctx)` methods on static 
 `NodeHealthTracker` (adopted from the vision-next SDK) holds per-node health state: 429 responses park a node for `Retry-After` (or an escalating window), recent failures deprioritize it, and a latency EWMA orders the pool best-first with config order as tiebreak. Two clients build on it:
 
 - `HiveRpcClient` (Hive JSON-RPC): RPC-level errors (JSON `error` field) surface immediately without failover — they're application errors, not node health.
-- `EngineRpcClient` (Hive-Engine `/contracts`): the portfolio `Find` calls are fixed-shape queries that always yield a `result` array on a healthy node, so an error payload or non-JSON body *is* a node failure and rolls over to the next node. The raw `engine-api` passthrough fails over only on transport errors and 429/5xx; other responses belong to the caller's query and pipe as-is.
+- `EngineRpcClient` (Hive-Engine): one instance per pool — the `/contracts` RPC pool and the history-API pool. The portfolio `Find` calls are fixed-shape queries that always yield a `result` array on a healthy node, so an error payload or non-JSON body *is* a node failure and rolls over to the next node. The raw passthroughs (`engine-api`, `engine-account-history`) fail over only on transport errors and 429/5xx; other responses belong to the caller's query and pipe as-is.
 
 Covered by `HiveRpcFailoverTests` and `EngineFailoverTests`; keep new failover behavior test-backed.
 

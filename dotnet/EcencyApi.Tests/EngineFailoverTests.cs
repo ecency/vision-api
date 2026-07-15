@@ -22,8 +22,9 @@ public class EngineFailoverTests
     {
         private readonly HttpListener _listener = new();
         private readonly Func<(int Status, string Body)> _handler;
-        public string Url { get; } // no trailing slash: the client appends "/contracts"
+        public string Url { get; } // no trailing slash: the client appends the path
         public int Hits;
+        public volatile string? LastPathAndQuery;
 
         public StubNode(Func<(int, string)> handler)
         {
@@ -44,6 +45,7 @@ public class EngineFailoverTests
                 catch { return; }
 
                 Interlocked.Increment(ref Hits);
+                LastPathAndQuery = ctx.Request.Url?.PathAndQuery;
                 var (status, bodyText) = _handler();
                 var body = Encoding.UTF8.GetBytes(bodyText);
                 ctx.Response.StatusCode = status;
@@ -193,6 +195,48 @@ public class EngineFailoverTests
         var resp = await Client(bad1.Url, bad2.Url).ContractsRaw(FindPayload());
 
         Assert.True(resp.Status is 502 or 503);
+    }
+
+    [Fact]
+    public async Task ContractsRaw_RateLimitedNode_IsParkedOnSubsequentCalls()
+    {
+        await using var limited = new StubNode(() => (429, "rate limited"));
+        await using var good = new StubNode(() => (200, ResultBody));
+
+        var client = Client(limited.Url, good.Url);
+        var first = await client.ContractsRaw(FindPayload());
+        var second = await client.ContractsRaw(FindPayload());
+
+        Assert.Equal(200, first.Status);
+        Assert.Equal(200, second.Status);
+        Assert.Equal(1, limited.Hits); // parked after the discovery hit
+        Assert.Equal(2, good.Hits);
+    }
+
+    [Fact]
+    public void ParseRetryAfterMs_HugeDeltaSeconds_SaturatesInsteadOfOverflowing()
+    {
+        var ms = NodeHealthTracker.ParseRetryAfterMs("2147484"); // *1000 would overflow int
+        Assert.NotNull(ms);
+        Assert.True(ms > 0);
+    }
+
+    [Fact]
+    public async Task GetRaw_DeadNode_FailsOver_PreservingPathAndQuery()
+    {
+        var deadUrl = $"http://127.0.0.1:{StubNode.GetFreePort()}";
+        await using var good = new StubNode(() => (200, "[{\"symbol\":\"LEO\"}]"));
+
+        var query = new[]
+        {
+            new KeyValuePair<string, string?>("account", "good-karma"),
+            new KeyValuePair<string, string?>("symbol", "LEO"),
+        };
+        var resp = await Client(deadUrl, good.Url)
+            .GetRaw("/accountHistory", query, perAttemptTimeoutMs: 2000, maxAttempts: 2);
+
+        Assert.Equal(200, resp.Status);
+        Assert.Equal("/accountHistory?account=good-karma&symbol=LEO", good.LastPathAndQuery);
     }
 
     [Fact]

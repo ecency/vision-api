@@ -3,11 +3,13 @@ using System.Text.Json.Nodes;
 namespace EcencyApi.Infrastructure;
 
 /// <summary>
-/// Hive-Engine /contracts client with the same health-aware node failover as
-/// HiveRpcClient (shared <see cref="NodeHealthTracker"/>). Replaces the ported
-/// Node behavior — a sticky randomly-picked node plus one blind random retry —
-/// which intermittently blanked engine data whenever the random pick landed on
-/// a dead or flaky node twice in a row.
+/// Hive-Engine upstream client with the same health-aware node failover as
+/// HiveRpcClient (shared <see cref="NodeHealthTracker"/>). One instance per
+/// pool of interchangeable nodes: the RPC (/contracts) pool and the history
+/// API pool. Replaces the ported Node behavior — a sticky randomly-picked
+/// node plus one blind random retry (and no retry at all for the history
+/// host) — which intermittently blanked engine data whenever the pick landed
+/// on a dead or flaky node.
 /// </summary>
 public sealed class EngineRpcClient
 {
@@ -77,18 +79,30 @@ public sealed class EngineRpcClient
         throw lastError ?? new InvalidOperationException("no engine nodes configured");
     }
 
+    /// <summary>Raw /contracts passthrough for the engine-api proxy route.</summary>
+    public Task<UpstreamResponse> ContractsRaw(JsonNode? payload,
+        int perAttemptTimeoutMs = Upstream.DefaultTimeoutMs, int maxAttempts = 3) =>
+        Passthrough(HttpMethod.Post, "/contracts", payload, null, perAttemptTimeoutMs, maxAttempts);
+
+    /// <summary>GET passthrough (history API) with the caller's query forwarded.</summary>
+    public Task<UpstreamResponse> GetRaw(string path,
+        IEnumerable<KeyValuePair<string, string?>>? query,
+        int perAttemptTimeoutMs, int maxAttempts) =>
+        Passthrough(HttpMethod.Get, path, null, query, perAttemptTimeoutMs, maxAttempts);
+
     /// <summary>
-    /// Raw /contracts passthrough for the engine-api proxy route. Fails over
-    /// only on transport errors and overload statuses (429/5xx) — any other
-    /// response belongs to the caller's query and pipes as-is. If every tried
-    /// node overloads, the last upstream response is still returned so the
-    /// client sees what the pool said; a pool of pure transport failures
-    /// rethrows for pipe()'s 504/500 split. Attempts are capped: the wallet
-    /// clients calling this route wait synchronously, and a pool-wide outage
-    /// shouldn't multiply the full per-attempt timeout by the pool size.
+    /// Proxy-route passthrough. Fails over only on transport errors and
+    /// overload statuses (429/5xx) — any other response belongs to the
+    /// caller's query and pipes as-is. If every tried node overloads, the last
+    /// upstream response is still returned so the client sees what the pool
+    /// said; a pool of pure transport failures rethrows for pipe()'s 504/500
+    /// split. Attempts are capped: the wallet clients calling these routes
+    /// wait synchronously, and a pool-wide outage shouldn't multiply the full
+    /// per-attempt timeout by the pool size.
     /// </summary>
-    public async Task<UpstreamResponse> ContractsRaw(JsonNode? payload,
-        int perAttemptTimeoutMs = Upstream.DefaultTimeoutMs, int maxAttempts = 3)
+    private async Task<UpstreamResponse> Passthrough(HttpMethod method, string path,
+        JsonNode? payload, IEnumerable<KeyValuePair<string, string?>>? query,
+        int perAttemptTimeoutMs, int maxAttempts)
     {
         Exception? lastError = null;
         UpstreamResponse? lastResponse = null;
@@ -101,8 +115,8 @@ public sealed class EngineRpcClient
             var started = NowMs;
             try
             {
-                var resp = await Upstream.BaseApiRequest($"{node}/contracts", HttpMethod.Post,
-                    _headers, payload, null, perAttemptTimeoutMs);
+                var resp = await Upstream.BaseApiRequest($"{node}{path}", method,
+                    _headers, payload, query, perAttemptTimeoutMs);
 
                 if (resp.Status == 429)
                 {

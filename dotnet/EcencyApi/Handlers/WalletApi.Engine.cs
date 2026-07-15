@@ -17,7 +17,6 @@ public static partial class WalletApi
     private const string BaseSpkUrl = "https://spk.good-karma.xyz";
     private const string EngineRewardsUrl = "https://scot-api.hive-engine.com/";
     private const string EngineChartUrl = "https://info-api.tribaldex.com/market/ohlcv";
-    private const string EngineAccountHistoryUrl = "https://history.hive-engine.com/accountHistory";
 
     private static readonly KeyValuePair<string, string>[] EngineHeaders =
     {
@@ -38,6 +37,12 @@ public static partial class WalletApi
         "https://api2.hive-engine.com/rpc",
         "https://herpc.kanibot.com",
         "https://herpc.dtools.dev",
+    }, EngineHeaders);
+
+    private static readonly EngineRpcClient EngineHistoryClient = new(new[]
+    {
+        "https://history.hive-engine.com",
+        "https://v6-he.atexoras.com:8443",
     }, EngineHeaders);
 
     // ---- routes ----------------------------------------------------------
@@ -65,8 +70,11 @@ public static partial class WalletApi
     public static async Task EngineAccountHistory(HttpContext ctx)
     {
         var query = QueryOf(ctx);
+        // Per-attempt timeout keeps the original 30s envelope; a dead node
+        // fails fast (DNS/refused/5xx) so the second node still answers well
+        // within what callers already waited for.
         await Upstream.Pipe(
-            Upstream.BaseApiRequest(EngineAccountHistoryUrl, HttpMethod.Get, EngineHeaders, null, query, 30000), ctx);
+            EngineHistoryClient.GetRaw("/accountHistory", query, 15000, maxAttempts: 2), ctx);
     }
 
     private static List<KeyValuePair<string, string?>> QueryOf(HttpContext ctx)
