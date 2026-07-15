@@ -41,7 +41,9 @@ dotnet/EcencyApi/
   Infrastructure/
     Upstream.cs            upstream HTTP + Express-compatible response piping
     ApiClient.cs           private-API requests (PRIVATE_API_AUTH header injection)
+    NodeHealthTracker.cs   per-node health state + pool ordering (shared by the RPC clients)
     HiveRpcClient.cs       Hive RPC with health-aware node failover
+    EngineRpcClient.cs     Hive-Engine /contracts with the same failover
     HiveCrypto.cs          secp256k1: key-from-login, canonical signing, pubkey recovery
     JsJson.cs / JsVal.cs   JavaScript-semantics layer (see invariants)
     B64u.cs, MemCache.cs, HttpContextExtensions.cs
@@ -64,9 +66,14 @@ Handlers are `public static async Task Name(HttpContext ctx)` methods on static 
 7. **Numbers are JavaScript doubles end to end — raw-literal preservation is NOT a goal.** The Node service parsed every request body and upstream response with `JSON.parse` (doubles) and re-emitted with `JSON.stringify`, so integers above 2^53 have always rounded on these paths (e.g. `18446744073709551615` → `18446744073709552000`). `JsJson.Stringify` reproduces this byte-for-byte on purpose. Do not flag double-rounding on payload/response serialization as precision loss, and do not "fix" it by preserving raw literals — either direction breaks parity. The single deliberate exception is the Solana lamports raw-text scan (`PrivateApi.Chain`), which keeps `ToJsonString` because it extracts a u64 from raw text before any parse.
 8. **Lone-surrogate `\u` escapes are valid input and output.** JavaScript strings are arbitrary UTF-16, so `JSON.parse`/`JSON.stringify` accept and re-emit lone surrogates; System.Text.Json throws on them in BOTH directions (string materialization AND the writer, regardless of encoder). All string extraction must go through `JsVal.TryGetStringLenient` and all tree serialization of client/upstream data through `JsJson.Stringify` — never raw `GetValue<string>`/`TryGetValue<string>` or `ToJsonString` on such data. Suggesting a switch back to the strict System.Text.Json APIs reintroduces production 500s.
 
-## Hive RPC failover
+## Upstream node failover
 
-`HiveRpcClient` uses a per-node health tracker (adopted from the vision-next SDK): 429 responses park a node for `Retry-After` (or an escalating window), recent failures deprioritize it, and a latency EWMA orders the pool best-first with config order as tiebreak. RPC-level errors (JSON `error` field) surface immediately without failover — they're application errors, not node health. Covered by `HiveRpcFailoverTests`; keep new failover behavior test-backed.
+`NodeHealthTracker` (adopted from the vision-next SDK) holds per-node health state: 429 responses park a node for `Retry-After` (or an escalating window), recent failures deprioritize it, and a latency EWMA orders the pool best-first with config order as tiebreak. Two clients build on it:
+
+- `HiveRpcClient` (Hive JSON-RPC): RPC-level errors (JSON `error` field) surface immediately without failover — they're application errors, not node health.
+- `EngineRpcClient` (Hive-Engine `/contracts`): the portfolio `Find` calls are fixed-shape queries that always yield a `result` array on a healthy node, so an error payload or non-JSON body *is* a node failure and rolls over to the next node. The raw `engine-api` passthrough fails over only on transport errors and 429/5xx; other responses belong to the caller's query and pipe as-is.
+
+Covered by `HiveRpcFailoverTests` and `EngineFailoverTests`; keep new failover behavior test-backed.
 
 ## Testing
 

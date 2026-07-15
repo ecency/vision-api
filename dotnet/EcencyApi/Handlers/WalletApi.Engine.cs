@@ -5,37 +5,15 @@ using EcencyApi.Models;
 namespace EcencyApi.Handlers;
 
 /// <summary>
-/// Port of wallet-api.ts lines 1748-2165: Hive-Engine node pool + failover, the
-/// engine passthrough routes, the portfolio data fetchers, and the portfolio /
-/// portfolioV2 orchestration (fail-fast leg timeouts, partial-degrade on error).
+/// Port of wallet-api.ts lines 1748-2165: the engine passthrough routes, the
+/// portfolio data fetchers, and the portfolio / portfolioV2 orchestration
+/// (fail-fast leg timeouts, partial-degrade on error). The original module's
+/// random-pick engine node rotation was replaced with EngineRpcClient's
+/// health-aware failover — the random retry intermittently landed on dead
+/// nodes twice and blanked engine data.
 /// </summary>
 public static partial class WalletApi
 {
-    private static readonly string[] EngineNodes =
-    {
-        "https://herpc.dtools.dev",
-        "https://api.hive-engine.com/rpc",
-        "https://ha.herpc.dtools.dev",
-        "https://herpc.kanibot.com",
-        "https://herpc.actifit.io",
-    };
-
-    // min and max included
-    private static int RandomIntFromInterval(int min, int max) =>
-        (int)Math.Floor(Random.Shared.NextDouble() * (max - min + 1) + min);
-
-    private static string PickRandomEngineUrl() =>
-        $"{EngineNodes[RandomIntFromInterval(0, EngineNodes.Length - 1)]}/contracts";
-
-    // Module-level mutable base URL, reselected on engine failure (dhive-style
-    // rotation across the pool). Volatile: read/written from concurrent requests.
-    private static string _baseEngineUrl = PickRandomEngineUrl();
-    private static string BaseEngineUrl
-    {
-        get => Volatile.Read(ref _baseEngineUrl);
-        set => Volatile.Write(ref _baseEngineUrl, value);
-    }
-
     private const string BaseSpkUrl = "https://spk.good-karma.xyz";
     private const string EngineRewardsUrl = "https://scot-api.hive-engine.com/";
     private const string EngineChartUrl = "https://info-api.tribaldex.com/market/ohlcv";
@@ -47,12 +25,27 @@ public static partial class WalletApi
         new("User-Agent", "Ecency"),
     };
 
+    // Ordered by observed reliability (health-meter snapshot at last review);
+    // the tracker's latency EWMA reorders at runtime, config order is the
+    // cold-start order and tiebreak.
+    private static readonly EngineRpcClient EngineClient = new(new[]
+    {
+        "https://enginerpc.com",
+        "https://api.hive-engine.com/rpc",
+        "https://herpc.actifit.io",
+        "https://he.c0ff33a.uk",
+        "https://v6-he.atexoras.com:2083",
+        "https://api2.hive-engine.com/rpc",
+        "https://herpc.kanibot.com",
+        "https://herpc.dtools.dev",
+    }, EngineHeaders);
+
     // ---- routes ----------------------------------------------------------
 
     public static async Task Eapi(HttpContext ctx)
     {
         var data = await ctx.ReadBody();
-        await Upstream.Pipe(EngineContractsRequest(data, BaseEngineUrl), ctx);
+        await Upstream.Pipe(EngineClient.ContractsRaw(data), ctx);
     }
 
     public static async Task Erewardapi(HttpContext ctx)
@@ -90,9 +83,6 @@ public static partial class WalletApi
 
     // ---- raw engine calls ------------------------------------------------
 
-    private static Task<UpstreamResponse> EngineContractsRequest(JsonNode? data, string url) =>
-        Upstream.BaseApiRequest(url, HttpMethod.Post, EngineHeaders, data, null, 8000);
-
     private static Task<UpstreamResponse> EngineRewardsRequest(string username, IEnumerable<KeyValuePair<string, string?>> query)
     {
         var url = $"{EngineRewardsUrl}/@{username}";
@@ -112,66 +102,17 @@ public static partial class WalletApi
         ["id"] = HiveEngine.IdOne,
     };
 
-    private static JsonNode? ResultOf(UpstreamResponse r) => r.Json?["result"];
+    public static Task<JsonArray> FetchEngineBalances(string account) =>
+        EngineClient.Find(EngineFindPayload(HiveEngine.ContractTokens, HiveEngine.TableBalances,
+            new JsonObject { ["account"] = account }));
 
-    public static async Task<JsonArray> FetchEngineBalances(string account)
-    {
-        var data = EngineFindPayload(HiveEngine.ContractTokens, HiveEngine.TableBalances,
-            new JsonObject { ["account"] = account });
-        try
-        {
-            var response = await EngineContractsRequest(data.DeepClone(), BaseEngineUrl);
-            var result = ResultOf(response);
-            if (result is not JsonArray a) throw new Exception("Failed to get engine balances");
-            return a;
-        }
-        catch
-        {
-            BaseEngineUrl = PickRandomEngineUrl();
-            var response = await EngineContractsRequest(data.DeepClone(), BaseEngineUrl);
-            var result = ResultOf(response);
-            if (result is not JsonArray a) throw new Exception("Failed to get engine balances");
-            return a;
-        }
-    }
+    public static Task<JsonArray> FetchEngineTokens(List<string> tokens) =>
+        EngineClient.Find(EngineFindPayload(HiveEngine.ContractTokens, HiveEngine.TableTokens,
+            new JsonObject { ["symbol"] = new JsonObject { ["$in"] = ToJsonArray(tokens) } }));
 
-    public static async Task<JsonArray> FetchEngineTokens(List<string> tokens)
-    {
-        var query = new JsonObject { ["symbol"] = new JsonObject { ["$in"] = ToJsonArray(tokens) } };
-        var data = EngineFindPayload(HiveEngine.ContractTokens, HiveEngine.TableTokens, query);
-        try
-        {
-            var response = await EngineContractsRequest(data.DeepClone(), BaseEngineUrl);
-            if (ResultOf(response) is not JsonArray a) throw new Exception("Failed to get engine tokens data");
-            return a;
-        }
-        catch
-        {
-            BaseEngineUrl = PickRandomEngineUrl();
-            var response = await EngineContractsRequest(data.DeepClone(), BaseEngineUrl);
-            if (ResultOf(response) is not JsonArray a) throw new Exception("Failed to get engine tokens data");
-            return a;
-        }
-    }
-
-    public static async Task<JsonArray> FetchEngineMetrics(List<string> tokens)
-    {
-        var query = new JsonObject { ["symbol"] = new JsonObject { ["$in"] = ToJsonArray(tokens) } };
-        var data = EngineFindPayload(HiveEngine.ContractMarket, HiveEngine.TableMetrics, query);
-        try
-        {
-            var response = await EngineContractsRequest(data.DeepClone(), BaseEngineUrl);
-            if (ResultOf(response) is not JsonArray a) throw new Exception("Failed to get engine metrics data");
-            return a;
-        }
-        catch
-        {
-            BaseEngineUrl = PickRandomEngineUrl();
-            var response = await EngineContractsRequest(data.DeepClone(), BaseEngineUrl);
-            if (ResultOf(response) is not JsonArray a) throw new Exception("Failed to get engine metrics data");
-            return a;
-        }
-    }
+    public static Task<JsonArray> FetchEngineMetrics(List<string> tokens) =>
+        EngineClient.Find(EngineFindPayload(HiveEngine.ContractMarket, HiveEngine.TableMetrics,
+            new JsonObject { ["symbol"] = new JsonObject { ["$in"] = ToJsonArray(tokens) } }));
 
     public static async Task<JsonArray> FetchEngineRewards(string username)
     {
