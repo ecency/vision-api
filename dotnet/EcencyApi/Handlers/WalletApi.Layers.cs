@@ -669,11 +669,16 @@ public static partial class WalletApi
     // 16 wallets (2 batches) finish worst-case in 4s.
     private const int ChainBalanceTimeoutMs = 2000;
     private const int ChainFetchConcurrency = 8;
+    // Hard bound so the worst case is exactly two waves (4s < 4.5s leg) no
+    // matter how many addresses a profile lists. A profile with more entries
+    // keeps its first 16 wallets instead of risking the whole layer.
+    private const int MaxChainWallets = 16;
 
     internal static async Task<List<JsonObject>> BuildChainLayer(JsonNode? accountData, JsonNode? marketData, string currency, bool? onlyEnabled)
     {
         var wallets = ExtractExternalWallets(accountData, onlyEnabled == true);
         if (wallets.Count == 0) return new List<JsonObject>();
+        if (wallets.Count > MaxChainWallets) wallets = wallets.Take(MaxChainWallets).ToList();
 
         var items = await ProcessWithConcurrencyLimit(wallets, async wallet =>
         {
