@@ -663,10 +663,12 @@ public static partial class WalletApi
     // attempt, but the portfolioV2 chain leg has a 4.5s budget for the WHOLE
     // layer — without a per-wallet cap, one cold/slow provider blows the leg
     // timeout and the entire chain layer silently disappears from the response
-    // (observed intermittently in production). 2s keeps two concurrency
-    // batches inside the leg budget; the capped wallet degrades to an error
-    // item instead of sinking its siblings.
+    // (observed intermittently in production). The capped wallet degrades to
+    // an error item instead of sinking its siblings. The concurrency width
+    // must keep ceil(n / width) * cap under the leg budget: at width 8, up to
+    // 16 wallets (2 batches) finish worst-case in 4s.
     private const int ChainBalanceTimeoutMs = 2000;
+    private const int ChainFetchConcurrency = 8;
 
     internal static async Task<List<JsonObject>> BuildChainLayer(JsonNode? accountData, JsonNode? marketData, string currency, bool? onlyEnabled)
     {
@@ -707,7 +709,7 @@ public static partial class WalletApi
                     new ItemOptions { Address = wallet.Address, Error = errorMessage },
                     config.IconUrl ?? Constants.AssetIconUrls["CHAIN_PLACEHOLDER"], ChainActions());
             }
-        }, 3);
+        }, ChainFetchConcurrency);
 
         return items.Where(x => x != null).ToList();
     }
