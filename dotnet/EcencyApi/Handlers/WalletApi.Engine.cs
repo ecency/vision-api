@@ -165,7 +165,11 @@ public static partial class WalletApi
 
             var tokensTask = FetchEngineTokens(symbols);
             var metricsTask = FetchEngineMetrics(symbols);
-            var unclaimedTask = FetchEngineRewards(username);
+            // The rewards upstream allows 30s, but this whole fetch must fit
+            // the portfolioV2 engine leg budget (4.5s) — a slow rewards call
+            // would otherwise blank the entire engine layer. Rewards are
+            // decoration (pendingToken badges); degrade to none instead.
+            var unclaimedTask = WithTimeout(FetchEngineRewards(username), EngineRewardsTimeoutMs, new JsonArray());
             await Task.WhenAll(tokensTask, metricsTask, unclaimedTask);
             var tokens = tokensTask.Result;
             var metrics = metricsTask.Result;
@@ -295,6 +299,7 @@ public static partial class WalletApi
 
     private const int FastLegTimeout = 3000;
     private const int SlowLegTimeout = 4500;
+    private const int EngineRewardsTimeoutMs = 2000;
 
     private static async Task<T> WithTimeout<T>(Task<T> task, int ms, T fallback)
     {

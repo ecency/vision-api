@@ -659,10 +659,28 @@ public static partial class WalletApi
         return results.ToList();
     }
 
+    // Per-wallet cap on the balance fetch. The chain providers allow 10s per
+    // attempt, but the portfolioV2 chain leg has a 4.5s budget for the WHOLE
+    // layer — without a per-wallet cap, one cold/slow provider blows the leg
+    // timeout and the entire chain layer silently disappears from the response
+    // (observed intermittently in production). The capped wallet degrades to
+    // an error item instead of sinking its siblings. The concurrency width
+    // must keep ceil(n / width) * cap under the leg budget: at width 8, up to
+    // 16 wallets (2 batches) finish worst-case in 4s.
+    private const int ChainBalanceTimeoutMs = 2000;
+    private const int ChainFetchConcurrency = 8;
+    // Hard bound so the worst case is exactly two waves (4s < 4.5s leg) no
+    // matter how many addresses a profile lists. Wallets past the cap are not
+    // fetched but still appear as error items, so the response acknowledges
+    // every configured wallet instead of silently omitting the tail.
+    private const int MaxChainWallets = 16;
+
     internal static async Task<List<JsonObject>> BuildChainLayer(JsonNode? accountData, JsonNode? marketData, string currency, bool? onlyEnabled)
     {
         var wallets = ExtractExternalWallets(accountData, onlyEnabled == true);
         if (wallets.Count == 0) return new List<JsonObject>();
+        var skipped = wallets.Skip(MaxChainWallets).ToList();
+        if (skipped.Count > 0) wallets = wallets.Take(MaxChainWallets).ToList();
 
         var items = await ProcessWithConcurrencyLimit(wallets, async wallet =>
         {
@@ -672,7 +690,10 @@ public static partial class WalletApi
 
             try
             {
-                var data = await PrivateApi.FetchChainBalance(chain, wallet.Address);
+                var fetchTask = PrivateApi.FetchChainBalance(chain, wallet.Address);
+                var completed = await Task.WhenAny(fetchTask, Task.Delay(ChainBalanceTimeoutMs));
+                if (completed != fetchTask) throw new Exception("Chain balance request timed out");
+                var data = await fetchTask;
                 var balance = ConvertChainBalanceToAmount(data, decimals);
                 var price = GetTokenPrice(marketData, wallet.Symbol, currency);
                 var iconUrl = config.IconUrl ?? Constants.AssetIconUrls["CHAIN_PLACEHOLDER"];
@@ -695,9 +716,23 @@ public static partial class WalletApi
                     new ItemOptions { Address = wallet.Address, Error = errorMessage },
                     config.IconUrl ?? Constants.AssetIconUrls["CHAIN_PLACEHOLDER"], ChainActions());
             }
-        }, 3);
+        }, ChainFetchConcurrency);
 
-        return items.Where(x => x != null).ToList();
+        var result = items.Where(x => x != null).ToList();
+        foreach (var wallet in skipped)
+        {
+            var chain = wallet.Chain.ToLowerInvariant();
+            var config = ChainConfigs[chain];
+            var decimals = (int)(wallet.Decimals ?? config.Decimals);
+            var price = GetTokenPrice(marketData, wallet.Symbol, currency);
+            result.Add(MakePortfolioItem(
+                !string.IsNullOrEmpty(wallet.Name) ? wallet.Name : config.Name,
+                !string.IsNullOrEmpty(wallet.Symbol) ? wallet.Symbol : config.Symbol,
+                "chain", 0, price, currency, decimals,
+                new ItemOptions { Address = wallet.Address, Error = "Wallet limit reached" },
+                config.IconUrl ?? Constants.AssetIconUrls["CHAIN_PLACEHOLDER"], ChainActions()));
+        }
+        return result;
     }
 
     // ---- JS numeric string formatting ------------------------------------
