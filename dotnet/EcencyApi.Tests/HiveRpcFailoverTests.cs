@@ -63,6 +63,13 @@ public class HiveRpcFailoverTests
                         "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[{\"name\":\"served-by\",\"port\":\"" + Url + "\"}]}");
                     status = 200;
                 }
+                else if (status == -3)
+                {
+                    // Malformed 200: valid JSON, no error field, no usable result —
+                    // the shape observed from misbehaving production nodes.
+                    body = Encoding.UTF8.GetBytes("{\"jsonrpc\":\"2.0\",\"id\":1}");
+                    status = 200;
+                }
                 else
                 {
                     body = Encoding.UTF8.GetBytes("rate limited");
@@ -169,6 +176,53 @@ public class HiveRpcFailoverTests
         await client.Call("condenser_api", "get_accounts", new JsonArray());
         Assert.Equal(3, slow.Hits);
         Assert.True(fast.Hits >= 1);
+    }
+
+    [Fact]
+    public async Task MalformedResultNode_FailsOverWithoutRetry()
+    {
+        await using var malformed = new StubNode(() => -3); // 200, valid JSON, no result
+        await using var good = new StubNode(() => 200);
+
+        var client = new HiveRpcClient(new[] { malformed.Url, good.Url }, timeoutMs: 1500);
+
+        var accounts = await client.GetAccounts(new[] { "good-karma" });
+
+        Assert.NotNull(accounts);
+        Assert.Equal("served-by", accounts![0]!["name"]!.GetValue<string>());
+        // Validation failure advances immediately — one hit, no same-node retry.
+        Assert.Equal(1, malformed.Hits);
+        Assert.True(good.Hits >= 1);
+    }
+
+    [Fact]
+    public async Task MalformedResultNode_IsDemotedOnSubsequentCalls()
+    {
+        await using var malformed = new StubNode(() => -3);
+        await using var good = new StubNode(() => 200);
+
+        var client = new HiveRpcClient(new[] { malformed.Url, good.Url }, timeoutMs: 1500);
+
+        await client.GetAccounts(new[] { "good-karma" });
+        var malformedAfterFirst = malformed.Hits;
+        await client.GetAccounts(new[] { "good-karma" });
+
+        Assert.Equal(malformedAfterFirst, malformed.Hits); // recent failure: not tried again
+        Assert.True(good.Hits >= 2);
+    }
+
+    [Fact]
+    public async Task AllNodesMalformed_ThrowsNamingTheNode()
+    {
+        await using var bad1 = new StubNode(() => -3);
+        await using var bad2 = new StubNode(() => -3);
+
+        var client = new HiveRpcClient(new[] { bad1.Url, bad2.Url }, timeoutMs: 1500);
+
+        var ex = await Assert.ThrowsAnyAsync<Exception>(() =>
+            client.GetAccounts(new[] { "good-karma" }));
+        Assert.Contains("unusable get_accounts result", ex.Message);
+        Assert.Contains("http://127.0.0.1:", ex.Message); // node URL for diagnosability
     }
 
     [Fact]

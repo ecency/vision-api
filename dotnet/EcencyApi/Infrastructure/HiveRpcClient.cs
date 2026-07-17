@@ -44,7 +44,14 @@ public sealed class HiveRpcClient
 
     // ---- calls -------------------------------------------------------------
 
-    public async Task<JsonNode?> Call(string api, string method, JsonNode @params)
+    /// <param name="validateResult">Optional shape check for the RPC result. A node
+    /// can return 200 with valid JSON that carries neither an error nor a usable
+    /// result (observed in production as multi-hour windows of get_accounts
+    /// yielding no array); without validation that response counts as a SUCCESS,
+    /// so the health tracker keeps the poisoned node ranked first for the whole
+    /// window. A failed check is treated as node failure and fails over.</param>
+    public async Task<JsonNode?> Call(string api, string method, JsonNode @params,
+        Func<JsonNode?, bool>? validateResult = null)
     {
         var request = new JsonObject
         {
@@ -69,6 +76,14 @@ public sealed class HiveRpcClient
                 try
                 {
                     var result = await CallNode(node, body);
+                    if (validateResult != null && !validateResult(result))
+                    {
+                        // Don't burn a same-node retry: a node serving malformed
+                        // 200s keeps serving them (observed for hours at a time).
+                        throw new NodeUnavailableException(
+                            $"RPC node {node} returned unusable {method} result",
+                            advanceImmediately: true);
+                    }
                     _health.RecordSuccess(nodeIndex, NowMs - started);
                     return result;
                 }
@@ -204,12 +219,14 @@ public sealed class HiveRpcClient
             // get_accounts([null]) is empty — so this distinction is load-bearing.
             nameArr.Add(n is null ? null : JsonValue.Create(n));
         }
-        var result = await Call("condenser_api", "get_accounts", new JsonArray(nameArr));
+        var result = await Call("condenser_api", "get_accounts", new JsonArray(nameArr),
+            r => r is JsonArray);
         return result as JsonArray;
     }
 
     public Task<JsonNode?> GetDynamicGlobalProperties() =>
-        Call("condenser_api", "get_dynamic_global_properties", new JsonArray());
+        Call("condenser_api", "get_dynamic_global_properties", new JsonArray(),
+            r => r is JsonObject);
 }
 
 /// <summary>
