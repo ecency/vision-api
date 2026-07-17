@@ -659,6 +659,15 @@ public static partial class WalletApi
         return results.ToList();
     }
 
+    // Per-wallet cap on the balance fetch. The chain providers allow 10s per
+    // attempt, but the portfolioV2 chain leg has a 4.5s budget for the WHOLE
+    // layer — without a per-wallet cap, one cold/slow provider blows the leg
+    // timeout and the entire chain layer silently disappears from the response
+    // (observed intermittently in production). 2s keeps two concurrency
+    // batches inside the leg budget; the capped wallet degrades to an error
+    // item instead of sinking its siblings.
+    private const int ChainBalanceTimeoutMs = 2000;
+
     internal static async Task<List<JsonObject>> BuildChainLayer(JsonNode? accountData, JsonNode? marketData, string currency, bool? onlyEnabled)
     {
         var wallets = ExtractExternalWallets(accountData, onlyEnabled == true);
@@ -672,7 +681,10 @@ public static partial class WalletApi
 
             try
             {
-                var data = await PrivateApi.FetchChainBalance(chain, wallet.Address);
+                var fetchTask = PrivateApi.FetchChainBalance(chain, wallet.Address);
+                var completed = await Task.WhenAny(fetchTask, Task.Delay(ChainBalanceTimeoutMs));
+                if (completed != fetchTask) throw new Exception("Chain balance request timed out");
+                var data = await fetchTask;
                 var balance = ConvertChainBalanceToAmount(data, decimals);
                 var price = GetTokenPrice(marketData, wallet.Symbol, currency);
                 var iconUrl = config.IconUrl ?? Constants.AssetIconUrls["CHAIN_PLACEHOLDER"];
