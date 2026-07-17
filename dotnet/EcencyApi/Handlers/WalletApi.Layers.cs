@@ -670,15 +670,17 @@ public static partial class WalletApi
     private const int ChainBalanceTimeoutMs = 2000;
     private const int ChainFetchConcurrency = 8;
     // Hard bound so the worst case is exactly two waves (4s < 4.5s leg) no
-    // matter how many addresses a profile lists. A profile with more entries
-    // keeps its first 16 wallets instead of risking the whole layer.
+    // matter how many addresses a profile lists. Wallets past the cap are not
+    // fetched but still appear as error items, so the response acknowledges
+    // every configured wallet instead of silently omitting the tail.
     private const int MaxChainWallets = 16;
 
     internal static async Task<List<JsonObject>> BuildChainLayer(JsonNode? accountData, JsonNode? marketData, string currency, bool? onlyEnabled)
     {
         var wallets = ExtractExternalWallets(accountData, onlyEnabled == true);
         if (wallets.Count == 0) return new List<JsonObject>();
-        if (wallets.Count > MaxChainWallets) wallets = wallets.Take(MaxChainWallets).ToList();
+        var skipped = wallets.Skip(MaxChainWallets).ToList();
+        if (skipped.Count > 0) wallets = wallets.Take(MaxChainWallets).ToList();
 
         var items = await ProcessWithConcurrencyLimit(wallets, async wallet =>
         {
@@ -716,7 +718,21 @@ public static partial class WalletApi
             }
         }, ChainFetchConcurrency);
 
-        return items.Where(x => x != null).ToList();
+        var result = items.Where(x => x != null).ToList();
+        foreach (var wallet in skipped)
+        {
+            var chain = wallet.Chain.ToLowerInvariant();
+            var config = ChainConfigs[chain];
+            var decimals = (int)(wallet.Decimals ?? config.Decimals);
+            var price = GetTokenPrice(marketData, wallet.Symbol, currency);
+            result.Add(MakePortfolioItem(
+                !string.IsNullOrEmpty(wallet.Name) ? wallet.Name : config.Name,
+                !string.IsNullOrEmpty(wallet.Symbol) ? wallet.Symbol : config.Symbol,
+                "chain", 0, price, currency, decimals,
+                new ItemOptions { Address = wallet.Address, Error = "Wallet limit reached" },
+                config.IconUrl ?? Constants.AssetIconUrls["CHAIN_PLACEHOLDER"], ChainActions()));
+        }
+        return result;
     }
 
     // ---- JS numeric string formatting ------------------------------------
