@@ -95,20 +95,28 @@ handlers resolve the username from the signed code and then **pipe an upstream
 response through unchanged**, so a 401 returned by the backend behind the
 gateway reaches the client looking identical to one this service produced.
 
-The response body length is the quickest way to tell them apart: this service
-answers `SendText(401, "Unauthorized")`, a 12-byte body. A longer body almost
-always means the 401 was piped from further upstream.
+The response body length is a one-way tell. This service answers
+`SendText(401, "Unauthorized")`, a 12-byte body. **A longer body means the 401
+was piped from upstream; a 12-byte body proves nothing**, because an upstream
+that also answers `Unauthorized` is forwarded through at exactly that length.
 
 Two cheap checks before assuming a token problem:
 
-- **Compare against another private-API route that shares `ValidateCode`.** If
-  notifications succeed while one endpoint 401s for the same session, the code
-  validated fine and the failure is downstream of this service. Route-specific
-  auth on the backend, not the caller's token, is then the thing to look at.
+- **Compare against a route that validates strictly.** Pick a sibling that 401s
+  unconditionally when `ValidateCode` returns nothing - `notifications/unread`
+  and `notifications/mark` do. If one of those succeeds while another endpoint
+  401s for the same session, the code validated fine and the failure is
+  downstream of this service.
+
+  **Do not use `notifications` as that canary.** It falls back to a
+  body-supplied `user` when validation fails, and overrides even a validated
+  username with that field whenever it is present. It can therefore answer
+  happily for a request whose code was rejected, which tells you nothing about
+  validation and actively misleads.
 - **Check the failure rate.** A token or session problem affects a subset of
   users; a backend gate that is misconfigured fails for everyone. An endpoint at
-  100% 401 with siblings at 100% success is not an authentication bug in the
-  usual sense.
+  100% 401 while its siblings are at 100% success is not an authentication bug
+  in the usual sense.
 
 Handlers using `RequireAuthedUsername` differ from those calling `ValidateCode`
 directly only in that the former sends the 401 for you - the validation is the
