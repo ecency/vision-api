@@ -87,3 +87,29 @@ Covered by `HiveRpcFailoverTests` and `EngineFailoverTests`; keep new failover b
 - Behavior changes to endpoints need: the route/handler change, a parity `KNOWN_DIVERGENCES` entry when applicable, and a test.
 - Static data changes (e.g. announcements) are code changes: edit the handler data, merge to main, CI ships it.
 - Keep comments explaining *why* a quirk exists (usually "matches the original observable behavior") — they prevent well-meaning regressions.
+
+## Attributing a `/private-api/*` 401
+
+A 401 on a private-API route does not necessarily come from this service. These
+handlers resolve the username from the signed code and then **pipe an upstream
+response through unchanged**, so a 401 returned by the backend behind the
+gateway reaches the client looking identical to one this service produced.
+
+The response body length is the quickest way to tell them apart: this service
+answers `SendText(401, "Unauthorized")`, a 12-byte body. A longer body almost
+always means the 401 was piped from further upstream.
+
+Two cheap checks before assuming a token problem:
+
+- **Compare against another private-API route that shares `ValidateCode`.** If
+  notifications succeed while one endpoint 401s for the same session, the code
+  validated fine and the failure is downstream of this service. Route-specific
+  auth on the backend, not the caller's token, is then the thing to look at.
+- **Check the failure rate.** A token or session problem affects a subset of
+  users; a backend gate that is misconfigured fails for everyone. An endpoint at
+  100% 401 with siblings at 100% success is not an authentication bug in the
+  usual sense.
+
+Handlers using `RequireAuthedUsername` differ from those calling `ValidateCode`
+directly only in that the former sends the 401 for you - the validation is the
+same, so it is never the explanation for one route failing while another passes.
