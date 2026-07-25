@@ -228,11 +228,16 @@ KNOWN_DIVERGENCES = {
         "Same request-delete rerouting as ::min.",
     "/private-api/request-delete::badcode":
         "Same request-delete rerouting as ::min.",
-    "/wallet-api/portfolio-v2::pop":
-        "The HP action list gained set_withdraw_vesting_route so clients can link "
-        "straight to the withdraw routes UI; the reference build emits only "
-        "delegate_vesting_shares and withdraw_vesting.",
 }
+
+# Deliberately NOT listed above: /wallet-api/portfolio-v2::pop, whose HP action list
+# gained set_withdraw_vesting_route (the reference build emits only
+# delegate_vesting_shares and withdraw_vesting). A KNOWN_DIVERGENCES entry skips the
+# case entirely — status and content-type included — which would blind this large
+# aggregation endpoint to unrelated regressions. Its body is already exempt for a
+# better reason: balances and APR move every block, so the run-vs-run comparison puts
+# it in `loose`, which still checks status and content-type. Add an entry here only
+# for a divergence that is deterministic and not already loose.
 
 
 def diff(a_name, b_name, loose_name=None):
