@@ -228,6 +228,10 @@ KNOWN_DIVERGENCES = {
         "Same request-delete rerouting as ::min.",
     "/private-api/request-delete::badcode":
         "Same request-delete rerouting as ::min.",
+    "/wallet-api/portfolio-v2::pop":
+        "The HP action list gained set_withdraw_vesting_route so clients can link "
+        "straight to the withdraw routes UI; the reference build emits only "
+        "delegate_vesting_shares and withdraw_vesting.",
 }
 
 
