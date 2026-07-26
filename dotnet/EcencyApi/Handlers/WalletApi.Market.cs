@@ -32,7 +32,10 @@ public static partial class WalletApi
         return Actions(ids.ToArray());
     }
 
-    internal static JsonArray HpActions() => Actions("delegate_vesting_shares", "withdraw_vesting");
+    // set_withdraw_vesting_route lets clients link straight to the withdraw routes UI.
+    // Deliberately added after the original two ids: clients render actions in order.
+    internal static JsonArray HpActions() =>
+        Actions("delegate_vesting_shares", "withdraw_vesting", "set_withdraw_vesting_route");
 
     internal static JsonArray BuildHbdActions(double savings)
     {
