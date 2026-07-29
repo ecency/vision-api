@@ -228,6 +228,11 @@ KNOWN_DIVERGENCES = {
         "Same request-delete rerouting as ::min.",
     "/private-api/request-delete::badcode":
         "Same request-delete rerouting as ::min.",
+    "/private-api/post-tips/x/x::get":
+        "New cacheable GET twin of POST /private-api/post-tips. The reference build "
+        "has no such route, so it answers with the unmatched-GET template page while "
+        "this one proxies the tips payload. Deterministic and additive; the POST case "
+        "still covers the shared upstream behavior.",
 }
 
 # Deliberately NOT listed above: /wallet-api/portfolio-v2::pop, whose HP action list

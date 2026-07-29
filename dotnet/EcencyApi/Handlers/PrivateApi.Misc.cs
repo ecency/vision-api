@@ -263,12 +263,69 @@ public static partial class PrivateApi
         });
     }
 
+    /// <summary>
+    /// A segment URL resolution reads as structure rather than as a name.
+    ///
+    /// These cannot be escaped away: `.` and `..` are unreserved, so
+    /// EscapeDataString passes them through, and percent-encoding them by hand
+    /// does not help either because Uri decodes `%2E` back to `.` before it
+    /// removes dot segments. Rejecting is the only option that holds.
+    /// </summary>
+    private static bool IsDotSegment(string value) => value is "." or "..";
+
+    /// <summary>
+    /// Upstream path for post tips, or null when a value cannot be expressed as
+    /// a single path segment.
+    ///
+    /// Author and permlink are escaped as path segments. Route values arrive
+    /// percent-decoded and body values are arbitrary strings, so a value carrying
+    /// `/`, `?` or `#` would otherwise be re-parsed as URL structure once this
+    /// string becomes a Uri — addressing a different upstream resource, with this
+    /// service's credentials attached.
+    ///
+    /// Authors and permlinks are made of unreserved characters, which
+    /// EscapeDataString leaves byte-identical, so real traffic is unaffected.
+    /// </summary>
+    public static string? PostTipsPath(string author, string permlink) =>
+        IsDotSegment(author) || IsDotSegment(permlink)
+            ? null
+            : $"post-tips/{Uri.EscapeDataString(author)}/{Uri.EscapeDataString(permlink)}";
+
     public static async Task Tips(HttpContext ctx)
     {
         var body = await ctx.ReadBody();
         var author = MiscBodyInterp(body, "author");
         var permlink = MiscBodyInterp(body, "permlink");
-        await Upstream.Pipe(ApiClient.ApiRequest($"post-tips/{author}/{permlink}", HttpMethod.Get), ctx);
+        var path = PostTipsPath(author, permlink);
+        if (path == null)
+        {
+            await ctx.SendText(400, "Invalid author or permlink");
+            return;
+        }
+        await Upstream.Pipe(ApiClient.ApiRequest(path, HttpMethod.Get), ctx);
+    }
+
+    /// <summary>
+    /// GET twin of <see cref="Tips"/>, same upstream call and same body.
+    ///
+    /// Tips are a plain read keyed only by author/permlink, but the original
+    /// endpoint is a POST, and a POST response is uncacheable by definition — so
+    /// every mount refetched it. This variant is addressable by URL and carries a
+    /// Cache-Control, which lets a client reuse it. The POST stays for clients
+    /// that have not moved over.
+    /// </summary>
+    public static async Task TipsGet(HttpContext ctx)
+    {
+        var author = MiscRouteParam(ctx, "author");
+        var permlink = MiscRouteParam(ctx, "permlink");
+        var path = PostTipsPath(author, permlink);
+        if (path == null)
+        {
+            await ctx.SendText(400, "Invalid author or permlink");
+            return;
+        }
+        ctx.CacheWhenOk(CachePolicy.PostTips);
+        await Upstream.Pipe(ApiClient.ApiRequest(path, HttpMethod.Get), ctx);
     }
 
     public static async Task GameGet(HttpContext ctx)

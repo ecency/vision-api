@@ -96,4 +96,26 @@ public static class HttpContextExtensions
     /// <summary>Raw node for a body field (undefined -> null).</summary>
     public static JsonNode? Field(this JsonObject body, string key) =>
         body.TryGetPropertyValue(key, out var v) ? v : null;
+
+    /// <summary>
+    /// Attach a <see cref="CachePolicy"/> to this response, applied only if it
+    /// finishes as a 200.
+    ///
+    /// The check has to happen at header-flush time, not at call time: handlers
+    /// call this before awaiting the upstream, and Pipe() can still replace the
+    /// status with 504/500 afterwards. OnStarting runs once the status is final
+    /// and before anything is written.
+    /// </summary>
+    public static void CacheWhenOk(this HttpContext ctx, string policy)
+    {
+        ctx.Response.OnStarting(() =>
+        {
+            var value = CachePolicy.ForStatus(ctx.Response.StatusCode, policy);
+            if (value != null)
+            {
+                ctx.Response.Headers.CacheControl = value;
+            }
+            return Task.CompletedTask;
+        });
+    }
 }

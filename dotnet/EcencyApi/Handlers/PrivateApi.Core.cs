@@ -248,9 +248,12 @@ public static partial class PrivateApi
     }
 
     // Public list of Pro usernames for the Pro badge roster. No auth: this is a
-    // public, cached list served straight from the backend.
+    // public, cached list served straight from the backend. The response is the
+    // same for every caller, so it carries a Cache-Control and clients can reuse
+    // it across page views instead of refetching the roster on each one.
     public static async Task ProMembers(HttpContext ctx)
     {
+        ctx.CacheWhenOk(CachePolicy.ProMembers);
         await Upstream.Pipe(ApiClient.ApiRequest("pro-members", HttpMethod.Get), ctx);
     }
 }

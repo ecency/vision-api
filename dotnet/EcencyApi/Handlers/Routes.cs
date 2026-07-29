@@ -71,6 +71,9 @@ public static class Routes
         app.MapGet("/private-api/waves/following", PrivateApi.WavesFollowing);
         app.MapGet("/private-api/waves/trending/tags", PrivateApi.WavesTrendingTags);
         app.MapGet("/private-api/waves/trending/authors", PrivateApi.WavesTrendingAuthors);
+        // Cacheable twin of the POST /private-api/post-tips below; both hit the
+        // same upstream. Registered as GET so the response can be reused.
+        app.MapGet("/private-api/post-tips/{author}/{permlink}", PrivateApi.TipsGet);
 
         // ---- Private Api (POST) ----
         app.MapPost("/private-api/comment-history", PrivateApi.CommentHistory);
