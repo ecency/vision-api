@@ -40,8 +40,11 @@ public static class Announcements
 public static partial class PrivateApi
 {
     // GET ^/private-api/announcements$
+    // The payload is the constant above, so it only changes when this repo is
+    // deployed; clients can hold on to it between page views.
     public static async Task GetAnnouncement(HttpContext ctx)
     {
+        ctx.CacheWhenOk(CachePolicy.Announcements);
         await ctx.SendJson(200, Announcements.Json());
     }
 }

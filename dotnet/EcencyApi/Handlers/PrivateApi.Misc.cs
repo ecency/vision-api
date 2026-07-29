@@ -271,6 +271,26 @@ public static partial class PrivateApi
         await Upstream.Pipe(ApiClient.ApiRequest($"post-tips/{author}/{permlink}", HttpMethod.Get), ctx);
     }
 
+    /// <summary>
+    /// GET twin of <see cref="Tips"/>, same upstream call and same body.
+    ///
+    /// Tips are a plain read keyed only by author/permlink, but the original
+    /// endpoint is a POST, and a POST response is uncacheable by definition — so
+    /// every mount refetched it. This variant is addressable by URL and carries a
+    /// Cache-Control, which lets a client reuse it. The POST stays for clients
+    /// that have not moved over.
+    ///
+    /// Author and permlink arrive as single route segments, so neither can smuggle
+    /// a slash into the upstream path.
+    /// </summary>
+    public static async Task TipsGet(HttpContext ctx)
+    {
+        var author = MiscRouteParam(ctx, "author");
+        var permlink = MiscRouteParam(ctx, "permlink");
+        ctx.CacheWhenOk(CachePolicy.PostTips);
+        await Upstream.Pipe(ApiClient.ApiRequest($"post-tips/{author}/{permlink}", HttpMethod.Get), ctx);
+    }
+
     public static async Task GameGet(HttpContext ctx)
     {
         var body = await ctx.ReadBody();
