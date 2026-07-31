@@ -131,30 +131,84 @@ public static class Upstream
 
         using (resp)
         {
-            var bytes = await resp.Content.ReadAsByteArrayAsync();
-            var status = (int)resp.StatusCode;
-            var respHeaders = new HttpResponseHeaders2(resp);
+            return await ReadUpstreamResponse(resp);
+        }
+    }
 
-            // axios responseType "json": try to parse; fall back to raw text.
-            var text = Encoding.UTF8.GetString(bytes);
-            if (text.Length == 0)
-            {
-                // axios turns an empty body into an empty string
-                return new UpstreamResponse { Status = status, RawText = "", Headers = respHeaders };
-            }
+    /// <summary>
+    /// Multipart/form-data variant of BaseApiRequest, for endpoints that carry a file
+    /// rather than a JSON body. The JSON path can't be reused: it always sets a
+    /// StringContent body with an application/json content type, and multipart needs
+    /// the boundary that MultipartFormDataContent generates for itself.
+    ///
+    /// The caller owns building the content; response handling is identical.
+    /// </summary>
+    public static async Task<UpstreamResponse> BaseMultipartRequest(
+        string url,
+        MultipartFormDataContent content,
+        IEnumerable<KeyValuePair<string, string>>? headers = null,
+        int timeoutMs = DefaultTimeoutMs)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, url);
+        req.Content = content;
 
-            try
+        if (headers != null)
+        {
+            foreach (var (name, value) in headers)
             {
-                var node = JsonNode.Parse(text, documentOptions: new JsonDocumentOptions
+                // Never let a caller override Content-Type here: multipart carries a
+                // generated boundary, and replacing it makes the body unparseable
+                // upstream in a way that only shows up as a confusing 400.
+                if (name.Equals("Content-Type", StringComparison.OrdinalIgnoreCase))
                 {
-                    AllowTrailingCommas = false,
-                });
-                return new UpstreamResponse { Status = status, Json = node, Headers = respHeaders };
+                    continue;
+                }
+                req.Headers.TryAddWithoutValidation(name, value);
             }
-            catch (JsonException)
+        }
+
+        using var cts = new CancellationTokenSource(timeoutMs);
+        HttpResponseMessage resp;
+        try
+        {
+            resp = await Http.SendAsync(req, HttpCompletionOption.ResponseContentRead, cts.Token);
+        }
+        catch (OperationCanceledException e) when (cts.IsCancellationRequested)
+        {
+            throw new UpstreamTimeoutException(url, e);
+        }
+
+        using (resp)
+        {
+            return await ReadUpstreamResponse(resp);
+        }
+    }
+
+    private static async Task<UpstreamResponse> ReadUpstreamResponse(HttpResponseMessage resp)
+    {
+        var bytes = await resp.Content.ReadAsByteArrayAsync();
+        var status = (int)resp.StatusCode;
+        var respHeaders = new HttpResponseHeaders2(resp);
+
+        // axios responseType "json": try to parse; fall back to raw text.
+        var text = Encoding.UTF8.GetString(bytes);
+        if (text.Length == 0)
+        {
+            // axios turns an empty body into an empty string
+            return new UpstreamResponse { Status = status, RawText = "", Headers = respHeaders };
+        }
+
+        try
+        {
+            var node = JsonNode.Parse(text, documentOptions: new JsonDocumentOptions
             {
-                return new UpstreamResponse { Status = status, RawText = text, Headers = respHeaders };
-            }
+                AllowTrailingCommas = false,
+            });
+            return new UpstreamResponse { Status = status, Json = node, Headers = respHeaders };
+        }
+        catch (JsonException)
+        {
+            return new UpstreamResponse { Status = status, RawText = text, Headers = respHeaders };
         }
     }
 

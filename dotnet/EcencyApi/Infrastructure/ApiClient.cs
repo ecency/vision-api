@@ -91,6 +91,34 @@ public static class ApiClient
         return Upstream.BaseApiRequest(url, method, headers, payload, query, timeoutMs);
     }
 
+    /// <summary>
+    /// multipart/form-data variant of ApiRequest, for endpoints carrying a file.
+    /// Applies the same PRIVATE_API_AUTH headers and fails the same way when they
+    /// can't be built.
+    /// </summary>
+    public static Task<UpstreamResponse> ApiMultipartRequest(
+        string endpoint,
+        MultipartFormDataContent content,
+        int timeoutMs = Upstream.DefaultTimeoutMs)
+    {
+        var apiAuth = MakeApiAuth();
+        if (apiAuth == null)
+        {
+            Console.Error.WriteLine("Api auth couldn't be create!");
+            throw new ApiAuthException();
+        }
+
+        var url = $"{Config.PrivateApiAddr}/{endpoint}";
+
+        var headers = new List<KeyValuePair<string, string>>();
+        foreach (var kv in apiAuth)
+        {
+            headers.Add(kv);
+        }
+
+        return Upstream.BaseMultipartRequest(url, content, headers, timeoutMs);
+    }
+
     /// <summary>fetchPromotedEntries + getPromotedEntries (5-minute cached, shuffled).</summary>
     public static async Task<JsonArray> GetPromotedEntries(int limit, int shortContent)
     {

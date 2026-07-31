@@ -613,4 +613,114 @@ public static partial class PrivateApi
         // AI assist generation can take a long time; keep it long.
         await Upstream.Pipe(ApiClient.ApiRequest("ai-assist", HttpMethod.Post, null, data, null, 120000), ctx);
     }
+
+    public static async Task AiTranscribePrice(HttpContext ctx)
+    {
+        var body = await ctx.ReadBody();
+        var username = await ValidateCode(body);
+        if (username == null)
+        {
+            await ctx.SendText(401, "Unauthorized");
+            return;
+        }
+        await Upstream.Pipe(
+            ApiClient.ApiRequest($"ai-transcribe-price?us={username}", HttpMethod.Get), ctx);
+    }
+
+    /// <summary>
+    /// Dictation. Unlike every other private-api route this one carries a file, so the
+    /// request is multipart/form-data rather than JSON and the auth code arrives as a
+    /// form field instead of a JSON property.
+    ///
+    /// `us` is taken from the validated code and never from the client, matching
+    /// AiAssist: the upstream bills whoever `us` names, so accepting it from the body
+    /// would let a caller spend someone else's Points.
+    /// </summary>
+    public static async Task AiTranscribe(HttpContext ctx)
+    {
+        if (!ctx.Request.HasFormContentType)
+        {
+            await ctx.SendText(400, "Expected multipart/form-data");
+            return;
+        }
+
+        IFormCollection form;
+        try
+        {
+            form = await ctx.Request.ReadFormAsync();
+        }
+        catch (Exception e)
+        {
+            // Malformed multipart, or a body past Kestrel's limit.
+            Console.Error.WriteLine($"aiTranscribe(): unreadable form: {e.Message}");
+            await ctx.SendText(400, "Bad Request");
+            return;
+        }
+
+        // ValidateCode takes the JSON body shape, so lift the form field into it and
+        // reuse the one implementation rather than growing a second auth path.
+        var codeBody = new JsonObject { ["code"] = form["code"].ToString() };
+        var username = await ValidateCode(codeBody);
+        if (username == null)
+        {
+            await ctx.SendText(401, "Unauthorized");
+            return;
+        }
+
+        var audio = form.Files.GetFile("audio");
+        if (audio == null)
+        {
+            await ctx.SendText(400, "Missing audio");
+            return;
+        }
+
+        await using var audioStream = audio.OpenReadStream();
+        using var content = BuildTranscribeContent(
+            username,
+            form["duration_ms"].ToString(),
+            form["idempotency_key"].ToString(),
+            audioStream,
+            audio.FileName,
+            audio.ContentType);
+
+        // Transcription is a vendor round trip on top of the upload; keep it long,
+        // matching ai-assist and ai-image-generate.
+        await Upstream.Pipe(ApiClient.ApiMultipartRequest("ai-transcribe", content, 120000), ctx);
+    }
+
+    /// <summary>
+    /// Builds the upstream multipart body. Split out from the handler so the part it
+    /// gets wrong-once-and-badly is testable: `us` must be the caller resolved from the
+    /// signed code, never a value the client supplied, because upstream bills whoever
+    /// `us` names.
+    /// </summary>
+    public static MultipartFormDataContent BuildTranscribeContent(
+        string username,
+        string durationMs,
+        string? idempotencyKey,
+        Stream audio,
+        string? fileName,
+        string? contentType)
+    {
+        var content = new MultipartFormDataContent();
+        content.Add(new StringContent(username), "us");
+        content.Add(new StringContent(durationMs), "duration_ms");
+
+        // Omit rather than send empty: upstream treats an empty key as absent anyway,
+        // and sending "" would fail its [A-Za-z0-9_-]{8,64} validator with a 400.
+        if (!string.IsNullOrEmpty(idempotencyKey))
+        {
+            content.Add(new StringContent(idempotencyKey), "idempotency_key");
+        }
+
+        var fileContent = new StreamContent(audio);
+        if (!string.IsNullOrEmpty(contentType))
+        {
+            fileContent.Headers.ContentType =
+                System.Net.Http.Headers.MediaTypeHeaderValue.Parse(contentType);
+        }
+        content.Add(fileContent, "audio", string.IsNullOrEmpty(fileName) ? "audio" : fileName);
+
+        return content;
+    }
 }
