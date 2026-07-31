@@ -157,6 +157,8 @@ public static class Routes
         app.MapPost("/private-api/ai-generate-image", PrivateApi.AiGenerateImage);
         app.MapPost("/private-api/ai-assist-price", PrivateApi.AiAssistPrice);
         app.MapPost("/private-api/ai-assist", PrivateApi.AiAssist);
+        app.MapPost("/private-api/ai-transcribe-price", PrivateApi.AiTranscribePrice);
+        app.MapPost("/private-api/ai-transcribe", PrivateApi.AiTranscribe);
         app.MapPost("/private-api/usr-activity", PrivateApi.Activities);
         app.MapPost("/private-api/get-game", PrivateApi.GameGet);
         app.MapPost("/private-api/post-game", PrivateApi.GamePost);

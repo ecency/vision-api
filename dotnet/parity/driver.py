@@ -216,6 +216,14 @@ def norm_body(text):
         return text
 
 
+AI_TRANSCRIBE_DIVERGENCE = (
+    "Dictation route added after the port (ePoints ai-transcribe). The reference build "
+    "has no such route and answers 404; this one validates the request and answers "
+    "400/401. Deterministic and additive -- no behavior the reference ever had is "
+    "changing, so there is nothing meaningful to diff. The catalog generates ::min, "
+    "::pop and ::badcode for every POST route, which is why all three appear here."
+)
+
 # Cases where the C# port intentionally differs from Node (Node bugs the port fixes).
 KNOWN_DIVERGENCES = {
     "/auth-api/hs-token-refresh::min":
@@ -233,6 +241,21 @@ KNOWN_DIVERGENCES = {
         "has no such route, so it answers with the unmatched-GET template page while "
         "this one proxies the tips payload. Deterministic and additive; the POST case "
         "still covers the shared upstream behavior.",
+    # Dictation routes, added after the port. The reference build predates them and so
+    # answers 404, while this build validates and answers 400/401. Purely additive: no
+    # behavior the reference ever had is changing, so there is nothing to compare.
+    "/private-api/ai-transcribe-price::min":
+        AI_TRANSCRIBE_DIVERGENCE,
+    "/private-api/ai-transcribe-price::pop":
+        AI_TRANSCRIBE_DIVERGENCE,
+    "/private-api/ai-transcribe-price::badcode":
+        AI_TRANSCRIBE_DIVERGENCE,
+    "/private-api/ai-transcribe::min":
+        AI_TRANSCRIBE_DIVERGENCE,
+    "/private-api/ai-transcribe::pop":
+        AI_TRANSCRIBE_DIVERGENCE,
+    "/private-api/ai-transcribe::badcode":
+        AI_TRANSCRIBE_DIVERGENCE,
 }
 
 # Deliberately NOT listed above: /wallet-api/portfolio-v2::pop, whose HP action list

@@ -69,6 +69,23 @@ public static class ApiClient
         IEnumerable<KeyValuePair<string, string?>>? query = null,
         int timeoutMs = Upstream.DefaultTimeoutMs)
     {
+        var headers = RequiredAuthHeaders();
+        if (extraHeaders != null)
+        {
+            headers.AddRange(extraHeaders);
+        }
+
+        return Upstream.BaseApiRequest(
+            $"{Config.PrivateApiAddr}/{endpoint}", method, headers, payload, query, timeoutMs);
+    }
+
+    /// <summary>
+    /// PRIVATE_API_AUTH headers every upstream call carries. Throws the same way the
+    /// Node version failed when they can't be built, so a misconfigured deployment is
+    /// loud rather than silently unauthenticated.
+    /// </summary>
+    private static List<KeyValuePair<string, string>> RequiredAuthHeaders()
+    {
         var apiAuth = MakeApiAuth();
         if (apiAuth == null)
         {
@@ -76,19 +93,26 @@ public static class ApiClient
             throw new ApiAuthException();
         }
 
-        var url = $"{Config.PrivateApiAddr}/{endpoint}";
-
         var headers = new List<KeyValuePair<string, string>>();
         foreach (var kv in apiAuth)
         {
             headers.Add(kv);
         }
-        if (extraHeaders != null)
-        {
-            headers.AddRange(extraHeaders);
-        }
+        return headers;
+    }
 
-        return Upstream.BaseApiRequest(url, method, headers, payload, query, timeoutMs);
+    /// <summary>
+    /// multipart/form-data variant of ApiRequest, for endpoints carrying a file.
+    /// Applies the same PRIVATE_API_AUTH headers and fails the same way when they
+    /// can't be built.
+    /// </summary>
+    public static Task<UpstreamResponse> ApiMultipartRequest(
+        string endpoint,
+        MultipartFormDataContent content,
+        int timeoutMs = Upstream.DefaultTimeoutMs)
+    {
+        return Upstream.BaseMultipartRequest(
+            $"{Config.PrivateApiAddr}/{endpoint}", content, RequiredAuthHeaders(), timeoutMs);
     }
 
     /// <summary>fetchPromotedEntries + getPromotedEntries (5-minute cached, shuffled).</summary>
