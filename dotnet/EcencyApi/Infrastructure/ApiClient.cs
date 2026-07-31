@@ -69,6 +69,23 @@ public static class ApiClient
         IEnumerable<KeyValuePair<string, string?>>? query = null,
         int timeoutMs = Upstream.DefaultTimeoutMs)
     {
+        var headers = RequiredAuthHeaders();
+        if (extraHeaders != null)
+        {
+            headers.AddRange(extraHeaders);
+        }
+
+        return Upstream.BaseApiRequest(
+            $"{Config.PrivateApiAddr}/{endpoint}", method, headers, payload, query, timeoutMs);
+    }
+
+    /// <summary>
+    /// PRIVATE_API_AUTH headers every upstream call carries. Throws the same way the
+    /// Node version failed when they can't be built, so a misconfigured deployment is
+    /// loud rather than silently unauthenticated.
+    /// </summary>
+    private static List<KeyValuePair<string, string>> RequiredAuthHeaders()
+    {
         var apiAuth = MakeApiAuth();
         if (apiAuth == null)
         {
@@ -76,19 +93,12 @@ public static class ApiClient
             throw new ApiAuthException();
         }
 
-        var url = $"{Config.PrivateApiAddr}/{endpoint}";
-
         var headers = new List<KeyValuePair<string, string>>();
         foreach (var kv in apiAuth)
         {
             headers.Add(kv);
         }
-        if (extraHeaders != null)
-        {
-            headers.AddRange(extraHeaders);
-        }
-
-        return Upstream.BaseApiRequest(url, method, headers, payload, query, timeoutMs);
+        return headers;
     }
 
     /// <summary>
@@ -101,22 +111,8 @@ public static class ApiClient
         MultipartFormDataContent content,
         int timeoutMs = Upstream.DefaultTimeoutMs)
     {
-        var apiAuth = MakeApiAuth();
-        if (apiAuth == null)
-        {
-            Console.Error.WriteLine("Api auth couldn't be create!");
-            throw new ApiAuthException();
-        }
-
-        var url = $"{Config.PrivateApiAddr}/{endpoint}";
-
-        var headers = new List<KeyValuePair<string, string>>();
-        foreach (var kv in apiAuth)
-        {
-            headers.Add(kv);
-        }
-
-        return Upstream.BaseMultipartRequest(url, content, headers, timeoutMs);
+        return Upstream.BaseMultipartRequest(
+            $"{Config.PrivateApiAddr}/{endpoint}", content, RequiredAuthHeaders(), timeoutMs);
     }
 
     /// <summary>fetchPromotedEntries + getPromotedEntries (5-minute cached, shuffled).</summary>

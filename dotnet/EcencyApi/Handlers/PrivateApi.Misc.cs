@@ -714,10 +714,16 @@ public static partial class PrivateApi
         }
 
         var fileContent = new StreamContent(audio);
-        if (!string.IsNullOrEmpty(contentType))
+        // TryParse, not Parse. This value is client-controlled, and Parse throws
+        // FormatException on malformed input -- which escapes the handler's
+        // form-reading catch and surfaces as a 500 from the global middleware. A
+        // label we cannot parse is not worth failing an otherwise valid upload over,
+        // so it is dropped exactly like an absent one; upstream identifies the audio
+        // from its contents regardless.
+        if (!string.IsNullOrEmpty(contentType) &&
+            System.Net.Http.Headers.MediaTypeHeaderValue.TryParse(contentType, out var parsedType))
         {
-            fileContent.Headers.ContentType =
-                System.Net.Http.Headers.MediaTypeHeaderValue.Parse(contentType);
+            fileContent.Headers.ContentType = parsedType;
         }
         content.Add(fileContent, "audio", string.IsNullOrEmpty(fileName) ? "audio" : fileName);
 

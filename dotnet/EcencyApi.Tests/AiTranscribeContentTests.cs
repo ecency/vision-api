@@ -111,4 +111,40 @@ public class AiTranscribeContentTests
 
         Assert.Contains("fake audio bytes", body);
     }
+
+    [Theory]
+    // A bare token with no subtype, a trailing separator, and a broken parameter --
+    // all things a client can put in a multipart part header.
+    [InlineData("audio")]
+    [InlineData("audio/")]
+    [InlineData("audio/mp4;")]
+    [InlineData("audio/mp4; codecs=")]
+    [InlineData("not a media type at all")]
+    [InlineData("///")]
+    public async Task AMalformedContentTypeIsDroppedRatherThanThrowing(string contentType)
+    {
+        // MediaTypeHeaderValue.Parse throws FormatException on these, and the throw
+        // would escape the handler's form-reading catch and become a 500 from the
+        // global middleware. The upload itself is fine, so the label is dropped and
+        // the request proceeds.
+        var ex = Record.Exception(() =>
+        {
+            using var content = Build(contentType: contentType);
+        });
+        Assert.Null(ex);
+
+        using var built = Build(contentType: contentType);
+        var body = await Render(built);
+        Assert.Contains("fake audio bytes", body);
+    }
+
+    [Fact]
+    public async Task AValidContentTypeIsStillForwarded()
+    {
+        // The permissive path above must not have made this a no-op.
+        using var content = Build(contentType: "audio/mp4");
+        var body = await Render(content);
+
+        Assert.Contains("audio/mp4", body);
+    }
 }
