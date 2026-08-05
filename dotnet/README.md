@@ -47,7 +47,7 @@ dotnet/
 
 `HiveRpcClient` keeps the dhive `Client` parameters the Node service used
 (`timeout: 2000`, `failoverThreshold: 2`) but replaces dhive's simple ring
-failover with a health tracker adopted from the vision-next SDK's
+failover with a health tracker adopted from the vision-web SDK's
 `NodeHealthTracker` (simplified for a proxy's call rates):
 
 - **Per-node health state**: consecutive failures, rate-limit parking, and a

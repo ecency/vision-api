@@ -96,4 +96,4 @@ results, and how to regenerate the crypto golden vectors.
 To report a non-critical issue, please file an issue on this GitHub project.
 
 [//]: # 'LINKS'
-[ecency_vision]: https://github.com/ecency/vision-next
+[ecency_vision]: https://github.com/ecency/vision-web
