@@ -90,8 +90,8 @@ jobs:
 
   # Roll the freshly-pushed image out to the running `vision_vapi` swarm service in each
   # region, so a vision-api change (e.g. rotating Feature Spotlight content) ships on its
-  # own instead of waiting for the next vision-next deploy. Mirrors the converge-wait that
-  # vision-next uses for `vision_web`. Assumes the swarm service is named `vision_vapi`
+  # own instead of waiting for the next vision-web deploy. Mirrors the converge-wait that
+  # vision-web uses for `vision_web`. Assumes the swarm service is named `vision_vapi`
   # (stack `vision`, service `vapi`) — verify once with `docker service ls`.
   deploy:
     needs: build
