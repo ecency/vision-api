@@ -80,6 +80,22 @@ public class HiveRpcFailoverTests
                     body = Encoding.UTF8.GetBytes("{\"jsonrpc\":\"2.0\",\"id\":1}");
                     status = 200;
                 }
+                else if (status == -4)
+                {
+                    // RPC-level error: the node answered, the error is the
+                    // application's (no failover, no health penalty).
+                    body = Encoding.UTF8.GetBytes(
+                        "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"message\":\"boom\"}}");
+                    status = 200;
+                }
+                else if (status == -5)
+                {
+                    // Well-formed array whose entries are scalars: passes a bare
+                    // "is an array" check but carries no readable account.
+                    body = Encoding.UTF8.GetBytes(
+                        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[\"invalid\"]}");
+                    status = 200;
+                }
                 else
                 {
                     body = Encoding.UTF8.GetBytes("rate limited");
@@ -258,6 +274,43 @@ public class HiveRpcFailoverTests
 
         Assert.NotNull(accounts);
         Assert.Equal("served-by", accounts![0]!["name"]!.GetValue<string>());
+        // The *first* well-formed answer is the floor, not whichever probe ran last.
+        Assert.Equal(a.Url, accounts[0]!["port"]!.GetValue<string>());
+    }
+
+    // The probe is optional, so its failure must not fail the request: an RPC-level
+    // error from the node we only consulted to improve on an answer we already hold
+    // would otherwise turn a call that previously succeeded into a hard failure.
+    [Fact]
+    public async Task PreferenceProbeHittingRpcError_StillReturnsTheFirstAnswer()
+    {
+        await using var stripped = new StubNode(() => 200) { ServesMetadata = false };
+        await using var erroring = new StubNode(() => -4);
+
+        var client = new HiveRpcClient(new[] { stripped.Url, erroring.Url }, timeoutMs: 1500);
+
+        var accounts = await client.GetAccounts(new[] { "good-karma" });
+
+        Assert.NotNull(accounts);
+        Assert.Equal(stripped.Url, accounts![0]!["port"]!.GetValue<string>());
+    }
+
+    // A node answering with scalar entries passes a bare "is an array" check but
+    // reads as empty downstream — the same silent blanking a metadata-stripping
+    // node causes, so it must fail over rather than be accepted.
+    [Fact]
+    public async Task ScalarAccountArray_FailsOverAsUnusable()
+    {
+        await using var scalar = new StubNode(() => -5);
+        await using var good = new StubNode(() => 200);
+
+        var client = new HiveRpcClient(new[] { scalar.Url, good.Url }, timeoutMs: 1500);
+
+        var accounts = await client.GetAccounts(new[] { "good-karma" });
+
+        Assert.NotNull(accounts);
+        Assert.Equal(good.Url, accounts![0]!["port"]!.GetValue<string>());
+        Assert.Equal(1, scalar.Hits); // unusable result advances immediately
     }
 
     // Probing is bounded: an account with no metadata is a common case that no node

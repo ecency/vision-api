@@ -128,6 +128,11 @@ public sealed class HiveRpcClient
                     // The node answered; the error is the application's. No
                     // failover (dhive semantics), and no failure mark.
                     _health.RecordSuccess(nodeIndex, NowMs - started);
+                    // ...but if we only came to this node to improve on an answer we
+                    // already hold, its error belongs to the optional probe, not to
+                    // the caller's request. Rethrowing here would fail a call that
+                    // would have succeeded without the preference.
+                    if (haveUnpreferred) return unpreferred;
                     throw;
                 }
                 catch (NodeUnavailableException e)
@@ -261,9 +266,28 @@ public sealed class HiveRpcClient
             nameArr.Add(n is null ? null : JsonValue.Create(n));
         }
         var result = await Call("condenser_api", "get_accounts", new JsonArray(nameArr),
-            r => r is JsonArray,
+            IsAccountArray,
             HasAnyAccountMetadata);
         return result as JsonArray;
+    }
+
+    /// <summary>
+    /// A usable get_accounts result: an array whose entries are account objects or
+    /// JSON null (an unknown account). A node answering with scalar entries passes a
+    /// bare "is an array" check but yields nothing readable downstream — metadata
+    /// reads off it come back empty, which silently blanks portfolio token
+    /// visibility exactly like a metadata-stripping node. Treat it as node failure.
+    /// </summary>
+    internal static bool IsAccountArray(JsonNode? result)
+    {
+        if (result is not JsonArray accounts) return false;
+
+        foreach (var account in accounts)
+        {
+            if (account is not null and not JsonObject) return false;
+        }
+
+        return true;
     }
 
     /// <summary>
