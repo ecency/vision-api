@@ -42,6 +42,10 @@ public sealed class HiveRpcClient
 
     private static long NowMs => Environment.TickCount64;
 
+    /// <summary>How many nodes may be consulted to satisfy a soft result
+    /// preference before the first well-formed answer is accepted as-is.</summary>
+    private const int MaxPreferenceProbes = 2;
+
     // ---- calls -------------------------------------------------------------
 
     /// <param name="validateResult">Optional shape check for the RPC result. A node
@@ -50,8 +54,21 @@ public sealed class HiveRpcClient
     /// yielding no array); without validation that response counts as a SUCCESS,
     /// so the health tracker keeps the poisoned node ranked first for the whole
     /// window. A failed check is treated as node failure and fails over.</param>
+    /// <param name="preferResult">Optional *soft* check: the result is well-formed
+    /// but this node cannot serve the caller's needs. Unlike validateResult this is
+    /// not a health signal — the node is fine for other calls — so it is neither
+    /// retried nor marked unhealthy; we simply move on and keep its answer. If no
+    /// node satisfies the preference, the first such answer is returned rather than
+    /// throwing, so the caller is never worse off than without the preference.
+    ///
+    /// Exists because some Hive nodes serve accounts with account metadata stripped:
+    /// balances and reputation are correct, posting_json_metadata is empty. That is a
+    /// valid 200 with a usable array, so shape validation passes and the latency EWMA
+    /// keeps such a node ranked first — silently blanking every metadata-derived
+    /// feature (portfolio engine/chain token visibility) with no error and no log.</param>
     public async Task<JsonNode?> Call(string api, string method, JsonNode @params,
-        Func<JsonNode?, bool>? validateResult = null)
+        Func<JsonNode?, bool>? validateResult = null,
+        Func<JsonNode?, bool>? preferResult = null)
     {
         var request = new JsonObject
         {
@@ -65,6 +82,9 @@ public sealed class HiveRpcClient
         var body = JsJson.Stringify(request);
 
         Exception? lastError = null;
+        JsonNode? unpreferred = null;
+        var haveUnpreferred = false;
+        var unpreferredCount = 0;
 
         foreach (var nodeIndex in _health.OrderedNodeIndices())
         {
@@ -84,7 +104,23 @@ public sealed class HiveRpcClient
                             $"RPC node {node} returned unusable {method} result",
                             advanceImmediately: true);
                     }
+                    // The node is healthy either way — record the success before
+                    // deciding whether its answer is the one we wanted.
                     _health.RecordSuccess(nodeIndex, NowMs - started);
+                    if (preferResult != null && !preferResult(result))
+                    {
+                        // Keep the first such answer as the floor and try the next
+                        // node; same-node retry would return the same thing.
+                        if (!haveUnpreferred) { unpreferred = result; haveUnpreferred = true; }
+                        // Bounded on purpose. Roughly an eighth of active accounts
+                        // genuinely carry no metadata, and for those NO node can
+                        // satisfy the preference — probing the whole pool every time
+                        // would multiply RPC load on a common case to route around a
+                        // rare one. One alternative is enough to get past a single
+                        // metadata-stripping node, which is all this guards against.
+                        if (++unpreferredCount >= MaxPreferenceProbes) return unpreferred;
+                        break;
+                    }
                     return result;
                 }
                 catch (RpcException)
@@ -117,6 +153,11 @@ public sealed class HiveRpcClient
                 }
             }
         }
+
+        // No node satisfied the preference, but one answered well-formed: that is
+        // the normal outcome when the preference is genuinely unsatisfiable (an
+        // account really has no metadata), so return it instead of failing.
+        if (haveUnpreferred) return unpreferred;
 
         // Every node exhausted — surface the last transport error (dhive throws
         // after cycling the whole list).
@@ -220,8 +261,35 @@ public sealed class HiveRpcClient
             nameArr.Add(n is null ? null : JsonValue.Create(n));
         }
         var result = await Call("condenser_api", "get_accounts", new JsonArray(nameArr),
-            r => r is JsonArray);
+            r => r is JsonArray,
+            HasAnyAccountMetadata);
         return result as JsonArray;
+    }
+
+    /// <summary>
+    /// True when at least one returned account carries a non-empty
+    /// posting_json_metadata. Nodes that strip account metadata answer with a
+    /// well-formed array whose entries have it blank; portfolio token visibility
+    /// is derived from that field, so such an answer silently reads as "this user
+    /// enabled nothing". Soft preference, not a health signal: an account that
+    /// genuinely has no metadata produces the same shape, and after every node
+    /// declines the caller still gets the response.
+    /// </summary>
+    internal static bool HasAnyAccountMetadata(JsonNode? result)
+    {
+        if (result is not JsonArray accounts || accounts.Count == 0) return true;
+
+        var sawAccount = false;
+        foreach (var account in accounts)
+        {
+            if (account is not JsonObject) continue;
+            sawAccount = true;
+            var meta = JsVal.AsString(JsVal.Prop(account, "posting_json_metadata"));
+            if (!string.IsNullOrEmpty(meta)) return true;
+        }
+
+        // An all-null array (unknown account) has nothing to prefer either way.
+        return !sawAccount;
     }
 
     public Task<JsonNode?> GetDynamicGlobalProperties() =>
@@ -237,15 +305,19 @@ public sealed class HiveRpcClient
 /// </summary>
 public static class HiveClients
 {
+    // techcoderx.com and hiveapi.actifit.io are deliberately absent: both serve
+    // accounts with posting_json_metadata stripped (balances correct, metadata
+    // empty). They are fast, so the latency EWMA ranked them first and the
+    // portfolio engine/chain layers came back empty for everyone. GetAccounts
+    // also routes around such a node at runtime, but keeping them out of the pool
+    // means correctness here does not depend on that fallback firing.
     public static readonly HiveRpcClient Default = new(new[]
     {
         "https://api.hive.blog",
-        "https://techcoderx.com",
         "https://api.deathwing.me",
         "https://rpc.mahdiyari.info",
         "https://hive-api.arcange.eu",
         "https://api.openhive.network",
-        "https://hiveapi.actifit.io",
         "https://hive-api.3speak.tv",
         "https://api.syncad.com",
         "https://api.c0ff33a.uk",

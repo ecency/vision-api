@@ -21,6 +21,16 @@ public class HiveRpcFailoverTests
         public string Url { get; }
         public int Hits;
 
+        /// <summary>Whether this node serves account metadata. Nodes that strip it
+        /// answer with a well-formed account whose posting_json_metadata is empty.</summary>
+        public bool ServesMetadata = true;
+
+        // A healthy node's get_accounts result. Account-metadata presence matters:
+        // GetAccounts prefers a node that serves it, so the default stub carries it.
+        private string AccountResultBody =>
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[{\"name\":\"served-by\",\"port\":\"" + Url
+            + "\",\"posting_json_metadata\":" + (ServesMetadata ? "\"{\\\"profile\\\":{}}\"" : "\"\"") + "}]}";
+
         public StubNode(Func<int> handler)
         {
             _handler = handler;
@@ -45,7 +55,7 @@ public class HiveRpcFailoverTests
                 if (status == 200)
                 {
                     body = Encoding.UTF8.GetBytes(
-                        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[{\"name\":\"served-by\",\"port\":\"" + Url + "\"}]}");
+                        AccountResultBody);
                 }
                 else if (status == -1)
                 {
@@ -60,7 +70,7 @@ public class HiveRpcFailoverTests
                     // 1s unproven prior, below any test timeout).
                     await Task.Delay(1500);
                     body = Encoding.UTF8.GetBytes(
-                        "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[{\"name\":\"served-by\",\"port\":\"" + Url + "\"}]}");
+                        AccountResultBody);
                     status = 200;
                 }
                 else if (status == -3)
@@ -209,6 +219,62 @@ public class HiveRpcFailoverTests
 
         Assert.Equal(malformedAfterFirst, malformed.Hits); // recent failure: not tried again
         Assert.True(good.Hits >= 2);
+    }
+
+    // A node can strip account metadata: balances and reputation are correct but
+    // posting_json_metadata comes back empty. That is a well-formed array, so shape
+    // validation passes and the latency EWMA happily keeps such a node first —
+    // silently blanking portfolio engine/chain token visibility, which is derived
+    // entirely from that field. GetAccounts routes around it.
+    [Fact]
+    public async Task MetadataStrippingNode_IsSkippedForAccountFetches()
+    {
+        await using var stripped = new StubNode(() => 200) { ServesMetadata = false };
+        await using var full = new StubNode(() => 200);
+
+        var client = new HiveRpcClient(new[] { stripped.Url, full.Url }, timeoutMs: 1500);
+
+        var accounts = await client.GetAccounts(new[] { "good-karma" });
+
+        Assert.NotNull(accounts);
+        var meta = accounts![0]!["posting_json_metadata"]!.GetValue<string>();
+        Assert.False(string.IsNullOrEmpty(meta), "should have used the node serving metadata");
+        Assert.Equal(1, stripped.Hits); // consulted once, no same-node retry
+        Assert.True(full.Hits >= 1);
+    }
+
+    // The preference is soft: an account that genuinely has no metadata looks
+    // identical to a stripped response, so once no node can do better the answer
+    // is returned rather than failing the request.
+    [Fact]
+    public async Task NoNodeServesMetadata_StillReturnsTheAccount()
+    {
+        await using var a = new StubNode(() => 200) { ServesMetadata = false };
+        await using var b = new StubNode(() => 200) { ServesMetadata = false };
+
+        var client = new HiveRpcClient(new[] { a.Url, b.Url }, timeoutMs: 1500);
+
+        var accounts = await client.GetAccounts(new[] { "good-karma" });
+
+        Assert.NotNull(accounts);
+        Assert.Equal("served-by", accounts![0]!["name"]!.GetValue<string>());
+    }
+
+    // Probing is bounded: an account with no metadata is a common case that no node
+    // can satisfy, so the pool must not be swept on every such request.
+    [Fact]
+    public async Task MetadataPreference_ProbesAtMostTwoNodes()
+    {
+        await using var a = new StubNode(() => 200) { ServesMetadata = false };
+        await using var b = new StubNode(() => 200) { ServesMetadata = false };
+        await using var c = new StubNode(() => 200) { ServesMetadata = false };
+        await using var d = new StubNode(() => 200) { ServesMetadata = false };
+
+        var client = new HiveRpcClient(new[] { a.Url, b.Url, c.Url, d.Url }, timeoutMs: 1500);
+
+        Assert.NotNull(await client.GetAccounts(new[] { "good-karma" }));
+
+        Assert.Equal(2, a.Hits + b.Hits + c.Hits + d.Hits);
     }
 
     [Fact]
