@@ -18,7 +18,7 @@ public class EngineOptionalLegTests
     {
         var expected = new JsonArray { new JsonObject { ["symbol"] = "LEO" } };
 
-        var result = await WalletApi.Optional(Task.FromResult(expected), "engine tokens");
+        var result = await WalletApi.Optional(Task.FromResult(expected), "engine tokens", 2000);
 
         Assert.Single(result);
         Assert.Equal("LEO", result[0]!["symbol"]!.GetValue<string>());
@@ -29,9 +29,31 @@ public class EngineOptionalLegTests
     {
         var failed = Task.FromException<JsonArray>(new Exception("upstream down"));
 
-        var result = await WalletApi.Optional(failed, "engine metrics");
+        var result = await WalletApi.Optional(failed, "engine metrics", 2000);
 
         Assert.Empty(result);
+    }
+
+    // A stalling upstream, not a throwing one, is the outage that matters here:
+    // the engine node pool is walked at 2s per attempt and far outlasts the leg
+    // budget, so catching exceptions alone would leave the caller waiting until
+    // its own timeout returned an empty layer — losing the balances entirely.
+    [Fact]
+    public async Task Optional_BoundsAStallingLeg()
+    {
+        var stalled = new TaskCompletionSource<JsonArray>();
+
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        var result = await WalletApi.Optional(stalled.Task, "engine metrics", 150);
+        started.Stop();
+
+        Assert.Empty(result);
+        Assert.True(started.ElapsedMilliseconds < 2000,
+            $"should have given up near the timeout, took {started.ElapsedMilliseconds}ms");
+
+        // Completing late must not fault anything the caller already moved past.
+        stalled.SetException(new Exception("late failure"));
+        await Task.Delay(50);
     }
 
     // Enrichment legs must not be able to take the layer down between them: even
@@ -41,9 +63,9 @@ public class EngineOptionalLegTests
     public async Task Optional_LetsBalancesSurviveLosingEveryEnrichmentLeg()
     {
         var tokens = WalletApi.Optional(
-            Task.FromException<JsonArray>(new Exception("tokens down")), "engine tokens");
+            Task.FromException<JsonArray>(new Exception("tokens down")), "engine tokens", 2000);
         var metrics = WalletApi.Optional(
-            Task.FromException<JsonArray>(new Exception("metrics down")), "engine metrics");
+            Task.FromException<JsonArray>(new Exception("metrics down")), "engine metrics", 2000);
 
         Assert.Empty(await tokens);
         Assert.Empty(await metrics);
