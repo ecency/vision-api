@@ -154,6 +154,21 @@ public static partial class WalletApi
         }
     }
 
+    /// <summary>
+    /// Degrades an enrichment leg to an empty result instead of failing the caller.
+    /// The engine layer must survive losing decoration; only the balances leg is
+    /// load-bearing. Logged once so a persistent upstream outage is still visible.
+    /// </summary>
+    internal static async Task<JsonArray> Optional(Task<JsonArray> task, string label)
+    {
+        try { return await task; }
+        catch (Exception err)
+        {
+            Console.WriteLine($"failed to get {label} {err.Message}");
+            return new JsonArray();
+        }
+    }
+
     private static async Task<JsonArray> FetchEngineTokensWithBalance(string username)
     {
         try
@@ -163,8 +178,15 @@ public static partial class WalletApi
             var symbols = balances.Select(b => JsVal.AsString(JsVal.Prop(b, "symbol")) ?? JsVal.ToJsString(JsVal.Prop(b, "symbol")))
                 .Where(s => s != null).Select(s => s!).ToList();
 
-            var tokensTask = FetchEngineTokens(symbols);
-            var metricsTask = FetchEngineMetrics(symbols);
+            // Balances are the only required leg: they are the user's actual
+            // holdings. Tokens (name/precision/icon) and metrics (market price,
+            // used for fiat valuation) are enrichment — ConvertEngineToken already
+            // null-tolerates both. Letting either failure propagate would hit the
+            // catch below and blank the whole layer, so a metrics outage would look
+            // identical to a total Hive-Engine outage: no tokens in the wallet at
+            // all. Degrade to unpriced balances instead of showing nothing.
+            var tokensTask = Optional(FetchEngineTokens(symbols), "engine tokens");
+            var metricsTask = Optional(FetchEngineMetrics(symbols), "engine metrics");
             // The rewards upstream allows 30s, but this whole fetch must fit
             // the portfolioV2 engine leg budget (4.5s) — a slow rewards call
             // would otherwise blank the entire engine layer. Rewards are
