@@ -154,6 +154,32 @@ public static partial class WalletApi
         }
     }
 
+    /// <summary>
+    /// Degrades an enrichment leg to an empty result instead of failing the caller.
+    /// The engine layer must survive losing decoration; only the balances leg is
+    /// load-bearing.
+    ///
+    /// Bounded as well as caught: a stalling upstream is the more common outage,
+    /// and EngineRpcClient.Find walks the whole node pool at 2s per attempt, which
+    /// far outlasts the engine leg's budget. Catching exceptions alone would leave
+    /// Task.WhenAll pending until the caller's own timeout fired and returned an
+    /// empty layer — discarding the balances this exists to preserve.
+    /// </summary>
+    internal static Task<JsonArray> Optional(Task<JsonArray> task, string label, int timeoutMs) =>
+        WithTimeout(Observed(task, label), timeoutMs, new JsonArray());
+
+    /// Never faults, so timing it out cannot leave an unobserved exception behind.
+    /// Logged once so a persistent upstream outage is still visible.
+    private static async Task<JsonArray> Observed(Task<JsonArray> task, string label)
+    {
+        try { return await task; }
+        catch (Exception err)
+        {
+            Console.WriteLine($"failed to get {label} {err.Message}");
+            return new JsonArray();
+        }
+    }
+
     private static async Task<JsonArray> FetchEngineTokensWithBalance(string username)
     {
         try
@@ -163,8 +189,15 @@ public static partial class WalletApi
             var symbols = balances.Select(b => JsVal.AsString(JsVal.Prop(b, "symbol")) ?? JsVal.ToJsString(JsVal.Prop(b, "symbol")))
                 .Where(s => s != null).Select(s => s!).ToList();
 
-            var tokensTask = FetchEngineTokens(symbols);
-            var metricsTask = FetchEngineMetrics(symbols);
+            // Balances are the only required leg: they are the user's actual
+            // holdings. Tokens (name/precision/icon) and metrics (market price,
+            // used for fiat valuation) are enrichment — ConvertEngineToken already
+            // null-tolerates both. Letting either failure propagate would hit the
+            // catch below and blank the whole layer, so a metrics outage would look
+            // identical to a total Hive-Engine outage: no tokens in the wallet at
+            // all. Degrade to unpriced balances instead of showing nothing.
+            var tokensTask = Optional(FetchEngineTokens(symbols), "engine tokens", EngineEnrichmentTimeoutMs);
+            var metricsTask = Optional(FetchEngineMetrics(symbols), "engine metrics", EngineEnrichmentTimeoutMs);
             // The rewards upstream allows 30s, but this whole fetch must fit
             // the portfolioV2 engine leg budget (4.5s) — a slow rewards call
             // would otherwise blank the entire engine layer. Rewards are
@@ -300,6 +333,9 @@ public static partial class WalletApi
     private const int FastLegTimeout = 3000;
     private const int SlowLegTimeout = 4500;
     private const int EngineRewardsTimeoutMs = 2000;
+    // Same budget as rewards: balances must complete first, then the enrichment
+    // legs run concurrently, and the whole engine fetch has to fit SlowLegTimeout.
+    private const int EngineEnrichmentTimeoutMs = 2000;
 
     private static async Task<T> WithTimeout<T>(Task<T> task, int ms, T fallback)
     {
