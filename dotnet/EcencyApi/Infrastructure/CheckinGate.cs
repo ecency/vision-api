@@ -126,8 +126,9 @@ public static class CheckinGate
     /// The three have to happen together. Two check-ins for one account can
     /// arrive in the same instant (two tabs opening at once both fire the ping
     /// their page load schedules). If both read the anchor before either writes,
-    /// both are forwarded, which is the burst this gate exists to collapse. Serializing them makes a concurrent duplicate behave exactly
-    /// like a sequential one: the second reads the anchor the first just wrote
+    /// both are forwarded, which is the burst this gate exists to collapse.
+    /// Serializing them makes a concurrent duplicate behave exactly like a
+    /// sequential one: the second reads the anchor the first just wrote
     /// and is absorbed. That stays correct in the direction this gate cares
     /// about, because a check-in milliseconds behind another is one the backend
     /// refuses regardless.
@@ -197,10 +198,13 @@ public static class CheckinGate
                     MemCache.Del(key);
                 }
             }
-            catch (Exception e)
+            catch
             {
-                Console.Error.WriteLine(e);
-                Console.Error.WriteLine("Cache release failed.");
+                // Deliberately silent as well as swallowed. This runs after the
+                // response has been written, so letting it escape would raise an
+                // error the client can no longer be told about. A cache throwing
+                // here is already saying so from the read and the write on the way
+                // in. A request handler should not be adding logging of its own.
             }
         }
     }
