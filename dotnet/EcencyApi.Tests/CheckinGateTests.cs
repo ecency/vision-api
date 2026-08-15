@@ -19,12 +19,14 @@ public class CheckinGateTests
     private const long ClientPollIntervalMs = 1000 * 60 * 15 + 8;
 
     /// <summary>
-    /// Conservative lower bound on the points backend's own per-account minimum
-    /// spacing, which is a little under 15 minutes. The exact value belongs to
-    /// that service; the gate only needs to stay below it, so that anything it
-    /// absorbs is something the backend would have refused anyway.
+    /// Bounds on the points backend's own per-account minimum spacing, which is a
+    /// little under 15 minutes. The exact value belongs to that service, so the
+    /// gate is pinned against the bounds rather than the number: it must absorb
+    /// only inside the lower bound, then anchor only outside the upper one.
     /// </summary>
     private const long BackendMinSpacingLowerBoundMs = 870_000;
+
+    private const long BackendMinSpacingUpperBoundMs = 900_000;
 
     [Fact]
     public void TheWindowClosesWellBeforeAClientPollsAgain()
@@ -46,10 +48,20 @@ public class CheckinGateTests
     }
 
     [Fact]
+    public void TheAnchorOnlyMovesOnceTheBackendWouldCredit()
+    {
+        // The other half of the same rule. Anchoring on an attempt the backend
+        // refuses moves the window under the caller's own schedule, which costs it
+        // the next check-in just as surely as absorbing one would.
+        Assert.True(CheckinGate.AnchorAfterMs >= BackendMinSpacingUpperBoundMs);
+        Assert.True(CheckinGate.AnchorAfterMs > CheckinGate.WindowMs);
+    }
+
+    [Fact]
     public void ACachedEntryOutlivesItsOwnWindow()
     {
         // If the entry expired first, the window would end early and silently.
-        Assert.True(CheckinGate.CacheTtlSeconds * 1000 >= CheckinGate.WindowMs);
+        Assert.True(CheckinGate.CacheTtlSeconds * 1000 >= CheckinGate.AnchorAfterMs);
     }
 
     [Fact]
@@ -106,8 +118,12 @@ public class CheckinGateTests
         Assert.False(CheckinGate.IsWithinWindow(stamp, 1_000_000));
     }
 
-    [Fact]
-    public void AbsorbedRepeatsDoNotDisplaceASteadyPoller()
+    [Theory]
+    [InlineData(60_000)]     // absorbed outright
+    [InlineData(420_000)]    // absorbed outright
+    [InlineData(800_000)]    // forwarded, refused by the backend, must not anchor
+    [InlineData(880_000)]    // same, right up against the anchor threshold
+    public void ASecondSourceNeverDisplacesASteadyPoller(long extraSourceOffsetMs)
     {
         // Mirrors the handler loop: a forwarded check-in stores its timestamp, an
         // absorbed one stores nothing. A second check-in source for the same
@@ -119,8 +135,6 @@ public class CheckinGateTests
         // was absorbed, that absorption moved the window again, so the account
         // never got another check-in through until its page reloaded. Anchoring the
         // window to the last *forwarded* check-in is what breaks that loop.
-        const long extraSourceOffsetMs = 420_000;
-
         string? stored = null;
         var pollsForwarded = 0;
 
@@ -143,12 +157,51 @@ public class CheckinGateTests
     }
 
     [Fact]
+    public void AnAttemptTheBackendWillRefuseIsForwardedButDoesNotAnchor()
+    {
+        // A second source landing between the two thresholds: too far out for the
+        // gate to absorb, too close for the backend to credit. It has to go
+        // upstream. It also has to leave the anchor alone, or the caller's own
+        // poll a moment later lands inside a window that moved out from under it.
+        var anchor = CheckinGate.Stamp(0);
+        var tooEarly = (CheckinGate.WindowMs + CheckinGate.AnchorAfterMs) / 2;
+
+        var extra = CheckinGate.Decide(anchor, tooEarly);
+
+        Assert.True(extra.Forward);
+        Assert.Null(extra.StampToStore);
+
+        // The anchor is untouched, so the scheduled poll is still due.
+        var poll = CheckinGate.Decide(anchor, ClientPollIntervalMs);
+
+        Assert.True(poll.Forward);
+        Assert.NotNull(poll.StampToStore);
+    }
+
+    [Fact]
+    public void AStampIsOnlyEverHandedOutForAForwardedCheckin()
+    {
+        // An absorbed request never reaches upstream, so a stamp for one would
+        // anchor the window on a check-in that never happened.
+        var anchor = CheckinGate.Stamp(0);
+
+        for (var at = 0L; at <= CheckinGate.AnchorAfterMs * 2; at += 10_000)
+        {
+            var decision = CheckinGate.Decide(anchor, at);
+            if (decision.StampToStore != null)
+            {
+                Assert.True(decision.Forward);
+            }
+        }
+    }
+
+    [Fact]
     public void AnAbsorbedRepeatStoresNothing()
     {
         // The structural half of the rule above: the gate cannot hand a caller a
         // timestamp to store for a request it just absorbed.
         var stamp = CheckinGate.Stamp(1_000_000);
-        var decision = CheckinGate.Decide(stamp, 1_000_000 + CheckinGate.WindowMs - 1);
+        var decision = CheckinGate.Decide(stamp, (1_000_000 + CheckinGate.WindowMs) - 1);
 
         Assert.False(decision.Forward);
         Assert.Null(decision.StampToStore);

@@ -102,21 +102,25 @@ public static partial class PrivateApi
             if (!decision.Forward)
             {
                 // A repeat inside the window: ack it and drop it, storing nothing.
-                // Refreshing the window here would push it past this account's next
-                // scheduled check-in, which would then be absorbed as well. It has
-                // to stay anchored to the last check-in that reached the backend.
+                // Moving the anchor here would push it past this account's next
+                // scheduled check-in, which would then be absorbed as well.
                 await ctx.SendJson(201, new JsonObject());
                 return;
             }
 
-            try
+            // Only a check-in the backend will credit becomes the new anchor; see
+            // CheckinGate for why a forwarded-but-refused attempt must not move it.
+            if (decision.StampToStore != null)
             {
-                MemCache.Set(key, decision.StampToStore!, CheckinGate.CacheTtlSeconds);
-            }
-            catch (Exception e)
-            {
-                Console.Error.WriteLine(e);
-                Console.Error.WriteLine("Cache set failed.");
+                try
+                {
+                    MemCache.Set(key, decision.StampToStore, CheckinGate.CacheTtlSeconds);
+                }
+                catch (Exception e)
+                {
+                    Console.Error.WriteLine(e);
+                    Console.Error.WriteLine("Cache set failed.");
+                }
             }
         }
 
