@@ -81,72 +81,20 @@ public static partial class PrivateApi
 
         if (tyIsTen)
         {
-            // req.headers['x-real-ip'] || req.connection.remoteAddress || req.headers['x-forwarded-for'] || ''
-            var vip = ctx.Request.Headers["x-real-ip"].ToString();
-            if (vip.Length == 0)
-            {
-                vip = ctx.Connection.RemoteIpAddress?.ToString() ?? "";
-            }
-            if (vip.Length == 0)
-            {
-                vip = ctx.Request.Headers["x-forwarded-for"].ToString();
-            }
-            var identifier = vip;
+            // Keyed on the account, not the caller's address: see CheckinGate for why
+            // an address-keyed window makes accounts behind one address compete for a
+            // single check-in slot, plus why the read, the decision and the write
+            // have to be one step.
+            var decision = CheckinGate.DecideAndReserve(
+                username, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 
-            string? rec = null;
-            try
+            if (!decision.Forward)
             {
-                rec = MemCache.Get<string>(identifier);
-            }
-            catch (Exception e)
-            {
-                Console.Error.WriteLine(e);
-                Console.Error.WriteLine("Cache get failed.");
-            }
-
-            if (!string.IsNullOrEmpty(rec))
-            {
-                var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                var withinWindow = double.TryParse(rec, System.Globalization.NumberStyles.Float,
-                        System.Globalization.CultureInfo.InvariantCulture, out var recMs)
-                    && nowMs - recMs < 900000;
-
-                if (withinWindow)
-                {
-                    await ctx.SendJson(201, new JsonObject());
-                }
-                try
-                {
-                    MemCache.Set(identifier,
-                        DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(), 901);
-                }
-                catch (Exception e)
-                {
-                    Console.Error.WriteLine(e);
-                    Console.Error.WriteLine("Cache set failed.");
-                }
-                if (withinWindow)
-                {
-                    // The Node implementation was missing this return: it acked the
-                    // rate-limited checkin with 201 but still forwarded the duplicate
-                    // event upstream (pipe then skipped the second response, logging
-                    // "headers already sent" on every occurrence). Short-circuit after
-                    // refreshing the sliding window, as the branch always intended.
-                    return;
-                }
-            }
-            else
-            {
-                try
-                {
-                    MemCache.Set(identifier,
-                        DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString(), 901);
-                }
-                catch (Exception e)
-                {
-                    Console.Error.WriteLine(e);
-                    Console.Error.WriteLine("Cache set failed.");
-                }
+                // A repeat inside the window: ack it and drop it. The anchor stays
+                // where it is; moving it here would push it past this account's next
+                // scheduled check-in, which would then be absorbed as well.
+                await ctx.SendJson(201, new JsonObject());
+                return;
             }
         }
 
