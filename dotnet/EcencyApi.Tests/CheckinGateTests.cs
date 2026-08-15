@@ -261,6 +261,41 @@ public class CheckinGateTests
     }
 
     [Fact]
+    public void AnUndeliveredCheckinGivesTheAnchorBack()
+    {
+        // The anchor is claimed before the upstream call. If the check-in never
+        // landed, holding it would absorb the account's next attempt on the
+        // strength of one that never happened.
+        var username = "release-" + Guid.NewGuid().ToString("n");
+        var nowMs = 1_700_000_000_000;
+
+        var reserved = CheckinGate.DecideAndReserve(username, nowMs);
+        Assert.NotNull(reserved.StampToStore);
+
+        CheckinGate.Release(username, reserved.StampToStore!);
+
+        Assert.True(CheckinGate.DecideAndReserve(username, nowMs + 1).Forward);
+    }
+
+    [Fact]
+    public void AReleaseCannotDiscardALaterAccountsAnchor()
+    {
+        // A release names the exact anchor it claimed, so a stale one arriving
+        // after the account has checked in again is a no-op.
+        var username = "stale-" + Guid.NewGuid().ToString("n");
+        var nowMs = 1_700_000_000_000;
+
+        var stale = CheckinGate.DecideAndReserve(username, nowMs).StampToStore!;
+        var current = CheckinGate.DecideAndReserve(username, nowMs + ClientPollIntervalMs).StampToStore!;
+        Assert.NotEqual(stale, current);
+
+        CheckinGate.Release(username, stale);
+
+        // The live anchor survives, so the window it opened still holds.
+        Assert.False(CheckinGate.DecideAndReserve(username, nowMs + ClientPollIntervalMs + 1).Forward);
+    }
+
+    [Fact]
     public void ABurstFromOneAccountStillCollapsesToOneUpstreamCall()
     {
         // The gate still has to do its job: repeated check-ins inside one window

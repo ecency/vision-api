@@ -172,6 +172,39 @@ public static class CheckinGate
         }
     }
 
+    /// <summary>
+    /// Gives up an anchor whose check-in never reached the backend.
+    ///
+    /// The anchor is reserved before the upstream call, because that is what
+    /// closes the burst race. If the call then fails to deliver, holding the
+    /// anchor would absorb the account's next attempt on the strength of a
+    /// check-in that never happened, which is the failure this whole gate is
+    /// being fixed for. Releasing puts the account back where it started.
+    ///
+    /// Only an anchor still holding <paramref name="stamp"/> is removed, so this
+    /// can never discard one a later check-in established.
+    /// </summary>
+    public static void Release(string username, string stamp)
+    {
+        var key = CacheKey(username);
+
+        lock (StripeFor(key))
+        {
+            try
+            {
+                if (MemCache.Get<string>(key) == stamp)
+                {
+                    MemCache.Del(key);
+                }
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine(e);
+                Console.Error.WriteLine("Cache release failed.");
+            }
+        }
+    }
+
     private const int StripeCount = 64;
 
     private static readonly object[] Stripes =

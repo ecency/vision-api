@@ -79,6 +79,8 @@ public static partial class PrivateApi
         // ty === 10 (strict: JSON number equal to 10)
         var tyIsTen = ty is JsonValue tyVal && tyVal.TryGetValue<double>(out var tyNum) && tyNum == 10;
 
+        string? reservedAnchor = null;
+
         if (tyIsTen)
         {
             // Keyed on the account, not the caller's address: see CheckinGate for why
@@ -96,6 +98,8 @@ public static partial class PrivateApi
                 await ctx.SendJson(201, new JsonObject());
                 return;
             }
+
+            reservedAnchor = decision.StampToStore;
         }
 
         var pipeJson = new JsonObject
@@ -119,6 +123,17 @@ public static partial class PrivateApi
         }
 
         await Upstream.Pipe(ApiClient.ApiRequest("usr-activity", HttpMethod.Post, null, pipeJson), ctx);
+
+        // The anchor is claimed before the call, which is what closes the burst
+        // race. If the check-in then never reached the backend, give it back
+        // rather than absorb this account's next attempt on the strength of one
+        // that never landed. Pipe turns a transport failure into 504/500, so a
+        // 5xx here is exactly the "not delivered" set: an upstream 4xx is a
+        // deliberate rejection that a retry would not change.
+        if (reservedAnchor != null && ctx.Response.StatusCode >= 500)
+        {
+            CheckinGate.Release(username, reservedAnchor);
+        }
     }
 
     public static async Task SubscribeNewsletter(HttpContext ctx)
