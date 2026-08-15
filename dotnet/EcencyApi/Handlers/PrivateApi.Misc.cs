@@ -83,44 +83,18 @@ public static partial class PrivateApi
         {
             // Keyed on the account, not the caller's address: see CheckinGate for why
             // an address-keyed window makes accounts behind one address compete for a
-            // single check-in slot.
-            var key = CheckinGate.CacheKey(username);
-
-            string? rec = null;
-            try
-            {
-                rec = MemCache.Get<string>(key);
-            }
-            catch (Exception e)
-            {
-                Console.Error.WriteLine(e);
-                Console.Error.WriteLine("Cache get failed.");
-            }
-
-            var decision = CheckinGate.Decide(rec, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            // single check-in slot, plus why the read, the decision and the write
+            // have to be one step.
+            var decision = CheckinGate.DecideAndReserve(
+                username, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 
             if (!decision.Forward)
             {
-                // A repeat inside the window: ack it and drop it, storing nothing.
-                // Moving the anchor here would push it past this account's next
+                // A repeat inside the window: ack it and drop it. The anchor stays
+                // where it is; moving it here would push it past this account's next
                 // scheduled check-in, which would then be absorbed as well.
                 await ctx.SendJson(201, new JsonObject());
                 return;
-            }
-
-            // Only a check-in the backend will credit becomes the new anchor; see
-            // CheckinGate for why a forwarded-but-refused attempt must not move it.
-            if (decision.StampToStore != null)
-            {
-                try
-                {
-                    MemCache.Set(key, decision.StampToStore, CheckinGate.CacheTtlSeconds);
-                }
-                catch (Exception e)
-                {
-                    Console.Error.WriteLine(e);
-                    Console.Error.WriteLine("Cache set failed.");
-                }
             }
         }
 

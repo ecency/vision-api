@@ -118,4 +118,65 @@ public static class CheckinGate
         var anchors = age is not { } gap || gap >= AnchorAfterMs;
         return new Decision(true, anchors ? Stamp(nowMs) : null);
     }
+
+    /// <summary>
+    /// Reads the anchor, decides against it, then stores the new one as a single
+    /// step.
+    ///
+    /// The three have to happen together. Two check-ins for one account can
+    /// arrive in the same instant (two tabs opening at once both fire the ping
+    /// their page load schedules). If both read the anchor before either writes,
+    /// both are forwarded, which is the burst this gate exists to collapse. Serializing them makes a concurrent duplicate behave exactly
+    /// like a sequential one: the second reads the anchor the first just wrote
+    /// and is absorbed. That stays correct in the direction this gate cares
+    /// about, because a check-in milliseconds behind another is one the backend
+    /// refuses regardless.
+    ///
+    /// Striped rather than one global lock so unrelated accounts never queue
+    /// behind each other. The lock covers in-memory work only. It is never held
+    /// across an await.
+    /// </summary>
+    public static Decision DecideAndReserve(string username, long nowMs)
+    {
+        var key = CacheKey(username);
+
+        lock (StripeFor(key))
+        {
+            string? recorded = null;
+            try
+            {
+                recorded = MemCache.Get<string>(key);
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine(e);
+                Console.Error.WriteLine("Cache get failed.");
+            }
+
+            var decision = Decide(recorded, nowMs);
+
+            if (decision.StampToStore != null)
+            {
+                try
+                {
+                    MemCache.Set(key, decision.StampToStore, CacheTtlSeconds);
+                }
+                catch (Exception e)
+                {
+                    Console.Error.WriteLine(e);
+                    Console.Error.WriteLine("Cache set failed.");
+                }
+            }
+
+            return decision;
+        }
+    }
+
+    private const int StripeCount = 64;
+
+    private static readonly object[] Stripes =
+        Enumerable.Range(0, StripeCount).Select(_ => new object()).ToArray();
+
+    private static object StripeFor(string key) =>
+        Stripes[(uint)StringComparer.Ordinal.GetHashCode(key) % StripeCount];
 }

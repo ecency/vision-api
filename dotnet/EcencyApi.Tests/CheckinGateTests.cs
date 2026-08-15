@@ -217,6 +217,50 @@ public class CheckinGateTests
     }
 
     [Fact]
+    public async Task ConcurrentCheckinsForOneAccountCollapseToOneForward()
+    {
+        // Read, decide and reserve used to be three steps, so simultaneous
+        // check-ins for one account could all read an empty anchor and all go
+        // upstream. Absorbing the losers is right: they are milliseconds behind
+        // the winner, which the backend refuses anyway.
+        var username = "burst-" + Guid.NewGuid().ToString("n");
+        var nowMs = 1_700_000_000_000;
+
+        var decisions = await Task.WhenAll(Enumerable.Range(0, 32)
+            .Select(_ => Task.Run(() => CheckinGate.DecideAndReserve(username, nowMs))));
+
+        Assert.Equal(1, decisions.Count(d => d.Forward));
+        Assert.Equal(1, decisions.Count(d => d.StampToStore != null));
+    }
+
+    [Fact]
+    public void ConcurrencyControlDoesNotMakeAccountsWaitOnEachOther()
+    {
+        // Two accounts checking in at the same moment are unrelated events; each
+        // gets its own anchor and both go upstream.
+        var nowMs = 1_700_000_000_000;
+
+        var first = CheckinGate.DecideAndReserve("solo-" + Guid.NewGuid().ToString("n"), nowMs);
+        var second = CheckinGate.DecideAndReserve("solo-" + Guid.NewGuid().ToString("n"), nowMs);
+
+        Assert.True(first.Forward);
+        Assert.True(second.Forward);
+    }
+
+    [Fact]
+    public void AReservedAnchorAbsorbsTheNextCheckinAndThenReleases()
+    {
+        // The reservation is the anchor, so it has to behave like one: absorb
+        // inside the window, forward once the account is due again.
+        var username = "anchor-" + Guid.NewGuid().ToString("n");
+        var nowMs = 1_700_000_000_000;
+
+        Assert.True(CheckinGate.DecideAndReserve(username, nowMs).Forward);
+        Assert.False(CheckinGate.DecideAndReserve(username, nowMs + CheckinGate.WindowMs - 1).Forward);
+        Assert.True(CheckinGate.DecideAndReserve(username, nowMs + ClientPollIntervalMs).Forward);
+    }
+
+    [Fact]
     public void ABurstFromOneAccountStillCollapsesToOneUpstreamCall()
     {
         // The gate still has to do its job: repeated check-ins inside one window
