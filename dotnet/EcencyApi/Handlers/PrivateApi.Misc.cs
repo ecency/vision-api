@@ -79,6 +79,8 @@ public static partial class PrivateApi
         // ty === 10 (strict: JSON number equal to 10)
         var tyIsTen = ty is JsonValue tyVal && tyVal.TryGetValue<double>(out var tyNum) && tyNum == 10;
 
+        string? reservedAnchor = null;
+
         if (tyIsTen)
         {
             // Keyed on the account, not the caller's address: see CheckinGate for why
@@ -96,6 +98,8 @@ public static partial class PrivateApi
                 await ctx.SendJson(201, new JsonObject());
                 return;
             }
+
+            reservedAnchor = decision.StampToStore;
         }
 
         var pipeJson = new JsonObject
@@ -118,7 +122,35 @@ public static partial class PrivateApi
             pipeJson["tx"] = tx!.DeepClone();
         }
 
-        await Upstream.Pipe(ApiClient.ApiRequest("usr-activity", HttpMethod.Post, null, pipeJson), ctx);
+        // The anchor is claimed before the call, which is what closes the burst
+        // race. If the check-in then never reached the backend, give it back
+        // rather than absorb this account's next attempt on the strength of one
+        // that never landed.
+        var upstreamStarted = false;
+        try
+        {
+            // ApiRequest builds the auth headers eagerly and throws on a
+            // misconfigured deployment, so the request can fail before Pipe is
+            // ever entered. That is a check-in the backend never saw.
+            var upstream = ApiClient.ApiRequest("usr-activity", HttpMethod.Post, null, pipeJson);
+            upstreamStarted = true;
+            await Upstream.Pipe(upstream, ctx);
+        }
+        finally
+        {
+            // Pipe maps a transport failure to 504/500, so a 5xx is the "never
+            // reached the backend" set, as is a request that never started. An
+            // upstream 4xx is a deliberate rejection that a retry would not
+            // change, so it keeps the anchor. So does a backend answer that only
+            // failed on the way back to a client that went away: the check-in
+            // landed, and SendLikeExpress sets the upstream status before it
+            // writes, so the status still reports that here. The release has to
+            // sit in a finally, because Pipe can throw out of the write itself.
+            if (reservedAnchor != null && (!upstreamStarted || ctx.Response.StatusCode >= 500))
+            {
+                CheckinGate.Release(username, reservedAnchor);
+            }
+        }
     }
 
     public static async Task SubscribeNewsletter(HttpContext ctx)

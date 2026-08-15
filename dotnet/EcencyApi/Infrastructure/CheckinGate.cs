@@ -126,8 +126,9 @@ public static class CheckinGate
     /// The three have to happen together. Two check-ins for one account can
     /// arrive in the same instant (two tabs opening at once both fire the ping
     /// their page load schedules). If both read the anchor before either writes,
-    /// both are forwarded, which is the burst this gate exists to collapse. Serializing them makes a concurrent duplicate behave exactly
-    /// like a sequential one: the second reads the anchor the first just wrote
+    /// both are forwarded, which is the burst this gate exists to collapse.
+    /// Serializing them makes a concurrent duplicate behave exactly like a
+    /// sequential one: the second reads the anchor the first just wrote
     /// and is absorbed. That stays correct in the direction this gate cares
     /// about, because a check-in milliseconds behind another is one the backend
     /// refuses regardless.
@@ -169,6 +170,42 @@ public static class CheckinGate
             }
 
             return decision;
+        }
+    }
+
+    /// <summary>
+    /// Gives up an anchor whose check-in never reached the backend.
+    ///
+    /// The anchor is reserved before the upstream call, because that is what
+    /// closes the burst race. If the call then fails to deliver, holding the
+    /// anchor would absorb the account's next attempt on the strength of a
+    /// check-in that never happened, which is the failure this whole gate is
+    /// being fixed for. Releasing puts the account back where it started.
+    ///
+    /// Only an anchor still holding <paramref name="stamp"/> is removed, so this
+    /// can never discard one a later check-in established.
+    /// </summary>
+    public static void Release(string username, string stamp)
+    {
+        var key = CacheKey(username);
+
+        lock (StripeFor(key))
+        {
+            try
+            {
+                if (MemCache.Get<string>(key) == stamp)
+                {
+                    MemCache.Del(key);
+                }
+            }
+            catch
+            {
+                // Deliberately silent as well as swallowed. This runs after the
+                // response has been written, so letting it escape would raise an
+                // error the client can no longer be told about. A cache throwing
+                // here is already saying so from the read and the write on the way
+                // in. A request handler should not be adding logging of its own.
+            }
         }
     }
 
