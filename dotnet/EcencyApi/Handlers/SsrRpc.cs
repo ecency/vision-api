@@ -77,6 +77,10 @@ public static partial class SsrRpc
 
     internal static int BudgetMs = Config.SsrBudgetMs;
 
+    // Clock behind the lookup deadline and the attach/expiry timestamps;
+    // replaceable so tests can drive the post-deadline paths deterministically.
+    internal static Func<long> Now = () => Environment.TickCount64;
+
     // Bounds detached fills: a fill outlives the request budget on purpose, so
     // a slow pool plus many distinct keys must not pile up unbounded calls.
     internal static SemaphoreSlim FillGate = new(Config.SsrMaxConcurrentFills, Config.SsrMaxConcurrentFills);
@@ -95,7 +99,7 @@ public static partial class SsrRpc
         // the expiry decision both happen under `lock (this)`, so a reader can
         // never attach to a fill that has just decided to expire: it finds
         // Expired set and starts a fresh fill instead.
-        public long LastAttachMs = Environment.TickCount64;
+        public long LastAttachMs = Now();
         public bool Expired;
 
         public bool TryAttach()
@@ -103,7 +107,7 @@ public static partial class SsrRpc
             lock (this)
             {
                 if (Expired) return false;
-                LastAttachMs = Environment.TickCount64;
+                LastAttachMs = Now();
                 return true;
             }
         }
@@ -112,7 +116,7 @@ public static partial class SsrRpc
         {
             lock (this)
             {
-                if (Environment.TickCount64 - LastAttachMs <= budgetMs) return false;
+                if (Now() - LastAttachMs <= budgetMs) return false;
                 Expired = true;
                 return true;
             }
@@ -216,7 +220,7 @@ public static partial class SsrRpc
         }
 
         // One wall-clock budget for the whole lookup, retry included.
-        var deadline = Environment.TickCount64 + BudgetMs;
+        var deadline = Now() + BudgetMs;
         var retried = false;
     again:
         var coalesced = true;
@@ -255,7 +259,7 @@ public static partial class SsrRpc
         if (coalesced) Interlocked.Increment(ref counter.Coalesced);
         else Interlocked.Increment(ref counter.Miss);
 
-        var remaining = (int)Math.Max(0, deadline - Environment.TickCount64);
+        var remaining = (int)Math.Max(0, deadline - Now());
         var finished = await Task.WhenAny(pending.Task, Task.Delay(remaining));
         if (!ReferenceEquals(finished, pending.Task))
         {
@@ -268,7 +272,7 @@ public static partial class SsrRpc
             var bytes = await pending.Task;
             return new Resolution(coalesced ? Outcome.Coalesced : Outcome.Miss, bytes, null);
         }
-        catch (FillRejectedException) when (coalesced && !retried && Environment.TickCount64 < deadline)
+        catch (FillRejectedException) when (coalesced && !retried && Now() < deadline)
         {
             // The fill this reader attached to was judged expired (or refused) before
             // the reader's own wait began, which can only happen if the reader was
@@ -278,7 +282,7 @@ public static partial class SsrRpc
             retried = true;
             goto again;
         }
-        catch (FillRejectedException) when (coalesced && Environment.TickCount64 >= deadline)
+        catch (FillRejectedException) when (coalesced && Now() >= deadline)
         {
             // Past the deadline the lookup is a timeout; a repeat rejection
             // before it falls through to the generic unavailable path below.

@@ -87,6 +87,7 @@ public class SsrRpcTests
         SsrRpc.FillGate = new SemaphoreSlim(maxFills, maxFills);
         SsrRpc.MaxQueuedFills = maxQueued;
         SsrRpc.SecretDigest = null;
+        SsrRpc.Now = () => Environment.TickCount64;
         SsrRpc.ResetForTests();
     }
 
@@ -321,6 +322,38 @@ public class SsrRpcTests
         Assert.Equal(2, stub.Hits);
         SsrRpc.BudgetMs = 1500;
         Assert.Equal(SsrRpc.Outcome.Hit, (await SsrRpc.Resolve(Post, P("k", "2"))).Outcome);
+    }
+
+    [Fact]
+    public async Task A_coalesced_reader_whose_deadline_passed_before_its_fill_was_rejected_gets_timeout_and_no_replacement_fill()
+    {
+        await using var stub = new RpcStub { DelayMs = 300 };
+        Use(stub, budgetMs: 1000, maxFills: 1);
+        // A controllable clock: real time drives the stub and the waits, the
+        // clock drives the deadline and the attach/expiry bookkeeping.
+        long offset = 0;
+        SsrRpc.Now = () => Environment.TickCount64 + Interlocked.Read(ref offset);
+        var timeoutsBefore = Interlocked.Read(ref SsrRpc.CounterFor(Post.Key).Timeout);
+
+        var a = SsrRpc.Resolve(Post, P("d", "1"));   // holds the gate for ~300ms
+        await Task.Delay(30);
+        var creator = SsrRpc.Resolve(Post, P("d", "2")); // queued fill, waits for the gate
+        await Task.Delay(30);
+        var late = SsrRpc.Resolve(Post, P("d", "2"));    // coalesces onto it, deadline = now + 1000
+        await Task.Delay(30);
+        // Jump the clock past every deadline and past the attach window, while
+        // the readers' real waits (1000ms) are still running.
+        Interlocked.Exchange(ref offset, 1_500);
+        // The gate frees at ~300ms real; the queued fill is then judged expired.
+        var results = await Task.WhenAll(a, creator, late);
+
+        Assert.Equal(SsrRpc.Outcome.Miss, results[0].Outcome);
+        Assert.Equal(SsrRpc.Outcome.Unavailable, results[1].Outcome); // the creator is not coalesced
+        Assert.Equal(SsrRpc.Outcome.Timeout, results[2].Outcome);     // past its deadline: timeout, no retry
+        Assert.Equal(timeoutsBefore + 1, Interlocked.Read(ref SsrRpc.CounterFor(Post.Key).Timeout));
+        await Task.Delay(400);
+        Assert.Equal(1, stub.Hits); // no replacement fill went upstream
+        SsrRpc.Now = () => Environment.TickCount64;
     }
 
     [Fact]
