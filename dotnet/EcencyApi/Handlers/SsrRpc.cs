@@ -278,8 +278,10 @@ public static partial class SsrRpc
             retried = true;
             goto again;
         }
-        catch (FillRejectedException) when (coalesced)
+        catch (FillRejectedException) when (coalesced && Environment.TickCount64 >= deadline)
         {
+            // Past the deadline the lookup is a timeout; a repeat rejection
+            // before it falls through to the generic unavailable path below.
             Interlocked.Increment(ref counter.Timeout);
             return new Resolution(Outcome.Timeout, Array.Empty<byte>(), "budget exceeded");
         }
