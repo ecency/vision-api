@@ -265,6 +265,26 @@ public class SsrRpcTests
     }
 
     [Fact]
+    public async Task A_fresh_reader_that_coalesces_onto_a_queued_fill_keeps_it_alive()
+    {
+        await using var stub = new RpcStub { DelayMs = 200 };
+        Use(stub, budgetMs: 150, maxFills: 1);
+        var a = SsrRpc.Resolve(Post, P("k", "1"));   // holds the gate until ~200ms
+        await Task.Delay(10);
+        var b = SsrRpc.Resolve(Post, P("k", "2"));   // queued at ~10ms, its reader gives up at ~160ms
+        await Task.Delay(180);
+        var c = SsrRpc.Resolve(Post, P("k", "2"));   // fresh reader at ~190ms, coalesces
+        await Task.WhenAll(a, b, c);
+        Assert.Equal(SsrRpc.Outcome.Timeout, a.Result.Outcome);
+        Assert.Equal(SsrRpc.Outcome.Timeout, b.Result.Outcome);
+        // Judged by the fresh attach, not by the original enqueue: the fill ran.
+        await Task.Delay(500);
+        Assert.Equal(2, stub.Hits);
+        SsrRpc.BudgetMs = 1500;
+        Assert.Equal(SsrRpc.Outcome.Hit, (await SsrRpc.Resolve(Post, P("k", "2"))).Outcome);
+    }
+
+    [Fact]
     public async Task With_the_secret_configured_both_routes_serve_the_matching_header_and_nothing_else()
     {
         await using var stub = new RpcStub();

@@ -86,7 +86,16 @@ public static partial class SsrRpc
     internal static int MaxQueuedFills = Config.SsrMaxQueuedFills;
     private static int _queuedFills;
 
-    private static readonly ConcurrentDictionary<string, Task<byte[]>> InFlight = new();
+    private sealed class Pending
+    {
+        public required Task<byte[]> Task;
+        // Last time a reader attached to this fill (created it or coalesced onto
+        // it). A queued fill is dropped only when nobody has attached within the
+        // budget, since every earlier reader has given up by then.
+        public long LastAttachMs = Environment.TickCount64;
+    }
+
+    private static readonly ConcurrentDictionary<string, Pending> InFlight = new();
 
     internal sealed class Counter
     {
@@ -183,27 +192,35 @@ public static partial class SsrRpc
         }
 
         var coalesced = true;
-        if (!InFlight.TryGetValue(key, out var pending))
+        Pending pending;
+        if (InFlight.TryGetValue(key, out var existing))
+        {
+            pending = existing;
+            Volatile.Write(ref pending.LastAttachMs, Environment.TickCount64);
+        }
+        else
         {
             var tcs = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var winner = InFlight.GetOrAdd(key, tcs.Task);
-            if (ReferenceEquals(winner, tcs.Task))
+            var created = new Pending { Task = tcs.Task };
+            var winner = InFlight.GetOrAdd(key, created);
+            if (ReferenceEquals(winner, created))
             {
                 coalesced = false;
-                pending = tcs.Task;
-                _ = Fill(policy, @params, key, counter, tcs);
+                pending = created;
+                _ = Fill(policy, @params, key, counter, tcs, created);
             }
             else
             {
                 pending = winner;
+                Volatile.Write(ref pending.LastAttachMs, Environment.TickCount64);
             }
         }
 
         if (coalesced) Interlocked.Increment(ref counter.Coalesced);
         else Interlocked.Increment(ref counter.Miss);
 
-        var finished = await Task.WhenAny(pending, Task.Delay(BudgetMs));
-        if (!ReferenceEquals(finished, pending))
+        var finished = await Task.WhenAny(pending.Task, Task.Delay(BudgetMs));
+        if (!ReferenceEquals(finished, pending.Task))
         {
             Interlocked.Increment(ref counter.Timeout);
             return new Resolution(Outcome.Timeout, Array.Empty<byte>(), "budget exceeded");
@@ -211,7 +228,7 @@ public static partial class SsrRpc
 
         try
         {
-            var bytes = await pending;
+            var bytes = await pending.Task;
             return new Resolution(coalesced ? Outcome.Coalesced : Outcome.Miss, bytes, null);
         }
         catch (HiveRpcClient.RpcException e)
@@ -234,7 +251,7 @@ public static partial class SsrRpc
     }
 
     private static async Task Fill(MethodPolicy policy, JsonNode @params, string key, Counter counter,
-        TaskCompletionSource<byte[]> tcs)
+        TaskCompletionSource<byte[]> tcs, Pending pending)
     {
         var acquired = false;
         var queued = false;
@@ -262,12 +279,13 @@ public static partial class SsrRpc
                     throw new FillRejectedException("fill queue full");
                 }
                 queued = true;
-                var enqueued = Environment.TickCount64;
                 await FillGate.WaitAsync();
                 acquired = true;
-                // Every reader gave up at the budget while this sat in the queue;
-                // calling upstream now would only be stale traffic for nobody.
-                if (Environment.TickCount64 - enqueued > BudgetMs)
+                // Nobody has attached within the budget: every reader gave up
+                // while this sat in the queue, and calling upstream now would
+                // only be stale traffic for nobody. A fresh reader that coalesced
+                // in the meantime keeps the fill alive.
+                if (Environment.TickCount64 - Volatile.Read(ref pending.LastAttachMs) > BudgetMs)
                 {
                     throw new FillRejectedException("fill expired in queue");
                 }
@@ -291,7 +309,7 @@ public static partial class SsrRpc
         {
             if (queued) Interlocked.Decrement(ref _queuedFills);
             if (acquired) FillGate.Release();
-            InFlight.TryRemove(new KeyValuePair<string, Task<byte[]>>(key, tcs.Task));
+            InFlight.TryRemove(new KeyValuePair<string, Pending>(key, pending));
         }
     }
 
