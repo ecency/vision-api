@@ -76,11 +76,12 @@ public class SsrRpcTests
     private static readonly SsrRpc.MethodPolicy Post = SsrRpc.Allowlist["bridge.get_post"];
     private static readonly SsrRpc.MethodPolicy Props = SsrRpc.Allowlist["condenser_api.get_dynamic_global_properties"];
 
-    private static void Use(RpcStub stub, long cacheBytes = 1 << 20, int budgetMs = 1500)
+    private static void Use(RpcStub stub, long cacheBytes = 1 << 20, int budgetMs = 1500, int maxFills = 64)
     {
         SsrRpc.Client = new HiveRpcClient(new[] { stub.Url }, timeoutMs: 1000, failoverThreshold: 1);
         SsrRpc.Cache = new BytesCache(cacheBytes);
         SsrRpc.BudgetMs = budgetMs;
+        SsrRpc.FillGate = new SemaphoreSlim(maxFills, maxFills);
         SsrRpc.ResetForTests();
     }
 
@@ -183,6 +184,54 @@ public class SsrRpcTests
         SsrRpc.ResetForTests();
         var r = await SsrRpc.Resolve(Post, P("a", "b"));
         Assert.Equal(SsrRpc.Outcome.Unavailable, r.Outcome);
+    }
+
+    [Fact]
+    public async Task Fills_in_progress_are_bounded_so_distinct_keys_queue_instead_of_piling_up()
+    {
+        await using var stub = new RpcStub { DelayMs = 250 };
+        Use(stub, maxFills: 1);
+        var started = Environment.TickCount64;
+        var a = SsrRpc.Resolve(Post, P("a", "1"));
+        var b = SsrRpc.Resolve(Post, P("a", "2"));
+        var results = await Task.WhenAll(a, b);
+        Assert.All(results, r => Assert.Equal(SsrRpc.Outcome.Miss, r.Outcome));
+        // The second fill waited for the first: two delays back to back.
+        Assert.True(Environment.TickCount64 - started >= 450, "fills ran concurrently despite the bound");
+        Assert.Equal(2, stub.Hits);
+    }
+
+    [Fact]
+    public async Task Under_pressure_expired_entries_go_before_live_ones()
+    {
+        var cache = new BytesCache(100);
+        cache.Set("live-old", new byte[40], 60_000);
+        cache.Set("expired", new byte[40], 50);
+        await Task.Delay(120);
+        // Over budget now: the expired entry must be the one that goes, even
+        // though the live entry is the least recently used.
+        cache.Set("new", new byte[40], 60_000);
+        Assert.True(cache.TryGet("live-old", out _));
+        Assert.False(cache.TryGet("expired", out _));
+        Assert.True(cache.TryGet("new", out _));
+    }
+
+    [Fact]
+    public async Task Rpc_requires_structured_params_and_keys_the_call_on_them()
+    {
+        await using var stub = new RpcStub();
+        Use(stub);
+        // Missing params answers like an unknown route and never reaches upstream.
+        var missing = Request("POST", "/private-api/ssr/rpc", null, "{\"api\":\"bridge\",\"method\":\"get_post\"}");
+        await SsrRpc.Rpc(missing);
+        Assert.Equal(404, missing.Response.StatusCode);
+        Assert.Equal(0, stub.Hits);
+        // An array and an object are both legitimate shapes and distinct keys.
+        var arr = await SsrRpc.Resolve(Props, new JsonArray());
+        var obj = await SsrRpc.Resolve(Props, new JsonObject());
+        Assert.Equal(SsrRpc.Outcome.Miss, arr.Outcome);
+        Assert.Equal(SsrRpc.Outcome.Miss, obj.Outcome);
+        Assert.Equal(2, stub.Hits);
     }
 
     [Fact]

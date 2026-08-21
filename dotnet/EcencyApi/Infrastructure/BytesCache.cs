@@ -27,6 +27,12 @@ public sealed class BytesCache
     private readonly LinkedList<string> _lru = new();
     private readonly object _lock = new();
     private long _bytes;
+    private long _lastSweepMs;
+
+    // Under pressure, expired entries anywhere in the list are dropped before a
+    // live one is evicted for space. A full pass is O(n), so it runs at most
+    // this often; lazy expiry on read covers the rest.
+    private const long SweepIntervalMs = 30_000;
 
     public BytesCache(long budgetBytes)
     {
@@ -78,10 +84,25 @@ public sealed class BytesCache
             var node = _lru.AddLast(key);
             _map[key] = new Entry { Bytes = bytes, ExpiresAtMs = NowMs + ttlMs, Node = node };
             _bytes += bytes.Length;
+            if (_bytes > Budget)
+            {
+                SweepExpiredLocked();
+            }
             while (_bytes > Budget && _lru.First is { } oldest && oldest != node)
             {
                 RemoveLocked(oldest.Value, _map[oldest.Value]);
             }
+        }
+    }
+
+    private void SweepExpiredLocked()
+    {
+        var now = NowMs;
+        if (now - _lastSweepMs < SweepIntervalMs) return;
+        _lastSweepMs = now;
+        foreach (var (key, entry) in _map.Where(kv => kv.Value.ExpiresAtMs <= now).ToArray())
+        {
+            RemoveLocked(key, entry);
         }
     }
 

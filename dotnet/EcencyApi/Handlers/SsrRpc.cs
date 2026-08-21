@@ -60,13 +60,17 @@ public static class SsrRpc
 
     // Replaceable for tests (loopback stub nodes, a small cache budget).
     internal static HiveRpcClient Client = new(
-        Config.SsrRpcNodes ?? HiveClients.DefaultNodes,
+        Config.SsrRpcNodes ?? HiveClients.DefaultNodes.ToArray(),
         timeoutMs: Config.SsrNodeTimeoutMs,
         failoverThreshold: 1);
 
     internal static BytesCache Cache = new(Config.SsrCacheBytes);
 
     internal static int BudgetMs = Config.SsrBudgetMs;
+
+    // Bounds detached fills: a fill outlives the request budget on purpose, so
+    // a slow pool plus many distinct keys must not pile up unbounded calls.
+    internal static SemaphoreSlim FillGate = new(Config.SsrMaxConcurrentFills, Config.SsrMaxConcurrentFills);
 
     private static readonly ConcurrentDictionary<string, Task<byte[]>> InFlight = new();
 
@@ -80,6 +84,11 @@ public static class SsrRpc
         public void RecordUpstream(double ms)
         {
             lock (_lock) UpstreamMs = UpstreamMs == 0 ? ms : UpstreamMs * 0.8 + ms * 0.2;
+        }
+
+        public double ReadUpstreamMs()
+        {
+            lock (_lock) return UpstreamMs;
         }
     }
 
@@ -145,8 +154,11 @@ public static class SsrRpc
     /// <summary>
     /// Answer one allowlisted call from the cache, or from one shared upstream
     /// call, within the budget. Pure of HTTP so it can be exercised directly.
+    /// `params` is the exact node the upstream call carries (an array for
+    /// condenser methods, an object for bridge), and the key is derived from
+    /// that same node.
     /// </summary>
-    internal static async Task<Resolution> Resolve(MethodPolicy policy, JsonNode? @params)
+    internal static async Task<Resolution> Resolve(MethodPolicy policy, JsonNode @params)
     {
         var key = CacheKey(policy, @params);
         var counter = CounterFor(policy.Key);
@@ -203,13 +215,24 @@ public static class SsrRpc
 
     // The one upstream call behind a key. Runs to completion even when every
     // waiter has given up, so the cache still gets filled for the next reader.
-    private static async Task Fill(MethodPolicy policy, JsonNode? @params, string key, Counter counter,
+    private static async Task Fill(MethodPolicy policy, JsonNode @params, string key, Counter counter,
         TaskCompletionSource<byte[]> tcs)
     {
-        var started = Environment.TickCount64;
+        var acquired = false;
         try
         {
-            var result = await Client.Call(policy.Api, policy.Method, @params ?? new JsonObject());
+            // A reader can miss the cache, lose the race to another fill that
+            // then completes and leaves, and only now win GetOrAdd: the value is
+            // already cached, so serve it rather than calling upstream again.
+            if (Cache.TryGet(key, out var cached))
+            {
+                tcs.TrySetResult(cached);
+                return;
+            }
+            await FillGate.WaitAsync();
+            acquired = true;
+            var started = Environment.TickCount64;
+            var result = await Client.Call(policy.Api, policy.Method, @params);
             var bytes = Encoding.UTF8.GetBytes(result is null ? "null" : JsJson.Stringify(result));
             counter.RecordUpstream(Environment.TickCount64 - started);
             Cache.Set(key, bytes, policy.TtlMs);
@@ -222,6 +245,7 @@ public static class SsrRpc
         }
         finally
         {
+            if (acquired) FillGate.Release();
             InFlight.TryRemove(new KeyValuePair<string, Task<byte[]>>(key, tcs.Task));
         }
     }
@@ -239,13 +263,18 @@ public static class SsrRpc
         var body = await ctx.ReadBody();
         var api = body.Str("api");
         var method = body.Str("method");
-        if (api is null || method is null || !Allowlist.TryGetValue($"{api}.{method}", out var policy))
+        // params must be present and structured (condenser methods take an
+        // array, bridge methods an object); the key and the upstream call are
+        // derived from that same node, so nothing is invented for either.
+        var @params = body.Field("params");
+        if (api is null || method is null || @params is not (JsonObject or JsonArray)
+            || !Allowlist.TryGetValue($"{api}.{method}", out var policy))
         {
             await Routes.Fallback(ctx);
             return;
         }
 
-        var resolution = await Resolve(policy, body.Field("params"));
+        var resolution = await Resolve(policy, @params);
         ctx.Response.Headers["X-Ssr-Cache"] = resolution.Outcome.ToString().ToUpperInvariant();
         switch (resolution.Outcome)
         {
@@ -285,7 +314,7 @@ public static class SsrRpc
                 ["coalesced"] = Interlocked.Read(ref c.Coalesced),
                 ["error"] = Interlocked.Read(ref c.Error),
                 ["timeout"] = Interlocked.Read(ref c.Timeout),
-                ["upstream_ms"] = Math.Round(c.UpstreamMs, 1),
+                ["upstream_ms"] = Math.Round(c.ReadUpstreamMs(), 1),
             };
         }
         ctx.Response.Headers.CacheControl = "no-store";

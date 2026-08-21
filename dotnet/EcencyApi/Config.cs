@@ -52,7 +52,14 @@ public static class Config
     // Optional node pool for the cache's RPC client, comma-separated; defaults
     // to the shared pool. Lets a deployment put its own node first.
     public static string[]? SsrRpcNodes { get; } =
-        NonEmpty(Env("SSR_RPC_NODES"))?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        NonEmpty(Env("SSR_RPC_NODES"))?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            is { Length: > 0 } nodes ? nodes : null;
+
+    // Upper bound on upstream fills in progress at once. A fill outlives the
+    // request budget on purpose (it still lands in the cache), so without a
+    // bound a slow pool plus many distinct keys would pile up detached calls.
+    public static int SsrMaxConcurrentFills { get; } =
+        int.TryParse(Env("SSR_RPC_MAX_FILLS"), out var f) && f > 0 ? f : 64;
 
     private static string? NonEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
