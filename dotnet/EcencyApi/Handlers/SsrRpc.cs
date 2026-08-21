@@ -215,6 +215,8 @@ public static partial class SsrRpc
             return new Resolution(Outcome.Hit, cached, null);
         }
 
+        // One wall-clock budget for the whole lookup, retry included.
+        var deadline = Environment.TickCount64 + BudgetMs;
         var retried = false;
     again:
         var coalesced = true;
@@ -253,7 +255,8 @@ public static partial class SsrRpc
         if (coalesced) Interlocked.Increment(ref counter.Coalesced);
         else Interlocked.Increment(ref counter.Miss);
 
-        var finished = await Task.WhenAny(pending.Task, Task.Delay(BudgetMs));
+        var remaining = (int)Math.Max(0, deadline - Environment.TickCount64);
+        var finished = await Task.WhenAny(pending.Task, Task.Delay(remaining));
         if (!ReferenceEquals(finished, pending.Task))
         {
             Interlocked.Increment(ref counter.Timeout);
