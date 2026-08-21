@@ -362,14 +362,12 @@ public class HiveRpcFailoverTests
         {
             await client.Call("condenser_api", "get_accounts", new JsonArray());
         }
-        // Three overlapping timeouts (sequential here is the strictest form of
-        // "consecutive"; the stub's single-threaded loop makes them serial).
+        // Three overlapping timeouts: the calls start together, each holding an
+        // ordering with the busy node first, and all three fail on it at the
+        // same time before failing over to the spare.
         hang = true;
-        for (var i = 0; i < 3; i++)
-        {
-            now += 31_000; // past the recent-failure demotion, so it is retried
-            await client.Call("condenser_api", "get_accounts", new JsonArray());
-        }
+        await Task.WhenAll(Enumerable.Range(0, 3)
+            .Select(_ => client.Call("condenser_api", "get_accounts", new JsonArray())));
         hang = false;
         var view = client.HealthSnapshot()[0]!;
         Assert.Equal(3, view["consecutive_failures"]!.GetValue<int>());
