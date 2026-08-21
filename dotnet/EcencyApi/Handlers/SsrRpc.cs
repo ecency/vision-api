@@ -268,14 +268,20 @@ public static partial class SsrRpc
             var bytes = await pending.Task;
             return new Resolution(coalesced ? Outcome.Coalesced : Outcome.Miss, bytes, null);
         }
-        catch (FillRejectedException) when (coalesced && !retried)
+        catch (FillRejectedException) when (coalesced && !retried && Environment.TickCount64 < deadline)
         {
             // The fill this reader attached to was judged expired (or refused) before
             // the reader's own wait began, which can only happen if the reader was
             // descheduled for longer than the budget between attaching and waiting.
-            // Its budget has not been spent on anything yet, so start over once.
+            // While its deadline has not passed, start over once; past it, the
+            // lookup is a timeout and no replacement fill is started for it.
             retried = true;
             goto again;
+        }
+        catch (FillRejectedException) when (coalesced)
+        {
+            Interlocked.Increment(ref counter.Timeout);
+            return new Resolution(Outcome.Timeout, Array.Empty<byte>(), "budget exceeded");
         }
         catch (HiveRpcClient.RpcException e)
         {
