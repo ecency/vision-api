@@ -128,6 +128,10 @@ public static partial class SsrRpc
     internal sealed class Counter
     {
         public long Hit, Miss, Coalesced, Error, Timeout;
+        // Fills that outran the lookup budget. Distinct from Timeout, which is
+        // counted once per waiting reader: one slow fill on a hot key is one
+        // slow fill and many timeouts.
+        public long SlowFill;
         // Upstream latency EWMA for misses, milliseconds.
         public double UpstreamMs;
         private readonly object _lock = new();
@@ -356,7 +360,9 @@ public static partial class SsrRpc
             // re-parented into the envelope, so it travels as a clone.
             var result = await Client.CallMethod($"{policy.Api}.{policy.Method}", @params.DeepClone());
             var bytes = Encoding.UTF8.GetBytes(result is null ? "null" : JsJson.Stringify(result));
-            counter.RecordUpstream(Environment.TickCount64 - started);
+            var elapsed = Environment.TickCount64 - started;
+            counter.RecordUpstream(elapsed);
+            if (elapsed > BudgetMs) Interlocked.Increment(ref counter.SlowFill);
             Cache.Set(key, bytes, policy.TtlMs);
             tcs.TrySetResult(bytes);
         }
@@ -444,6 +450,7 @@ public static partial class SsrRpc
                 ["coalesced"] = Interlocked.Read(ref c.Coalesced),
                 ["error"] = Interlocked.Read(ref c.Error),
                 ["timeout"] = Interlocked.Read(ref c.Timeout),
+                ["slow_fill"] = Interlocked.Read(ref c.SlowFill),
                 ["upstream_ms"] = Math.Round(c.ReadUpstreamMs(), 1),
             };
         }
@@ -458,6 +465,7 @@ public static partial class SsrRpc
             },
             ["budget_ms"] = BudgetMs,
             ["methods"] = methods,
+            ["nodes"] = Client.HealthSnapshot(),
         });
     }
 }

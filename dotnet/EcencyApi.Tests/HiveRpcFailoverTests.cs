@@ -180,6 +180,93 @@ public class HiveRpcFailoverTests
     }
 
     [Fact]
+    public async Task DeadNode_IsParkedAfterThreeTimeouts_AndSkippedWhileOthersServe()
+    {
+        // A node that never answers used to keep its "unexplored" standing
+        // (timeouts below the slow-failure floor left no latency sample, and a
+        // failure only demoted it for 30s), so it was retried every window and
+        // took whole bursts of concurrent calls. Now: a timeout is a latency
+        // sample, three failures in a row park it, and a parked node is skipped
+        // while any other node is available.
+        await using var dead = new StubNode(() => -1);      // hangs past the timeout
+        var flakyStatus = 200;
+        await using var flaky = new StubNode(() => flakyStatus);
+        await using var good = new StubNode(() => 200);
+
+        long now = 0;
+        var client = new HiveRpcClient(new[] { dead.Url, flaky.Url, good.Url }, timeoutMs: 300, failoverThreshold: 1, clock: () => now);
+
+        // Three calls, each past the previous one's 30s recent-failure window:
+        // the dead node (config order, all unproven) is tried first every time.
+        for (var i = 0; i < 3; i++)
+        {
+            if (i > 0) now += 31_000;
+            await client.Call("condenser_api", "get_accounts", new JsonArray());
+        }
+        // The stub's accept loop is single-threaded and its hang outlives the
+        // client timeout, so later attempts queue in the listener backlog and
+        // never reach its hit counter; the client's own per-node counters are
+        // the measure of what was attempted.
+        var view = client.HealthSnapshot()[0]!;
+        Assert.Equal(3, view["calls"]!.GetValue<long>());
+        Assert.Equal(3, view["timeouts"]!.GetValue<long>());
+        Assert.Equal(3, view["samples"]!.GetValue<int>());       // the timeouts ARE latency samples
+        Assert.True(view["ewma_ms"]!.GetValue<double>() >= 250);
+        Assert.True(view["parked_for_ms"]!.GetValue<long>() > 0); // parked after the third
+
+        // The leader hiccups: with the dead node parked, the call skips it and
+        // fails over from flaky straight to good instead of handing the dead
+        // node the burst.
+        flakyStatus = 500;
+        await client.Call("condenser_api", "get_accounts", new JsonArray());
+        flakyStatus = 200;
+        Assert.Equal(3, client.HealthSnapshot()[0]!["calls"]!.GetValue<long>());
+        Assert.True(good.Hits >= 1);
+
+        // The park lapses (30s). Its timeouts were recorded as latency, so the
+        // dead node now ranks behind the proven-fast leader and is only probed
+        // when the leader fails: one probe, which fails and re-parks it for
+        // twice as long; the call is still served by the third node.
+        now += 31_000;
+        flakyStatus = 500;
+        await client.Call("condenser_api", "get_accounts", new JsonArray());
+        flakyStatus = 200;
+        view = client.HealthSnapshot()[0]!;
+        Assert.Equal(4, view["calls"]!.GetValue<long>());
+        Assert.True(view["parked_for_ms"]!.GetValue<long>() > 30_000);
+
+        // Inside the doubled park no probe is made, even past the recent-failure window.
+        now += 45_000;
+        await client.Call("condenser_api", "get_accounts", new JsonArray());
+        Assert.Equal(4, client.HealthSnapshot()[0]!["calls"]!.GetValue<long>());
+    }
+
+    [Fact]
+    public async Task AllNodesFailureParked_AreStillTried()
+    {
+        // A pool that is entirely parked degrades to "try them", never to
+        // "try nothing": the caller gets the node error, not a synthetic one.
+        await using var dead = new StubNode(() => -1);
+        long now = 0;
+        var client = new HiveRpcClient(new[] { dead.Url }, timeoutMs: 200, failoverThreshold: 1, clock: () => now);
+        for (var i = 0; i < 3; i++)
+        {
+            await Assert.ThrowsAnyAsync<Exception>(() => client.Call("condenser_api", "get_accounts", new JsonArray()));
+        }
+        Assert.Equal(3, client.HealthSnapshot()[0]!["calls"]!.GetValue<long>());
+        Assert.True(client.HealthSnapshot()[0]!["parked_for_ms"]!.GetValue<long>() > 0);
+        await Assert.ThrowsAnyAsync<Exception>(() => client.Call("condenser_api", "get_accounts", new JsonArray()));
+        Assert.Equal(4, client.HealthSnapshot()[0]!["calls"]!.GetValue<long>());
+    }
+
+    [Fact]
+    public void DefaultPool_DoesNotCarryTheUnreachableNode()
+    {
+        Assert.DoesNotContain(HiveClients.DefaultNodes, n => n.Contains("arcange", StringComparison.Ordinal));
+        Assert.True(HiveClients.DefaultNodes.Count >= 6);
+    }
+
+    [Fact]
     public async Task ProvenSlowNode_IsDemotedByLatencyEwma()
     {
         // Adopted from @ecency/sdk's NodeHealthTracker: once a node's latency

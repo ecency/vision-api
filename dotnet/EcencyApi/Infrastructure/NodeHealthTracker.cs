@@ -30,6 +30,16 @@ public sealed class NodeHealthTracker
     private const int LatencyMaxAgeMs = 5 * 60_000;
     private const double LatencyUnprovenPriorMs = 1_000;
     private const int SlowFailureFloorMs = 2_000;
+    // A node that fails this many times in a row is parked (30s, doubling to
+    // 120s; a success clears the streak) and is not tried while any other node
+    // is available. Without this a node that never answers keeps its
+    // "unexplored" standing: only 429s parked, and a failure demoted for 30s at
+    // most, so each time the leading nodes hiccupped the dead node took the
+    // whole in-flight burst at the full per-node timeout (observed: 83
+    // half-open connects at once to one unreachable node).
+    private const int FailureParkThreshold = 3;
+    private const int FailureParkBaseMs = 30_000;
+    private const int FailureParkMaxMs = 120_000;
 
     private sealed class NodeHealth
     {
@@ -38,24 +48,36 @@ public sealed class NodeHealthTracker
         public long RateLimitedUntilMs;
         public int RateLimitStreak;
         public long LastRateLimitAtMs;
+        public long FailureParkedUntilMs;
+        public int FailureParkStreak;
         public double? EwmaLatencyMs;
         public int LatencySampleCount;
         public long LatencyUpdatedAtMs;
+        // Lifetime counters, for the stats endpoint.
+        public long Calls, Successes, Failures, Timeouts, RateLimits;
     }
+
+    /// <summary>One node's health as reported by <see cref="Snapshot"/>.</summary>
+    public sealed record NodeView(
+        int Index, long Calls, long Successes, long Failures, long Timeouts, long RateLimits,
+        double? EwmaLatencyMs, int LatencySamples, int ConsecutiveFailures,
+        bool RecentFailure, long RateLimitedForMs, long FailureParkedForMs);
 
     private readonly NodeHealth[] _health;
     private readonly object _lock = new();
+    private readonly Func<long> _clock;
 
-    public NodeHealthTracker(int nodeCount)
+    public NodeHealthTracker(int nodeCount, Func<long>? clock = null)
     {
         _health = new NodeHealth[nodeCount];
         for (var i = 0; i < nodeCount; i++)
         {
             _health[i] = new NodeHealth();
         }
+        _clock = clock ?? (() => Environment.TickCount64);
     }
 
-    private static long NowMs => Environment.TickCount64;
+    private long NowMs => _clock();
 
     // ---- health bookkeeping (lock-guarded; contention is negligible) ------
 
@@ -64,24 +86,38 @@ public sealed class NodeHealthTracker
         lock (_lock)
         {
             var h = _health[nodeIndex];
+            h.Calls++;
+            h.Successes++;
             h.ConsecutiveFailures = 0;
             h.RateLimitStreak = 0;
+            h.FailureParkStreak = 0;
             RecordLatency(h, elapsedMs);
         }
     }
 
-    public void RecordFailure(int nodeIndex, double elapsedMs)
+    /// <param name="timedOut">The attempt ran into the client's per-node timeout.
+    /// That IS a latency sample whatever the timeout is set to; the floor below
+    /// only tells instant refusals (a down node is not "slow") from slow 5xx.</param>
+    public void RecordFailure(int nodeIndex, double elapsedMs, bool timedOut = false)
     {
         lock (_lock)
         {
             var h = _health[nodeIndex];
+            var now = NowMs;
+            h.Calls++;
+            h.Failures++;
+            if (timedOut) h.Timeouts++;
             h.ConsecutiveFailures++;
-            h.LastFailureAtMs = NowMs;
-            // A genuinely slow failure (timeout / slow 5xx) is also a latency
-            // signal; an instant refusal is not (a *down* node isn't "slow").
-            if (elapsedMs >= SlowFailureFloorMs)
+            h.LastFailureAtMs = now;
+            if (timedOut || elapsedMs >= SlowFailureFloorMs)
             {
                 RecordLatency(h, elapsedMs);
+            }
+            if (h.ConsecutiveFailures >= FailureParkThreshold)
+            {
+                var parkMs = Math.Min(FailureParkBaseMs << Math.Min(h.FailureParkStreak, 2), FailureParkMaxMs);
+                h.FailureParkedUntilMs = now + parkMs;
+                h.FailureParkStreak++;
             }
         }
     }
@@ -92,6 +128,8 @@ public sealed class NodeHealthTracker
         {
             var h = _health[nodeIndex];
             var now = NowMs;
+            h.Calls++;
+            h.RateLimits++;
             h.ConsecutiveFailures++;
             h.LastFailureAtMs = now;
             if (now - h.LastRateLimitAtMs > RateLimitStreakResetMs)
@@ -106,7 +144,7 @@ public sealed class NodeHealthTracker
         }
     }
 
-    private static void RecordLatency(NodeHealth h, double elapsedMs)
+    private void RecordLatency(NodeHealth h, double elapsedMs)
     {
         var now = NowMs;
         // A stale profile restarts from scratch so an idle process re-learns
@@ -125,34 +163,61 @@ public sealed class NodeHealthTracker
 
     /// <summary>
     /// Node indices ordered best-first: unparked nodes sorted by
-    /// (recent-failure tier, latency score, config index); parked
-    /// (rate-limited) nodes appended last as a final resort. A recovered node
-    /// re-enters the healthy tiers as soon as its windows lapse.
+    /// (recent-failure tier, latency score, config index); rate-limit-parked
+    /// nodes appended last as a final resort. A node parked for consecutive
+    /// failures is left out altogether while any other node is available (it
+    /// was not answering; a throttled node might), and probed once its park
+    /// lapses. When every node is failure-parked all are offered, so a pool
+    /// that is entirely down degrades to "try them" rather than "try nothing".
     /// </summary>
     public List<int> OrderedNodeIndices()
     {
         lock (_lock)
         {
             var now = NowMs;
-            return Enumerable.Range(0, _health.Length)
+            var ranked = Enumerable.Range(0, _health.Length)
                 .Select(i =>
                 {
                     var h = _health[i];
                     var parked = h.RateLimitedUntilMs > now;
+                    var dead = h.FailureParkedUntilMs > now;
                     var recentFailure = h.ConsecutiveFailures > 0
                                         && now - h.LastFailureAtMs < RecentFailureWindowMs;
                     var latencyUsable = h.EwmaLatencyMs is not null
                                         && h.LatencySampleCount >= LatencyMinSamples
                                         && now - h.LatencyUpdatedAtMs <= LatencyMaxAgeMs;
                     var score = latencyUsable ? h.EwmaLatencyMs!.Value : LatencyUnprovenPriorMs;
-                    return (Index: i, Parked: parked, RecentFailure: recentFailure, Score: score);
+                    return (Index: i, Parked: parked, Dead: dead, RecentFailure: recentFailure, Score: score);
                 })
+                .ToList();
+            if (ranked.Any(x => !x.Dead))
+            {
+                ranked.RemoveAll(x => x.Dead);
+            }
+            return ranked
                 .OrderBy(x => x.Parked)
                 .ThenBy(x => x.RecentFailure)
                 .ThenBy(x => x.Score)
                 .ThenBy(x => x.Index)
                 .Select(x => x.Index)
                 .ToList();
+        }
+    }
+
+    /// <summary>Per-node state and lifetime counters, for the stats endpoint.</summary>
+    public List<NodeView> Snapshot()
+    {
+        lock (_lock)
+        {
+            var now = NowMs;
+            return Enumerable.Range(0, _health.Length).Select(i =>
+            {
+                var h = _health[i];
+                return new NodeView(i, h.Calls, h.Successes, h.Failures, h.Timeouts, h.RateLimits,
+                    h.EwmaLatencyMs, h.LatencySampleCount, h.ConsecutiveFailures,
+                    h.ConsecutiveFailures > 0 && now - h.LastFailureAtMs < RecentFailureWindowMs,
+                    Math.Max(0, h.RateLimitedUntilMs - now), Math.Max(0, h.FailureParkedUntilMs - now));
+            }).ToList();
         }
     }
 
