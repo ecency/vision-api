@@ -168,6 +168,10 @@ public static class Routes
         app.MapPost("/private-api/chats-update", PrivateApi.ChatsUpdate);
         app.MapPost("/private-api/channel-add", PrivateApi.ChannelAdd);
 
+        // ---- SSR RPC cache (internal, header-gated; see SsrRpc.cs) ----
+        app.MapPost("/private-api/ssr/rpc", SsrRpc.Rpc);
+        app.MapGet("/private-api/ssr/stats", SsrRpc.Stats);
+
         // ---- Health check for docker swarm ----
         app.MapGet("/healthcheck.json", async ctx =>
         {
@@ -181,28 +185,34 @@ public static class Routes
         // ---- Fallback ----
         // GET/HEAD -> the template page (Express .get("*", fallbackHandler)).
         // Everything else -> Express's default finalhandler 404.
-        app.MapFallback(async ctx =>
-        {
-            var method = ctx.Request.Method;
-            if (HttpMethods.IsGet(method) || HttpMethods.IsHead(method))
-            {
-                ctx.Response.StatusCode = 200;
-                ctx.Response.ContentType = "text/html; charset=utf-8";
-                if (!HttpMethods.IsHead(method))
-                {
-                    await ctx.Response.WriteAsync(TemplateHtml);
-                }
-                return;
-            }
+        app.MapFallback(Fallback);
+    }
 
-            var message = $"Cannot {method} {EscapeHtml(EncodeUrl(ctx.Request.Path.Value ?? "/"))}";
-            var html =
-                "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n" +
-                "<title>Error</title>\n</head>\n<body>\n<pre>" + message + "</pre>\n</body>\n</html>\n";
-            ctx.Response.StatusCode = 404;
+    /// <summary>
+    /// The unmatched-route response, also used by gated routes to answer exactly
+    /// like a route that does not exist.
+    /// </summary>
+    public static async Task Fallback(HttpContext ctx)
+    {
+        var method = ctx.Request.Method;
+        if (HttpMethods.IsGet(method) || HttpMethods.IsHead(method))
+        {
+            ctx.Response.StatusCode = 200;
             ctx.Response.ContentType = "text/html; charset=utf-8";
-            await ctx.Response.WriteAsync(html);
-        });
+            if (!HttpMethods.IsHead(method))
+            {
+                await ctx.Response.WriteAsync(TemplateHtml);
+            }
+            return;
+        }
+
+        var message = $"Cannot {method} {EscapeHtml(EncodeUrl(ctx.Request.Path.Value ?? "/"))}";
+        var html =
+            "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n" +
+            "<title>Error</title>\n</head>\n<body>\n<pre>" + message + "</pre>\n</body>\n</html>\n";
+        ctx.Response.StatusCode = 404;
+        ctx.Response.ContentType = "text/html; charset=utf-8";
+        await ctx.Response.WriteAsync(html);
     }
 
     /// <summary>

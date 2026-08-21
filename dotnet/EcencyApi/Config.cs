@@ -30,5 +30,31 @@ public static class Config
     public static string CaptchaMode { get; } =
         (Env("CAPTCHA_MODE") ?? "hard").Trim().ToLowerInvariant();
 
+    // ---- SSR RPC cache (Handlers/SsrRpc.cs) ----
+    // Shared secret the web tier sends on every call. Unset = the routes are
+    // switched off and answer exactly like unknown routes.
+    public static string? SsrInternalSecret { get; } = NonEmpty(Env("SSR_INTERNAL_SECRET"));
+
+    // Total bytes of cached responses kept in memory (LRU beyond that).
+    public static long SsrCacheBytes { get; } =
+        long.TryParse(Env("SSR_CACHE_BYTES"), out var b) && b >= 0 ? b : 512L * 1024 * 1024;
+
+    // Wall-clock budget for one lookup. The web tier gives up on the proxy a
+    // little later and falls back to its own node pool, so this must stay
+    // under that; a lookup that outlives it still completes and fills the cache.
+    public static int SsrBudgetMs { get; } =
+        int.TryParse(Env("SSR_RPC_BUDGET_MS"), out var ms) && ms > 0 ? ms : 1500;
+
+    // Per-node timeout for the cache's own RPC client (one attempt per node).
+    public static int SsrNodeTimeoutMs { get; } =
+        int.TryParse(Env("SSR_RPC_NODE_TIMEOUT_MS"), out var nt) && nt > 0 ? nt : 1200;
+
+    // Optional node pool for the cache's RPC client, comma-separated; defaults
+    // to the shared pool. Lets a deployment put its own node first.
+    public static string[]? SsrRpcNodes { get; } =
+        NonEmpty(Env("SSR_RPC_NODES"))?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static string? NonEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
     private static string? Env(string name) => Environment.GetEnvironmentVariable(name);
 }

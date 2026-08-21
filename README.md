@@ -54,6 +54,11 @@ docker run -it --rm -p 4000:4000 \
 | `HELIUS_API_KEY` | optional Helius API key added as an extra Solana RPC fallback |
 | `ETH_RPC_URLS` / `BNB_RPC_URLS` / `SOL_RPC_URLS` / `BTC_ESPLORA_URLS` | optional comma-separated endpoint lists overriding the built-in chain provider pools |
 | `Logging__LogLevel__Default` | log level (default `Warning`; set `Information` for per-request logs) |
+| `SSR_INTERNAL_SECRET` | shared header secret that switches on the internal SSR RPC cache routes (`/private-api/ssr/*`); unset = they answer like unknown routes |
+| `SSR_CACHE_BYTES` | byte budget of the SSR RPC cache, LRU beyond it (default 512 MiB) |
+| `SSR_RPC_BUDGET_MS` | wall-clock budget for one SSR RPC lookup before it answers 504 while the fill completes (default `1500`) |
+| `SSR_RPC_NODE_TIMEOUT_MS` | per-node timeout of the SSR RPC cache's own client, one attempt per node (default `1200`) |
+| `SSR_RPC_NODES` | comma-separated node pool for that client (default: the shared pool) |
 
 ## Swarm
 
