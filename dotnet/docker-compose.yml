@@ -28,6 +28,15 @@ services:
       - SOL_RPC_URLS
       - BTC_ESPLORA_URLS
       - Logging__LogLevel__Default
+      # SSR RPC cache (Handlers/SsrRpc.cs): the shared header secret switches the
+      # routes on; the rest tune the cache budget, lookup budget and node pool.
+      - SSR_INTERNAL_SECRET
+      - SSR_CACHE_BYTES
+      - SSR_RPC_BUDGET_MS
+      - SSR_RPC_NODE_TIMEOUT_MS
+      - SSR_RPC_NODES
+      - SSR_RPC_MAX_FILLS
+      - SSR_RPC_MAX_QUEUED_FILLS
     ports:
       - "4000:4000"
     # Bound container logs so they can never grow unchecked on the host

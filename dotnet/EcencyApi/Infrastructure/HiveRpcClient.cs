@@ -335,7 +335,7 @@ public static class HiveClients
     // portfolio engine/chain layers came back empty for everyone. GetAccounts
     // also routes around such a node at runtime, but keeping them out of the pool
     // means correctness here does not depend on that fallback firing.
-    public static readonly HiveRpcClient Default = new(new[]
+    public static readonly IReadOnlyList<string> DefaultNodes = new[]
     {
         "https://api.hive.blog",
         "https://api.deathwing.me",
@@ -345,5 +345,7 @@ public static class HiveClients
         "https://hive-api.3speak.tv",
         "https://api.syncad.com",
         "https://api.c0ff33a.uk",
-    });
+    };
+
+    public static readonly HiveRpcClient Default = new(DefaultNodes.ToArray());
 }
