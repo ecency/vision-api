@@ -66,10 +66,13 @@ public sealed class HiveRpcClient
     /// valid 200 with a usable array, so shape validation passes and the latency EWMA
     /// keeps such a node ranked first — silently blanking every metadata-derived
     /// feature (portfolio engine/chain token visibility) with no error and no log.</param>
-    public async Task<JsonNode?> Call(string api, string method, JsonNode @params,
+    public Task<JsonNode?> Call(string api, string method, JsonNode @params,
         Func<JsonNode?, bool>? validateResult = null,
         Func<JsonNode?, bool>? preferResult = null)
     {
+        // The legacy `call` envelope the Node service always sent. hived resolves
+        // it for its own APIs (condenser_api, database_api); hivemind's `bridge`
+        // is not one of them, so bridge reads must use CallMethod.
         var request = new JsonObject
         {
             ["id"] = Interlocked.Increment(ref _seq),
@@ -77,6 +80,32 @@ public sealed class HiveRpcClient
             ["method"] = "call",
             ["params"] = new JsonArray(api, method, @params),
         };
+        return Send(request, method, validateResult, preferResult);
+    }
+
+    /// <summary>
+    /// The modern JSON-RPC form, `"method": "bridge.get_post"` with the params
+    /// as given, which jussi/HAF route to hived or hivemind by prefix. Needed
+    /// for every hivemind (`bridge`) read; works for condenser_api too.
+    /// </summary>
+    public Task<JsonNode?> CallMethod(string qualifiedMethod, JsonNode @params,
+        Func<JsonNode?, bool>? validateResult = null,
+        Func<JsonNode?, bool>? preferResult = null)
+    {
+        var request = new JsonObject
+        {
+            ["id"] = Interlocked.Increment(ref _seq),
+            ["jsonrpc"] = "2.0",
+            ["method"] = qualifiedMethod,
+            ["params"] = @params,
+        };
+        return Send(request, qualifiedMethod, validateResult, preferResult);
+    }
+
+    private async Task<JsonNode?> Send(JsonObject request, string method,
+        Func<JsonNode?, bool>? validateResult,
+        Func<JsonNode?, bool>? preferResult)
+    {
         // JsJson: a lone-surrogate username from a client token must serialize
         // (JSON.stringify semantics) instead of throwing in the writer.
         var body = JsJson.Stringify(request);

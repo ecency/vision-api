@@ -27,6 +27,7 @@ public class SsrRpcTests
         public int DelayMs;
         public bool RpcError;
         public bool NullResult;
+        public volatile string LastMethod = "";
 
         public RpcStub()
         {
@@ -53,10 +54,27 @@ public class SsrRpcTests
                 {
                     reqBody = await reader.ReadToEndAsync();
                 }
-                var method = JsonNode.Parse(reqBody)?["params"]?[1]?.GetValue<string>() ?? "?";
+                // hived semantics: the legacy `call` envelope resolves only hived
+                // APIs, so a bridge read sent that way is an RPC error; the dotted
+                // form (`bridge.get_post`) is routed to hivemind.
+                var req = JsonNode.Parse(reqBody);
+                var rawMethod = req?["method"]?.GetValue<string>() ?? "?";
+                string method;
+                var legacyBridge = false;
+                if (rawMethod == "call")
+                {
+                    var api = req?["params"]?[0]?.GetValue<string>() ?? "?";
+                    method = req?["params"]?[1]?.GetValue<string>() ?? "?";
+                    legacyBridge = api == "bridge";
+                }
+                else
+                {
+                    method = rawMethod.Contains('.') ? rawMethod[(rawMethod.IndexOf('.') + 1)..] : rawMethod;
+                }
+                LastMethod = rawMethod;
                 if (DelayMs > 0) await Task.Delay(DelayMs);
-                var body = RpcError
-                    ? "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"message\":\"stub error\"}}"
+                var body = RpcError || legacyBridge
+                    ? "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"message\":\"" + (legacyBridge ? "Assert Exception:api_itr != data._registered_apis.end(): Could not find API bridge" : "stub error") + "\"}}"
                     : NullResult
                         ? "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}"
                         : "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"method\":\"" + method + "\",\"n\":" + n + ",\"text\":\"caf\\u00e9 \\ud83d\"}}";
@@ -107,6 +125,22 @@ public class SsrRpcTests
         var bodies = results.Select(r => Encoding.UTF8.GetString(r.Bytes)).Distinct().ToArray();
         Assert.Single(bodies);
         Assert.Contains("\"method\":\"get_post\"", bodies[0]);
+    }
+
+    [Fact]
+    public async Task Reads_use_the_dotted_method_form_so_bridge_reaches_hivemind()
+    {
+        await using var stub = new RpcStub();
+        Use(stub);
+        var r = await SsrRpc.Resolve(Post, P("a", "b"));
+        Assert.Equal(SsrRpc.Outcome.Miss, r.Outcome);
+        Assert.Equal("bridge.get_post", stub.LastMethod);
+        var props = await SsrRpc.Resolve(Props, new JsonArray());
+        Assert.Equal(SsrRpc.Outcome.Miss, props.Outcome);
+        Assert.Equal("condenser_api.get_dynamic_global_properties", stub.LastMethod);
+        // The legacy envelope would have been refused for bridge, as hived does.
+        var legacy = new HiveRpcClient(new[] { stub.Url }, timeoutMs: 1000, failoverThreshold: 1);
+        await Assert.ThrowsAsync<HiveRpcClient.RpcException>(() => legacy.Call("bridge", "get_post", P("a", "b")));
     }
 
     [Fact]
