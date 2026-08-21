@@ -35,8 +35,8 @@ public sealed class NodeHealthTracker
     // is available. Without this a node that never answers keeps its
     // "unexplored" standing: only 429s parked, and a failure demoted for 30s at
     // most, so each time the leading nodes hiccupped the dead node took the
-    // whole in-flight burst at the full per-node timeout (observed: 83
-    // half-open connects at once to one unreachable node).
+    // whole in-flight burst at the full per-node timeout (observed as dozens
+    // of half-open connects at once to one unreachable node).
     private const int FailureParkThreshold = 3;
     private const int FailureParkBaseMs = 30_000;
     private const int FailureParkMaxMs = 120_000;
@@ -50,6 +50,9 @@ public sealed class NodeHealthTracker
         public long LastRateLimitAtMs;
         public long FailureParkedUntilMs;
         public int FailureParkStreak;
+        // Hard failures only (timeouts, refusals, bad answers), never 429s: a
+        // throttled node is responsive and has its own parking.
+        public int ConsecutiveHardFailures;
         public double? EwmaLatencyMs;
         public int LatencySampleCount;
         public long LatencyUpdatedAtMs;
@@ -89,8 +92,14 @@ public sealed class NodeHealthTracker
             h.Calls++;
             h.Successes++;
             h.ConsecutiveFailures = 0;
+            h.ConsecutiveHardFailures = 0;
             h.RateLimitStreak = 0;
             h.FailureParkStreak = 0;
+            // A node that just answered is not parked, whatever the deadline said:
+            // an all-parked pool offers every node, and the one that recovers must
+            // not be pushed out again by a stale deadline the moment another
+            // node's park lapses.
+            h.FailureParkedUntilMs = 0;
             RecordLatency(h, elapsedMs);
         }
     }
@@ -111,12 +120,20 @@ public sealed class NodeHealthTracker
             h.Failures++;
             if (timedOut) h.Timeouts++;
             h.ConsecutiveFailures++;
+            h.ConsecutiveHardFailures++;
             h.LastFailureAtMs = now;
-            if (timedOut || elapsedMs >= SlowFailureFloorMs)
+            if (timedOut)
+            {
+                // A timeout says "at least this slow". Floored at the unproven
+                // prior so a short client timeout cannot rank a node that never
+                // answered ahead of nodes that were never tried.
+                RecordLatency(h, Math.Max(elapsedMs, LatencyUnprovenPriorMs + 1));
+            }
+            else if (elapsedMs >= SlowFailureFloorMs)
             {
                 RecordLatency(h, elapsedMs);
             }
-            if (h.ConsecutiveFailures >= FailureParkThreshold)
+            if (h.ConsecutiveHardFailures >= FailureParkThreshold)
             {
                 var parkMs = Math.Min(FailureParkBaseMs << Math.Min(h.FailureParkStreak, 2), FailureParkMaxMs);
                 h.FailureParkedUntilMs = now + parkMs;

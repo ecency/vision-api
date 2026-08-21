@@ -191,7 +191,8 @@ public class HiveRpcFailoverTests
         await using var dead = new StubNode(() => -1);      // hangs past the timeout
         var flakyStatus = 200;
         await using var flaky = new StubNode(() => flakyStatus);
-        await using var good = new StubNode(() => 200);
+        var goodStatus = 200;
+        await using var good = new StubNode(() => goodStatus);
 
         long now = 0;
         var client = new HiveRpcClient(new[] { dead.Url, flaky.Url, good.Url }, timeoutMs: 300, failoverThreshold: 1, clock: () => now);
@@ -211,7 +212,9 @@ public class HiveRpcFailoverTests
         Assert.Equal(3, view["calls"]!.GetValue<long>());
         Assert.Equal(3, view["timeouts"]!.GetValue<long>());
         Assert.Equal(3, view["samples"]!.GetValue<int>());       // the timeouts ARE latency samples
-        Assert.True(view["ewma_ms"]!.GetValue<double>() >= 250);
+        // ...floored at the unproven prior: a 300ms timeout must not make a
+        // node that never answered look faster than nodes never tried.
+        Assert.True(view["ewma_ms"]!.GetValue<double>() > 1000);
         Assert.True(view["parked_for_ms"]!.GetValue<long>() > 0); // parked after the third
 
         // The leader hiccups: with the dead node parked, the call skips it and
@@ -223,14 +226,22 @@ public class HiveRpcFailoverTests
         Assert.Equal(3, client.HealthSnapshot()[0]!["calls"]!.GetValue<long>());
         Assert.True(good.Hits >= 1);
 
-        // The park lapses (30s). Its timeouts were recorded as latency, so the
-        // dead node now ranks behind the proven-fast leader and is only probed
-        // when the leader fails: one probe, which fails and re-parks it for
-        // twice as long; the call is still served by the third node.
+        // The park lapses (30s). Its timeouts were recorded as latency (floored
+        // above the unproven prior), so the dead node now ranks behind the
+        // proven leader AND behind the never-tried node: a leader hiccup goes
+        // to the untried node, not to it.
         now += 31_000;
         flakyStatus = 500;
         await client.Call("condenser_api", "get_accounts", new JsonArray());
+        Assert.Equal(3, client.HealthSnapshot()[0]!["calls"]!.GetValue<long>());
+
+        // Only when every other node fails is it probed: one attempt, which
+        // fails and re-parks it for twice as long.
+        flakyStatus = 500;
+        goodStatus = 500;
+        await Assert.ThrowsAnyAsync<Exception>(() => client.Call("condenser_api", "get_accounts", new JsonArray()));
         flakyStatus = 200;
+        goodStatus = 200;
         view = client.HealthSnapshot()[0]!;
         Assert.Equal(4, view["calls"]!.GetValue<long>());
         Assert.True(view["parked_for_ms"]!.GetValue<long>() > 30_000);
@@ -281,6 +292,52 @@ public class HiveRpcFailoverTests
         Assert.True(client.HealthSnapshot()[0]!["parked_for_ms"]!.GetValue<long>() > 0);
         await Assert.ThrowsAnyAsync<Exception>(() => client.Call("condenser_api", "get_accounts", new JsonArray()));
         Assert.Equal(4, client.HealthSnapshot()[0]!["calls"]!.GetValue<long>());
+    }
+
+    [Fact]
+    public async Task RateLimits_DoNotCountTowardFailureParking()
+    {
+        // 429s have their own parking and a throttled node is responsive: two
+        // 429s and one hard failure must not hard-park it.
+        var status = 429;
+        await using var throttled = new StubNode(() => status);
+        await using var good = new StubNode(() => 200);
+        long now = 0;
+        var client = new HiveRpcClient(new[] { throttled.Url, good.Url }, timeoutMs: 500, failoverThreshold: 1, clock: () => now);
+
+        await client.Call("condenser_api", "get_accounts", new JsonArray()); // 429 -> rate-limit parked
+        now += 61_000;                                                         // that park lapses
+        await client.Call("condenser_api", "get_accounts", new JsonArray()); // 429 again
+        now += 61_000;
+        status = 500;
+        await client.Call("condenser_api", "get_accounts", new JsonArray()); // one hard failure
+        var view = client.HealthSnapshot()[0]!;
+        Assert.Equal(3, view["calls"]!.GetValue<long>());
+        Assert.Equal(2, view["rate_limited"]!.GetValue<long>());
+        Assert.Equal(0, view["parked_for_ms"]!.GetValue<long>());
+    }
+
+    [Fact]
+    public async Task ASuccessClearsAFailurePark()
+    {
+        // An all-parked pool offers every node; the one that recovers must not
+        // be excluded again by its stale park deadline once another node's
+        // park lapses.
+        var mode = -1;
+        await using var flapping = new StubNode(() => mode);
+        long now = 0;
+        var client = new HiveRpcClient(new[] { flapping.Url }, timeoutMs: 200, failoverThreshold: 1, clock: () => now);
+        for (var i = 0; i < 3; i++)
+        {
+            await Assert.ThrowsAnyAsync<Exception>(() => client.Call("condenser_api", "get_accounts", new JsonArray()));
+        }
+        Assert.True(client.HealthSnapshot()[0]!["parked_for_ms"]!.GetValue<long>() > 0);
+        // The only node, so it is still offered; it recovers and answers.
+        mode = 200;
+        await Task.Delay(3500); // let the stub's hung handlers drain before it can answer
+        await client.Call("condenser_api", "get_accounts", new JsonArray());
+        Assert.Equal(0, client.HealthSnapshot()[0]!["parked_for_ms"]!.GetValue<long>());
+        Assert.Equal(0, client.HealthSnapshot()[0]!["consecutive_failures"]!.GetValue<int>());
     }
 
     [Fact]
