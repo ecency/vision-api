@@ -215,6 +215,8 @@ public static partial class SsrRpc
             return new Resolution(Outcome.Hit, cached, null);
         }
 
+        var retried = false;
+    again:
         var coalesced = true;
         Pending pending;
         while (true)
@@ -262,6 +264,15 @@ public static partial class SsrRpc
         {
             var bytes = await pending.Task;
             return new Resolution(coalesced ? Outcome.Coalesced : Outcome.Miss, bytes, null);
+        }
+        catch (FillRejectedException) when (coalesced && !retried)
+        {
+            // The fill this reader attached to was judged expired (or refused) before
+            // the reader's own wait began, which can only happen if the reader was
+            // descheduled for longer than the budget between attaching and waiting.
+            // Its budget has not been spent on anything yet, so start over once.
+            retried = true;
+            goto again;
         }
         catch (HiveRpcClient.RpcException e)
         {
