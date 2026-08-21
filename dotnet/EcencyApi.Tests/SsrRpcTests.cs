@@ -222,6 +222,28 @@ public class SsrRpcTests
     }
 
     [Fact]
+    public async Task Every_over_budget_set_purges_expired_entries_first_not_only_once_in_a_while()
+    {
+        var cache = new BytesCache(120);
+        cache.Set("live-a", new byte[40], 60_000);
+        cache.Set("short-1", new byte[40], 50);
+        await Task.Delay(120);
+        cache.Set("live-b", new byte[40], 60_000); // over budget: short-1 (expired) goes
+        Assert.False(cache.TryGet("short-1", out _));
+        Assert.True(cache.TryGet("live-a", out _));
+        // A second expiry moments later, then more pressure: it must go before
+        // the live entry at the LRU head, even though a purge just ran.
+        cache.Set("short-2", new byte[40], 50);
+        await Task.Delay(120);
+        cache.Set("live-c", new byte[40], 60_000);
+        Assert.False(cache.TryGet("short-2", out _));
+        Assert.True(cache.TryGet("live-a", out _));
+        Assert.True(cache.TryGet("live-b", out _));
+        Assert.True(cache.TryGet("live-c", out _));
+        Assert.Equal(120, cache.Bytes);
+    }
+
+    [Fact]
     public async Task Rpc_requires_structured_params_and_keys_the_call_on_them()
     {
         await using var stub = new RpcStub();

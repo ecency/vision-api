@@ -25,14 +25,11 @@ public sealed class BytesCache
     private readonly Dictionary<string, Entry> _map = new();
     // Head = least recently used, tail = most recently used.
     private readonly LinkedList<string> _lru = new();
+    // Expiry order, so that under pressure every expired entry anywhere in
+    // the list is dropped before a live one is evicted, at O(log n) apiece.
+    private readonly SortedSet<(long ExpiresAtMs, string Key)> _byExpiry = new();
     private readonly object _lock = new();
     private long _bytes;
-    private long _lastSweepMs;
-
-    // Under pressure, expired entries anywhere in the list are dropped before a
-    // live one is evicted for space. A full pass is O(n), so it runs at most
-    // this often; lazy expiry on read covers the rest.
-    private const long SweepIntervalMs = 30_000;
 
     public BytesCache(long budgetBytes)
     {
@@ -82,11 +79,13 @@ public sealed class BytesCache
                 RemoveLocked(key, existing);
             }
             var node = _lru.AddLast(key);
-            _map[key] = new Entry { Bytes = bytes, ExpiresAtMs = NowMs + ttlMs, Node = node };
+            var entry = new Entry { Bytes = bytes, ExpiresAtMs = NowMs + ttlMs, Node = node };
+            _map[key] = entry;
+            _byExpiry.Add((entry.ExpiresAtMs, key));
             _bytes += bytes.Length;
             if (_bytes > Budget)
             {
-                SweepExpiredLocked();
+                PurgeExpiredLocked();
             }
             while (_bytes > Budget && _lru.First is { } oldest && oldest != node)
             {
@@ -95,14 +94,15 @@ public sealed class BytesCache
         }
     }
 
-    private void SweepExpiredLocked()
+    // Every expired entry, wherever it sits in the LRU, goes before any live one.
+    private void PurgeExpiredLocked()
     {
         var now = NowMs;
-        if (now - _lastSweepMs < SweepIntervalMs) return;
-        _lastSweepMs = now;
-        foreach (var (key, entry) in _map.Where(kv => kv.Value.ExpiresAtMs <= now).ToArray())
+        while (_byExpiry.Count > 0)
         {
-            RemoveLocked(key, entry);
+            var (expiresAt, key) = _byExpiry.Min;
+            if (expiresAt > now) break;
+            RemoveLocked(key, _map[key]);
         }
     }
 
@@ -110,6 +110,7 @@ public sealed class BytesCache
     {
         _map.Remove(key);
         _lru.Remove(entry.Node);
+        _byExpiry.Remove((entry.ExpiresAtMs, key));
         _bytes -= entry.Bytes.Length;
     }
 }
