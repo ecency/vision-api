@@ -28,11 +28,48 @@ public sealed class HiveRpcClient
     // timeoutMs 2000 / failoverThreshold 2 mirror the dhive Client options the
     // Node service constructed its clients with.
     public HiveRpcClient(string[] nodes, int timeoutMs = 2000, int failoverThreshold = 2)
+        : this(nodes, timeoutMs, failoverThreshold, null)
+    {
+    }
+
+    /// <param name="clock">Test seam for the health tracker's notion of time.</param>
+    internal HiveRpcClient(string[] nodes, int timeoutMs, int failoverThreshold, Func<long>? clock)
     {
         _nodes = nodes;
         _timeoutMs = timeoutMs;
         _failoverThreshold = Math.Max(1, failoverThreshold);
-        _health = new NodeHealthTracker(nodes.Length);
+        _health = new NodeHealthTracker(nodes.Length, clock);
+    }
+
+    public IReadOnlyList<string> Nodes => _nodes;
+
+    /// <summary>
+    /// Per-node health for an internal stats endpoint: which node carries the
+    /// traffic, which one times out, which one is parked. Hosts only; these are
+    /// the public node names, nothing about this deployment.
+    /// </summary>
+    public JsonArray HealthSnapshot()
+    {
+        var arr = new JsonArray();
+        foreach (var v in _health.Snapshot())
+        {
+            arr.Add(new JsonObject
+            {
+                ["node"] = Uri.TryCreate(_nodes[v.Index], UriKind.Absolute, out var u) ? u.Host : _nodes[v.Index],
+                ["calls"] = v.Calls,
+                ["ok"] = v.Successes,
+                ["failures"] = v.Failures,
+                ["timeouts"] = v.Timeouts,
+                ["rate_limited"] = v.RateLimits,
+                ["ewma_ms"] = v.EwmaLatencyMs is { } e ? Math.Round(e, 1) : null,
+                ["samples"] = v.LatencySamples,
+                ["consecutive_failures"] = v.ConsecutiveFailures,
+                ["recent_failure"] = v.RecentFailure,
+                ["rate_limited_for_ms"] = v.RateLimitedForMs,
+                ["parked_for_ms"] = v.FailureParkedForMs,
+            });
+        }
+        return arr;
     }
 
     public sealed class RpcException : Exception
@@ -121,6 +158,8 @@ public sealed class HiveRpcClient
 
             for (var attempt = 0; attempt < _failoverThreshold; attempt++)
             {
+                // The ordering above is a snapshot; admission is decided now.
+                if (!_health.TryBeginAttempt(nodeIndex)) break;
                 var started = NowMs;
                 try
                 {
@@ -171,9 +210,9 @@ public sealed class HiveRpcClient
                     {
                         _health.RecordRateLimited(nodeIndex, e.RetryAfterMs);
                     }
-                    else
+                    else if (_health.RecordFailure(nodeIndex, NowMs - started, e.IsTimeout))
                     {
-                        _health.RecordFailure(nodeIndex, NowMs - started);
+                        break; // this failure parked the node: no same-node retry
                     }
                     if (e.AdvanceImmediately)
                     {
@@ -183,7 +222,14 @@ public sealed class HiveRpcClient
                 catch (Exception e)
                 {
                     lastError = e;
-                    _health.RecordFailure(nodeIndex, NowMs - started);
+                    if (_health.RecordFailure(nodeIndex, NowMs - started))
+                    {
+                        break;
+                    }
+                }
+                finally
+                {
+                    _health.EndAttempt(nodeIndex);
                 }
             }
         }
@@ -204,15 +250,17 @@ public sealed class HiveRpcClient
     {
         public bool AdvanceImmediately { get; }
         public bool IsRateLimit { get; }
+        public bool IsTimeout { get; }
         public int? RetryAfterMs { get; }
         public Exception? Cause { get; private set; }
 
         public NodeUnavailableException(string message, bool advanceImmediately,
-            bool isRateLimit = false, int? retryAfterMs = null) : base(message)
+            bool isRateLimit = false, int? retryAfterMs = null, bool isTimeout = false) : base(message)
         {
             AdvanceImmediately = advanceImmediately;
             IsRateLimit = isRateLimit;
             RetryAfterMs = retryAfterMs;
+            IsTimeout = isTimeout;
         }
 
         public NodeUnavailableException WithInner(Exception inner) { Cause = inner; return this; }
@@ -237,7 +285,7 @@ public sealed class HiveRpcClient
         }
         catch (OperationCanceledException e) when (cts.IsCancellationRequested)
         {
-            throw new NodeUnavailableException($"RPC node {node} timed out", advanceImmediately: false).WithInner(e);
+            throw new NodeUnavailableException($"RPC node {node} timed out", advanceImmediately: false, isTimeout: true).WithInner(e);
         }
         catch (HttpRequestException e)
         {
@@ -364,12 +412,14 @@ public static class HiveClients
     // portfolio engine/chain layers came back empty for everyone. GetAccounts
     // also routes around such a node at runtime, but keeping them out of the pool
     // means correctness here does not depend on that fallback firing.
+    // hive-api.arcange.eu is absent too: it never completes a TCP connect from
+    // any host this service runs on (SYN, no answer), so every attempt cost the
+    // full per-node timeout and, in bursts, took every in-flight fill with it.
     public static readonly IReadOnlyList<string> DefaultNodes = new[]
     {
         "https://api.hive.blog",
         "https://api.deathwing.me",
         "https://rpc.mahdiyari.info",
-        "https://hive-api.arcange.eu",
         "https://api.openhive.network",
         "https://hive-api.3speak.tv",
         "https://api.syncad.com",

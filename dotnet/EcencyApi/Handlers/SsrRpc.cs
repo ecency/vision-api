@@ -128,6 +128,10 @@ public static partial class SsrRpc
     internal sealed class Counter
     {
         public long Hit, Miss, Coalesced, Error, Timeout;
+        // Fills that outran the lookup budget. Distinct from Timeout, which is
+        // counted once per waiting reader: one slow fill on a hot key is one
+        // slow fill and many timeouts.
+        public long SlowFill;
         // Upstream latency EWMA for misses, milliseconds.
         public double UpstreamMs;
         private readonly object _lock = new();
@@ -349,12 +353,22 @@ public static partial class SsrRpc
                 }
             }
             var started = Environment.TickCount64;
-            // The dotted method form: hived's legacy `call` dispatcher has no API
-            // named `bridge` (found on alpha: every bridge read failed with
-            // "Could not find API bridge"), while `bridge.get_post` is routed to
-            // hivemind. The node already hangs off the request body and cannot be
-            // re-parented into the envelope, so it travels as a clone.
-            var result = await Client.CallMethod($"{policy.Api}.{policy.Method}", @params.DeepClone());
+            JsonNode? result;
+            try
+            {
+                // The dotted method form: hived's legacy `call` dispatcher has no API
+                // named `bridge` (found on alpha: every bridge read failed with
+                // "Could not find API bridge"), while `bridge.get_post` is routed to
+                // hivemind. The node already hangs off the request body and cannot be
+                // re-parented into the envelope, so it travels as a clone.
+                result = await Client.CallMethod($"{policy.Api}.{policy.Method}", @params.DeepClone());
+            }
+            finally
+            {
+                // A fill that outran the budget is slow whether it then landed or
+                // threw: an upstream outage is exactly when the count matters.
+                if (Environment.TickCount64 - started > BudgetMs) Interlocked.Increment(ref counter.SlowFill);
+            }
             var bytes = Encoding.UTF8.GetBytes(result is null ? "null" : JsJson.Stringify(result));
             counter.RecordUpstream(Environment.TickCount64 - started);
             Cache.Set(key, bytes, policy.TtlMs);
@@ -444,6 +458,7 @@ public static partial class SsrRpc
                 ["coalesced"] = Interlocked.Read(ref c.Coalesced),
                 ["error"] = Interlocked.Read(ref c.Error),
                 ["timeout"] = Interlocked.Read(ref c.Timeout),
+                ["slow_fill"] = Interlocked.Read(ref c.SlowFill),
                 ["upstream_ms"] = Math.Round(c.ReadUpstreamMs(), 1),
             };
         }
@@ -458,6 +473,7 @@ public static partial class SsrRpc
             },
             ["budget_ms"] = BudgetMs,
             ["methods"] = methods,
+            ["nodes"] = Client.HealthSnapshot(),
         });
     }
 }

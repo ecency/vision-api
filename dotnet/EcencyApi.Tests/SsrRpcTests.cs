@@ -437,6 +437,73 @@ public class SsrRpcTests
     }
 
     [Fact]
+    public async Task Stats_count_one_slow_fill_for_many_waiter_timeouts_and_report_per_node_health()
+    {
+        // `timeout` is per waiting reader; `slow_fill` is per fill. A hot key
+        // with five readers on one slow upstream call is five timeouts and one
+        // slow fill, and the per-node section shows which node served it.
+        await using var stub = new RpcStub { DelayMs = 400 };
+        Use(stub, budgetMs: 100);
+        SsrRpc.SecretDigest = SsrRpc.Digest("right-secret");
+        try
+        {
+            var readers = Enumerable.Range(0, 5).Select(_ => SsrRpc.Resolve(Post, P("hot", "key"))).ToArray();
+            var outcomes = await Task.WhenAll(readers);
+            Assert.All(outcomes, r => Assert.Equal(SsrRpc.Outcome.Timeout, r.Outcome));
+            await Task.Delay(600); // the detached fill completes and lands
+
+            var stats = Request("GET", "/private-api/ssr/stats", "right-secret");
+            await SsrRpc.Stats(stats);
+            var body = JsonNode.Parse(ResponseText(stats))!;
+            var post = body["methods"]!["bridge.get_post"]!;
+            Assert.Equal(5, post["timeout"]!.GetValue<long>());
+            Assert.Equal(1, post["slow_fill"]!.GetValue<long>());
+            Assert.Equal(4, post["coalesced"]!.GetValue<long>());
+            Assert.Equal(1, stub.Hits);
+
+            var nodes = body["nodes"]!.AsArray();
+            var node = Assert.Single(nodes)!;
+            Assert.Equal("127.0.0.1", node["node"]!.GetValue<string>());
+            Assert.Equal(1, node["calls"]!.GetValue<long>());
+            Assert.Equal(1, node["ok"]!.GetValue<long>());
+            Assert.Equal(0, node["timeouts"]!.GetValue<long>());
+            Assert.Equal(0, node["parked_for_ms"]!.GetValue<long>());
+        }
+        finally
+        {
+            SsrRpc.SecretDigest = null;
+            SsrRpc.BudgetMs = 1500;
+        }
+    }
+
+    [Fact]
+    public async Task A_slow_fill_that_then_fails_is_still_a_slow_fill()
+    {
+        // During an upstream outage every reader times out and the fill ends
+        // in an error; that is precisely when the slow-fill count must not
+        // read zero.
+        await using var stub = new RpcStub { DelayMs = 400, RpcError = true };
+        Use(stub, budgetMs: 100);
+        SsrRpc.SecretDigest = SsrRpc.Digest("right-secret");
+        try
+        {
+            var r = await SsrRpc.Resolve(Post, P("slow", "broken"));
+            Assert.Equal(SsrRpc.Outcome.Timeout, r.Outcome);
+            await Task.Delay(600);
+            var stats = Request("GET", "/private-api/ssr/stats", "right-secret");
+            await SsrRpc.Stats(stats);
+            var post = JsonNode.Parse(ResponseText(stats))!["methods"]!["bridge.get_post"]!;
+            Assert.Equal(1, post["slow_fill"]!.GetValue<long>());
+            Assert.Equal(1, post["timeout"]!.GetValue<long>());
+        }
+        finally
+        {
+            SsrRpc.SecretDigest = null;
+            SsrRpc.BudgetMs = 1500;
+        }
+    }
+
+    [Fact]
     public async Task A_null_result_is_served_as_json_null_with_a_json_content_type()
     {
         await using var stub = new RpcStub { NullResult = true };
