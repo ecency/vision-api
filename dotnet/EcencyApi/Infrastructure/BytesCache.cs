@@ -27,7 +27,17 @@ public sealed class BytesCache
     private readonly LinkedList<string> _lru = new();
     // Expiry order, so that under pressure every expired entry anywhere in
     // the list is dropped before a live one is evicted, at O(log n) apiece.
-    private readonly SortedSet<(long ExpiresAtMs, string Key)> _byExpiry = new();
+    // Keys are compared ordinally, the same way the dictionary compares them:
+    // they carry client-supplied JSON, and a culture-sensitive tie-break could
+    // collate two distinct keys as equal and desynchronize the two structures.
+    private static readonly IComparer<(long ExpiresAtMs, string Key)> ExpiryOrder =
+        Comparer<(long ExpiresAtMs, string Key)>.Create((a, b) =>
+        {
+            var byTime = a.ExpiresAtMs.CompareTo(b.ExpiresAtMs);
+            return byTime != 0 ? byTime : string.CompareOrdinal(a.Key, b.Key);
+        });
+
+    private readonly SortedSet<(long ExpiresAtMs, string Key)> _byExpiry = new(ExpiryOrder);
     private readonly object _lock = new();
     private long _bytes;
 
@@ -102,7 +112,14 @@ public sealed class BytesCache
         {
             var (expiresAt, key) = _byExpiry.Min;
             if (expiresAt > now) break;
-            RemoveLocked(key, _map[key]);
+            if (_map.TryGetValue(key, out var entry))
+            {
+                RemoveLocked(key, entry);
+            }
+            else
+            {
+                _byExpiry.Remove((expiresAt, key));
+            }
         }
     }
 

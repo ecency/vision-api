@@ -244,6 +244,23 @@ public class SsrRpcTests
     }
 
     [Fact]
+    public async Task Keys_that_share_an_expiry_millisecond_are_indexed_and_purged_independently()
+    {
+        var cache = new BytesCache(100);
+        // Same TTL set back to back, keys that differ only in characters a
+        // culture-aware comparison can treat as ignorable.
+        cache.Set("k-a", new byte[30], 50);
+        cache.Set("k-\u00ADa", new byte[30], 50);
+        cache.Set("k-A", new byte[30], 50);
+        Assert.Equal(3, cache.Count);
+        await Task.Delay(120);
+        cache.Set("live", new byte[40], 60_000); // over budget: all three expired must go
+        Assert.Equal(1, cache.Count);
+        Assert.Equal(40, cache.Bytes);
+        Assert.True(cache.TryGet("live", out _));
+    }
+
+    [Fact]
     public async Task Rpc_requires_structured_params_and_keys_the_call_on_them()
     {
         await using var stub = new RpcStub();
