@@ -30,7 +30,7 @@ namespace EcencyApi.Handlers;
 ///    answers 502. Either way the consumer falls back to its own node pool.
 ///  - No per-request logging (invariant 6); counters on /stats instead.
 /// </summary>
-public static class SsrRpc
+public static partial class SsrRpc
 {
     internal sealed record MethodPolicy(string Api, string Method, int TtlMs)
     {
@@ -58,6 +58,15 @@ public static class SsrRpc
 
     internal const string HeaderName = "X-Ecency-Internal";
 
+    // The configured secret, held as a SHA-256 digest so the comparison below is
+    // over two equal-length values (FixedTimeEquals returns early on a length
+    // mismatch, which would otherwise leak the secret's length). Replaceable for
+    // tests, which cannot set process environment before Config initializes.
+    internal static byte[]? SecretDigest = Digest(Config.SsrInternalSecret);
+
+    internal static byte[]? Digest(string? secret) =>
+        secret is null ? null : SHA256.HashData(Encoding.UTF8.GetBytes(secret));
+
     // Replaceable for tests (loopback stub nodes, a small cache budget).
     internal static HiveRpcClient Client = new(
         Config.SsrRpcNodes ?? HiveClients.DefaultNodes.ToArray(),
@@ -71,6 +80,11 @@ public static class SsrRpc
     // Bounds detached fills: a fill outlives the request budget on purpose, so
     // a slow pool plus many distinct keys must not pile up unbounded calls.
     internal static SemaphoreSlim FillGate = new(Config.SsrMaxConcurrentFills, Config.SsrMaxConcurrentFills);
+
+    // Bounds the fills WAITING for the gate as well: beyond this many, a new
+    // miss fails fast instead of queueing work no reader will wait for.
+    internal static int MaxQueuedFills = Config.SsrMaxQueuedFills;
+    private static int _queuedFills;
 
     private static readonly ConcurrentDictionary<string, Task<byte[]>> InFlight = new();
 
@@ -106,13 +120,12 @@ public static class SsrRpc
 
     internal static bool Authorized(HttpContext ctx)
     {
-        var secret = Config.SsrInternalSecret;
-        if (secret is null) return false;
+        var expected = SecretDigest;
+        if (expected is null) return false;
         if (!ctx.Request.Headers.TryGetValue(HeaderName, out var values)) return false;
         var presented = values.ToString();
         if (presented.Length == 0) return false;
-        return CryptographicOperations.FixedTimeEquals(
-            Encoding.UTF8.GetBytes(presented), Encoding.UTF8.GetBytes(secret));
+        return CryptographicOperations.FixedTimeEquals(Digest(presented), expected);
     }
 
     // ---- key -----------------------------------------------------------------
@@ -215,10 +228,16 @@ public static class SsrRpc
 
     // The one upstream call behind a key. Runs to completion even when every
     // waiter has given up, so the cache still gets filled for the next reader.
+    internal sealed class FillRejectedException : Exception
+    {
+        public FillRejectedException(string message) : base(message) { }
+    }
+
     private static async Task Fill(MethodPolicy policy, JsonNode @params, string key, Counter counter,
         TaskCompletionSource<byte[]> tcs)
     {
         var acquired = false;
+        var queued = false;
         try
         {
             // A reader can miss the cache, lose the race to another fill that
@@ -229,10 +248,35 @@ public static class SsrRpc
                 tcs.TrySetResult(cached);
                 return;
             }
-            await FillGate.WaitAsync();
-            acquired = true;
+            // A free slot is taken at once; otherwise the fill joins a bounded
+            // queue. Only fills actually waiting count against the bound.
+            if (FillGate.Wait(0))
+            {
+                acquired = true;
+            }
+            else
+            {
+                if (Interlocked.Increment(ref _queuedFills) > MaxQueuedFills)
+                {
+                    Interlocked.Decrement(ref _queuedFills);
+                    throw new FillRejectedException("fill queue full");
+                }
+                queued = true;
+                var enqueued = Environment.TickCount64;
+                await FillGate.WaitAsync();
+                acquired = true;
+                // Every reader gave up at the budget while this sat in the queue;
+                // calling upstream now would only be stale traffic for nobody.
+                if (Environment.TickCount64 - enqueued > BudgetMs)
+                {
+                    throw new FillRejectedException("fill expired in queue");
+                }
+            }
             var started = Environment.TickCount64;
-            var result = await Client.Call(policy.Api, policy.Method, @params);
+            // Call() places params inside its own request envelope; a node that
+            // already hangs off the request body cannot be re-parented, so it
+            // travels as a clone.
+            var result = await Client.Call(policy.Api, policy.Method, @params.DeepClone());
             var bytes = Encoding.UTF8.GetBytes(result is null ? "null" : JsJson.Stringify(result));
             counter.RecordUpstream(Environment.TickCount64 - started);
             Cache.Set(key, bytes, policy.TtlMs);
@@ -245,12 +289,20 @@ public static class SsrRpc
         }
         finally
         {
+            if (queued) Interlocked.Decrement(ref _queuedFills);
             if (acquired) FillGate.Release();
             InFlight.TryRemove(new KeyValuePair<string, Task<byte[]>>(key, tcs.Task));
         }
     }
 
     // ---- handlers ------------------------------------------------------------
+    //
+    // The body is the JSON serialization of the upstream `result`, always with
+    // an application/json content type: an object, an array, a string, a number
+    // or `null` exactly as JSON. This is a new internal contract read with
+    // res.json() by one consumer, not a pipe of an upstream HTTP body, so the
+    // Express res.send quirks the proxied routes preserve (null as an empty
+    // body, strings as text/html, numbers as text) do not apply here.
 
     public static async Task Rpc(HttpContext ctx)
     {

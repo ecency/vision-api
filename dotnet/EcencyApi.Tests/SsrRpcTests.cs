@@ -26,6 +26,7 @@ public class SsrRpcTests
         public int Hits;
         public int DelayMs;
         public bool RpcError;
+        public bool NullResult;
 
         public RpcStub()
         {
@@ -56,7 +57,9 @@ public class SsrRpcTests
                 if (DelayMs > 0) await Task.Delay(DelayMs);
                 var body = RpcError
                     ? "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"message\":\"stub error\"}}"
-                    : "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"method\":\"" + method + "\",\"n\":" + n + ",\"text\":\"caf\\u00e9 \\ud83d\"}}";
+                    : NullResult
+                        ? "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}"
+                        : "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"method\":\"" + method + "\",\"n\":" + n + ",\"text\":\"caf\\u00e9 \\ud83d\"}}";
                 var bytes = Encoding.UTF8.GetBytes(body);
                 ctx.Response.StatusCode = 200;
                 ctx.Response.ContentType = "application/json";
@@ -76,12 +79,14 @@ public class SsrRpcTests
     private static readonly SsrRpc.MethodPolicy Post = SsrRpc.Allowlist["bridge.get_post"];
     private static readonly SsrRpc.MethodPolicy Props = SsrRpc.Allowlist["condenser_api.get_dynamic_global_properties"];
 
-    private static void Use(RpcStub stub, long cacheBytes = 1 << 20, int budgetMs = 1500, int maxFills = 64)
+    private static void Use(RpcStub stub, long cacheBytes = 1 << 20, int budgetMs = 1500, int maxFills = 64, int maxQueued = 256)
     {
         SsrRpc.Client = new HiveRpcClient(new[] { stub.Url }, timeoutMs: 1000, failoverThreshold: 1);
         SsrRpc.Cache = new BytesCache(cacheBytes);
         SsrRpc.BudgetMs = budgetMs;
         SsrRpc.FillGate = new SemaphoreSlim(maxFills, maxFills);
+        SsrRpc.MaxQueuedFills = maxQueued;
+        SsrRpc.SecretDigest = null;
         SsrRpc.ResetForTests();
     }
 
@@ -235,6 +240,98 @@ public class SsrRpcTests
     }
 
     [Fact]
+    public async Task Queued_fills_are_bounded_and_a_fill_that_outlived_the_budget_in_the_queue_is_dropped()
+    {
+        await using var stub = new RpcStub { DelayMs = 400 };
+        Use(stub, budgetMs: 100, maxFills: 1, maxQueued: 1);
+        // First fill holds the gate; second queues; third is over the queue bound.
+        var a = SsrRpc.Resolve(Post, P("q", "1"));
+        await Task.Delay(50);
+        var b = SsrRpc.Resolve(Post, P("q", "2"));
+        await Task.Delay(20);
+        var c = SsrRpc.Resolve(Post, P("q", "3"));
+        var ra = await a; var rb = await b; var rc = await c;
+        Assert.True(ra.Outcome == SsrRpc.Outcome.Timeout, $"a: {ra.Outcome} {ra.Error}");
+        Assert.Equal(SsrRpc.Outcome.Timeout, rb.Outcome);
+        Assert.Equal(SsrRpc.Outcome.Unavailable, rc.Outcome);
+        Assert.Equal("fill queue full", rc.Error);
+        // The queued second fill waited past the budget for the gate, so it never
+        // calls upstream: one upstream hit in total, and its key is not cached.
+        await Task.Delay(900);
+        Assert.Equal(1, stub.Hits);
+        SsrRpc.BudgetMs = 1500;
+        Assert.Equal(SsrRpc.Outcome.Hit, (await SsrRpc.Resolve(Post, P("q", "1"))).Outcome);
+        Assert.Equal(SsrRpc.Outcome.Miss, (await SsrRpc.Resolve(Post, P("q", "2"))).Outcome);
+    }
+
+    [Fact]
+    public async Task With_the_secret_configured_both_routes_serve_the_matching_header_and_nothing_else()
+    {
+        await using var stub = new RpcStub();
+        Use(stub);
+        SsrRpc.SecretDigest = SsrRpc.Digest("right-secret");
+        try
+        {
+            var ok = Request("POST", "/private-api/ssr/rpc", "right-secret",
+                "{\"api\":\"bridge\",\"method\":\"get_post\",\"params\":{\"author\":\"a\",\"permlink\":\"b\"}}");
+            await SsrRpc.Rpc(ok);
+            Assert.True(ok.Response.StatusCode == 200, $"status {ok.Response.StatusCode}: {ResponseText(ok)}");
+            Assert.Equal("MISS", ok.Response.Headers["X-Ssr-Cache"].ToString());
+            Assert.StartsWith("{\"method\":\"get_post\"", ResponseText(ok));
+
+            var again = Request("POST", "/private-api/ssr/rpc", "right-secret",
+                "{\"api\":\"bridge\",\"method\":\"get_post\",\"params\":{\"permlink\":\"b\",\"author\":\"a\"}}");
+            await SsrRpc.Rpc(again);
+            Assert.Equal("HIT", again.Response.Headers["X-Ssr-Cache"].ToString());
+            Assert.Equal(1, stub.Hits);
+
+            var stats = Request("GET", "/private-api/ssr/stats", "right-secret");
+            await SsrRpc.Stats(stats);
+            Assert.Equal(200, stats.Response.StatusCode);
+            Assert.Contains("\"bridge.get_post\"", ResponseText(stats));
+            Assert.Contains("\"hit\":1", ResponseText(stats));
+
+            foreach (var header in new[] { "wrong-secret", "right-secret-but-longer", "", null })
+            {
+                var denied = Request("POST", "/private-api/ssr/rpc", header,
+                    "{\"api\":\"bridge\",\"method\":\"get_post\",\"params\":{}}");
+                await SsrRpc.Rpc(denied);
+                Assert.Equal(404, denied.Response.StatusCode);
+                var deniedStats = Request("GET", "/private-api/ssr/stats", header);
+                await SsrRpc.Stats(deniedStats);
+                Assert.Equal(200, deniedStats.Response.StatusCode);
+                Assert.DoesNotContain("methods", ResponseText(deniedStats));
+            }
+            Assert.Equal(1, stub.Hits);
+        }
+        finally
+        {
+            SsrRpc.SecretDigest = null;
+        }
+    }
+
+    [Fact]
+    public async Task A_null_result_is_served_as_json_null_with_a_json_content_type()
+    {
+        await using var stub = new RpcStub { NullResult = true };
+        Use(stub);
+        SsrRpc.SecretDigest = SsrRpc.Digest("s");
+        try
+        {
+            var ctx = Request("POST", "/private-api/ssr/rpc", "s",
+                "{\"api\":\"bridge\",\"method\":\"get_post\",\"params\":{\"author\":\"none\",\"permlink\":\"none\"}}");
+            await SsrRpc.Rpc(ctx);
+            Assert.True(ctx.Response.StatusCode == 200, $"status {ctx.Response.StatusCode}: {ResponseText(ctx)}");
+            Assert.StartsWith("application/json", ctx.Response.ContentType);
+            Assert.Equal("null", ResponseText(ctx));
+        }
+        finally
+        {
+            SsrRpc.SecretDigest = null;
+        }
+    }
+
+    [Fact]
     public void Byte_budget_evicts_least_recently_used_and_refuses_oversize()
     {
         var cache = new BytesCache(100);
@@ -317,6 +414,7 @@ public class SsrRpcTests
     public void Authorized_requires_the_configured_secret_and_a_matching_header()
     {
         // With no secret configured nothing authorizes, header or not.
+        SsrRpc.SecretDigest = null;
         Assert.False(SsrRpc.Authorized(Request("POST", "/x", null)));
         Assert.False(SsrRpc.Authorized(Request("POST", "/x", "")));
         Assert.False(SsrRpc.Authorized(Request("POST", "/x", "guess")));

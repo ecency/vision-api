@@ -59,6 +59,7 @@ docker run -it --rm -p 4000:4000 \
 | `SSR_RPC_BUDGET_MS` | wall-clock budget for one SSR RPC lookup before it answers 504 while the fill completes (default `1500`) |
 | `SSR_RPC_NODE_TIMEOUT_MS` | per-node timeout of the SSR RPC cache's own client, one attempt per node (default `1200`) |
 | `SSR_RPC_NODES` | comma-separated node pool for that client (default: the shared pool) |
+| `SSR_RPC_MAX_FILLS` / `SSR_RPC_MAX_QUEUED_FILLS` | bound on upstream fills in progress (default `64`) and on fills waiting for that bound (default `256`); beyond the latter a miss fails fast |
 
 ## Swarm
 

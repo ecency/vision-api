@@ -61,6 +61,10 @@ public static class Config
     public static int SsrMaxConcurrentFills { get; } =
         int.TryParse(Env("SSR_RPC_MAX_FILLS"), out var f) && f > 0 ? f : 64;
 
+    // Upper bound on fills waiting for that gate; beyond it a miss fails fast.
+    public static int SsrMaxQueuedFills { get; } =
+        int.TryParse(Env("SSR_RPC_MAX_QUEUED_FILLS"), out var q) && q > 0 ? q : 256;
+
     private static string? NonEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static string? Env(string name) => Environment.GetEnvironmentVariable(name);

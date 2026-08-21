@@ -16,7 +16,7 @@ namespace EcencyApi.Handlers;
 ///  - unmatched GET/HEAD -> 200 + the template page;
 ///  - unmatched other methods -> 404 + Express finalhandler "Cannot METHOD /path".
 /// </summary>
-public static class Routes
+public static partial class Routes
 {
     public static void Map(WebApplication app)
     {
