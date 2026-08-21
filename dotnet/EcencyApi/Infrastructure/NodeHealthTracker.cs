@@ -40,6 +40,13 @@ public sealed class NodeHealthTracker
     private const int FailureParkThreshold = 3;
     private const int FailureParkBaseMs = 30_000;
     private const int FailureParkMaxMs = 120_000;
+    // Under concurrency "consecutive" is not "sequential": with hundreds of
+    // calls in flight, three overlapping timeouts of a heavy query satisfy the
+    // count while the node is answering everything else. Parking therefore
+    // also needs the node to have never answered, or to be failing most of its
+    // recent calls (an EWMA of the failure fraction, alpha 0.1).
+    private const double FailureRateAlpha = 0.1;
+    private const double FailureRateParkFloor = 0.5;
 
     private sealed class NodeHealth
     {
@@ -50,6 +57,8 @@ public sealed class NodeHealthTracker
         public long LastRateLimitAtMs;
         public long FailureParkedUntilMs;
         public int FailureParkStreak;
+        // Recent failure fraction (1 = every recent call failed).
+        public double FailureRate;
         // Hard failures only (timeouts, refusals, bad answers), never 429s: a
         // throttled node is responsive and has its own parking.
         public int ConsecutiveHardFailures;
@@ -67,7 +76,7 @@ public sealed class NodeHealthTracker
     public sealed record NodeView(
         int Index, long Calls, long Successes, long Failures, long Timeouts, long RateLimits,
         double? EwmaLatencyMs, int LatencySamples, int ConsecutiveFailures,
-        bool RecentFailure, long RateLimitedForMs, long FailureParkedForMs);
+        bool RecentFailure, long RateLimitedForMs, long FailureParkedForMs, double FailureRate);
 
     private readonly NodeHealth[] _health;
     private readonly object _lock = new();
@@ -94,6 +103,7 @@ public sealed class NodeHealthTracker
             var h = _health[nodeIndex];
             h.Calls++;
             h.Successes++;
+            h.FailureRate *= 1 - FailureRateAlpha;
             h.ConsecutiveFailures = 0;
             h.ConsecutiveHardFailures = 0;
             h.RateLimitStreak = 0;
@@ -122,6 +132,7 @@ public sealed class NodeHealthTracker
             h.Calls++;
             h.Failures++;
             if (timedOut) h.Timeouts++;
+            h.FailureRate = h.FailureRate * (1 - FailureRateAlpha) + FailureRateAlpha;
             h.ConsecutiveFailures++;
             h.ConsecutiveHardFailures++;
             h.LastFailureAtMs = now;
@@ -136,7 +147,8 @@ public sealed class NodeHealthTracker
             {
                 RecordLatency(h, elapsedMs);
             }
-            if (h.ConsecutiveHardFailures >= FailureParkThreshold)
+            var notAnswering = h.Successes == 0 || h.FailureRate >= FailureRateParkFloor;
+            if (h.ConsecutiveHardFailures >= FailureParkThreshold && notAnswering)
             {
                 var parkMs = Math.Min(FailureParkBaseMs << Math.Min(h.FailureParkStreak, 2), FailureParkMaxMs);
                 h.FailureParkedUntilMs = now + parkMs;
@@ -284,7 +296,8 @@ public sealed class NodeHealthTracker
                 return new NodeView(i, h.Calls, h.Successes, h.Failures, h.Timeouts, h.RateLimits,
                     h.EwmaLatencyMs, h.LatencySampleCount, h.ConsecutiveFailures,
                     h.ConsecutiveFailures > 0 && now - h.LastFailureAtMs < RecentFailureWindowMs,
-                    Math.Max(0, h.RateLimitedUntilMs - now), Math.Max(0, h.FailureParkedUntilMs - now));
+                    Math.Max(0, h.RateLimitedUntilMs - now), Math.Max(0, h.FailureParkedUntilMs - now),
+                    h.FailureRate);
             }).ToList();
         }
     }

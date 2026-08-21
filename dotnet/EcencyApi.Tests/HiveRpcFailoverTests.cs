@@ -346,6 +346,57 @@ public class HiveRpcFailoverTests
     }
 
     [Fact]
+    public async Task AHealthyNodeWithOverlappingTimeouts_IsNotParked()
+    {
+        // Production shape: the node that answers ~98% of calls has three
+        // heavy queries time out at once. Three "consecutive" failures, yet it
+        // is answering everything else; parking it would push the load onto
+        // weaker nodes. Only a node that is not answering gets parked.
+        var hang = false;
+        await using var busy = new StubNode(() => hang ? -1 : 200);
+        await using var spare = new StubNode(() => 200);
+        long now = 0;
+        var client = new HiveRpcClient(new[] { busy.Url, spare.Url }, timeoutMs: 200, failoverThreshold: 1, clock: () => now);
+
+        for (var i = 0; i < 40; i++)
+        {
+            await client.Call("condenser_api", "get_accounts", new JsonArray());
+        }
+        // Three overlapping timeouts (sequential here is the strictest form of
+        // "consecutive"; the stub's single-threaded loop makes them serial).
+        hang = true;
+        for (var i = 0; i < 3; i++)
+        {
+            now += 31_000; // past the recent-failure demotion, so it is retried
+            await client.Call("condenser_api", "get_accounts", new JsonArray());
+        }
+        hang = false;
+        var view = client.HealthSnapshot()[0]!;
+        Assert.Equal(3, view["consecutive_failures"]!.GetValue<int>());
+        Assert.Equal(0, view["parked_for_ms"]!.GetValue<long>());
+        Assert.True(view["failure_rate"]!.GetValue<double>() < 0.5);
+
+        // With an alternative available the ranking stops trying it, so its
+        // fraction can only climb where it keeps being tried: a node that is the
+        // only option and keeps failing crosses the fraction and is parked.
+        var dying = false;
+        await using var only = new StubNode(() => dying ? -1 : 200);
+        var lone = new HiveRpcClient(new[] { only.Url }, timeoutMs: 200, failoverThreshold: 1, clock: () => now);
+        for (var i = 0; i < 10; i++)
+        {
+            await lone.Call("condenser_api", "get_accounts", new JsonArray());
+        }
+        dying = true;
+        for (var i = 0; i < 8; i++)
+        {
+            await Assert.ThrowsAnyAsync<Exception>(() => lone.Call("condenser_api", "get_accounts", new JsonArray()));
+        }
+        view = lone.HealthSnapshot()[0]!;
+        Assert.True(view["failure_rate"]!.GetValue<double>() >= 0.5);
+        Assert.True(view["parked_for_ms"]!.GetValue<long>() > 0);
+    }
+
+    [Fact]
     public async Task RateLimits_DoNotCountTowardFailureParking()
     {
         // 429s have their own parking and a throttled node is responsive: two

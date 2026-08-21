@@ -67,6 +67,7 @@ public sealed class HiveRpcClient
                 ["recent_failure"] = v.RecentFailure,
                 ["rate_limited_for_ms"] = v.RateLimitedForMs,
                 ["parked_for_ms"] = v.FailureParkedForMs,
+                ["failure_rate"] = Math.Round(v.FailureRate, 3),
             });
         }
         return arr;
