@@ -349,10 +349,12 @@ public static partial class SsrRpc
                 }
             }
             var started = Environment.TickCount64;
-            // Call() places params inside its own request envelope; a node that
-            // already hangs off the request body cannot be re-parented, so it
-            // travels as a clone.
-            var result = await Client.Call(policy.Api, policy.Method, @params.DeepClone());
+            // The dotted method form: hived's legacy `call` dispatcher has no API
+            // named `bridge` (found on alpha: every bridge read failed with
+            // "Could not find API bridge"), while `bridge.get_post` is routed to
+            // hivemind. The node already hangs off the request body and cannot be
+            // re-parented into the envelope, so it travels as a clone.
+            var result = await Client.CallMethod($"{policy.Api}.{policy.Method}", @params.DeepClone());
             var bytes = Encoding.UTF8.GetBytes(result is null ? "null" : JsJson.Stringify(result));
             counter.RecordUpstream(Environment.TickCount64 - started);
             Cache.Set(key, bytes, policy.TtlMs);
