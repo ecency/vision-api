@@ -295,6 +295,57 @@ public class HiveRpcFailoverTests
     }
 
     [Fact]
+    public async Task ANodeOutOfItsPark_AdmitsOneProbeAtATime()
+    {
+        // Calls in flight when a park lapses all still hold the node in the
+        // ordering they took at their start. It ranks last, so they reach it
+        // only when every other node has failed them; when that happens to a
+        // whole burst at once, only ONE call may probe the recovering node. The
+        // rest fail fast instead of each paying the timeout against a node that
+        // was not answering a moment ago. This is the burst the parking exists
+        // to prevent, seen from the other side of the park.
+        await using var dead = new StubNode(() => -1);
+        var flakyStatus = 200;
+        await using var flaky = new StubNode(() => flakyStatus);
+        var goodStatus = 200;
+        await using var good = new StubNode(() => goodStatus);
+        long now = 0;
+        var client = new HiveRpcClient(new[] { dead.Url, flaky.Url, good.Url }, timeoutMs: 300, failoverThreshold: 1, clock: () => now);
+
+        for (var i = 0; i < 3; i++)
+        {
+            if (i > 0) now += 31_000;
+            await client.Call("condenser_api", "get_accounts", new JsonArray());
+        }
+        Assert.True(client.HealthSnapshot()[0]!["parked_for_ms"]!.GetValue<long>() > 0);
+        now += 31_000; // the park lapses: half-open
+
+        // The leaders throttle (429): responsive, failing every call, and never
+        // failure-parked by it, so the pool is not "entirely down" and the
+        // half-open rule is what decides who reaches the recovering node.
+        flakyStatus = 429;
+        goodStatus = 429;
+        var burst = Enumerable.Range(0, 12)
+            .Select(async _ =>
+            {
+                try { await client.Call("condenser_api", "get_accounts", new JsonArray()); return true; }
+                catch { return false; }
+            })
+            .ToArray();
+        var served = await Task.WhenAll(burst);
+        flakyStatus = 200;
+        goodStatus = 200;
+        Assert.All(served, ok => Assert.False(ok)); // nothing answered: the dead node is dead
+        var view = client.HealthSnapshot()[0]!;
+        Assert.Equal(4, view["calls"]!.GetValue<long>());               // exactly one probe out of twelve
+        Assert.True(view["parked_for_ms"]!.GetValue<long>() > 30_000);  // which re-parked it for longer
+
+        // With the leaders back, the re-parked node is skipped.
+        await client.Call("condenser_api", "get_accounts", new JsonArray());
+        Assert.Equal(4, client.HealthSnapshot()[0]!["calls"]!.GetValue<long>());
+    }
+
+    [Fact]
     public async Task RateLimits_DoNotCountTowardFailureParking()
     {
         // 429s have their own parking and a throttled node is responsive: two

@@ -158,6 +158,8 @@ public sealed class HiveRpcClient
 
             for (var attempt = 0; attempt < _failoverThreshold; attempt++)
             {
+                // The ordering above is a snapshot; admission is decided now.
+                if (!_health.TryBeginAttempt(nodeIndex)) break;
                 var started = NowMs;
                 try
                 {
@@ -224,6 +226,10 @@ public sealed class HiveRpcClient
                     {
                         break;
                     }
+                }
+                finally
+                {
+                    _health.EndAttempt(nodeIndex);
                 }
             }
         }

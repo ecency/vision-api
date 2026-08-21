@@ -53,6 +53,9 @@ public sealed class NodeHealthTracker
         // Hard failures only (timeouts, refusals, bad answers), never 429s: a
         // throttled node is responsive and has its own parking.
         public int ConsecutiveHardFailures;
+        // Attempts currently in flight against this node (a gauge, for the
+        // half-open rule below).
+        public int InFlight;
         public double? EwmaLatencyMs;
         public int LatencySampleCount;
         public long LatencyUpdatedAtMs;
@@ -222,6 +225,50 @@ public sealed class NodeHealthTracker
                 .ThenBy(x => x.Index)
                 .Select(x => x.Index)
                 .ToList();
+        }
+    }
+
+    /// <summary>
+    /// Admission at attempt time, because the ordering a call holds was taken
+    /// when the call started and can be stale by the time it reaches this node:
+    /// a node parked since then is skipped, and a node just out of a park is
+    /// half-open, admitting one probe at a time, so a burst of concurrent calls
+    /// that all hold it in their lists cannot all probe it at once. Either
+    /// rule yields when no other node could take the attempt. Pair with
+    /// <see cref="EndAttempt"/>.
+    /// </summary>
+    public bool TryBeginAttempt(int nodeIndex)
+    {
+        lock (_lock)
+        {
+            var now = NowMs;
+            var h = _health[nodeIndex];
+            var parked = h.FailureParkedUntilMs > now;
+            var halfOpenBusy = !parked && h.FailureParkStreak > 0 && h.InFlight > 0;
+            if (parked || halfOpenBusy)
+            {
+                var othersAvailable = false;
+                for (var j = 0; j < _health.Length && !othersAvailable; j++)
+                {
+                    if (j == nodeIndex) continue;
+                    var o = _health[j];
+                    var oParked = o.FailureParkedUntilMs > now;
+                    var oBusy = !oParked && o.FailureParkStreak > 0 && o.InFlight > 0;
+                    othersAvailable = !oParked && !oBusy;
+                }
+                if (othersAvailable) return false;
+            }
+            h.InFlight++;
+            return true;
+        }
+    }
+
+    public void EndAttempt(int nodeIndex)
+    {
+        lock (_lock)
+        {
+            var h = _health[nodeIndex];
+            if (h.InFlight > 0) h.InFlight--;
         }
     }
 
