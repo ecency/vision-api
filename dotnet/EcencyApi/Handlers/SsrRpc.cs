@@ -91,8 +91,32 @@ public static partial class SsrRpc
         public required Task<byte[]> Task;
         // Last time a reader attached to this fill (created it or coalesced onto
         // it). A queued fill is dropped only when nobody has attached within the
-        // budget, since every earlier reader has given up by then.
+        // budget, since every earlier reader has given up by then. Attaching and
+        // the expiry decision both happen under `lock (this)`, so a reader can
+        // never attach to a fill that has just decided to expire: it finds
+        // Expired set and starts a fresh fill instead.
         public long LastAttachMs = Environment.TickCount64;
+        public bool Expired;
+
+        public bool TryAttach()
+        {
+            lock (this)
+            {
+                if (Expired) return false;
+                LastAttachMs = Environment.TickCount64;
+                return true;
+            }
+        }
+
+        public bool TryExpire(int budgetMs)
+        {
+            lock (this)
+            {
+                if (Environment.TickCount64 - LastAttachMs <= budgetMs) return false;
+                Expired = true;
+                return true;
+            }
+        }
     }
 
     private static readonly ConcurrentDictionary<string, Pending> InFlight = new();
@@ -193,13 +217,19 @@ public static partial class SsrRpc
 
         var coalesced = true;
         Pending pending;
-        if (InFlight.TryGetValue(key, out var existing))
+        while (true)
         {
-            pending = existing;
-            Volatile.Write(ref pending.LastAttachMs, Environment.TickCount64);
-        }
-        else
-        {
+            if (InFlight.TryGetValue(key, out var existing))
+            {
+                if (existing.TryAttach())
+                {
+                    pending = existing;
+                    break;
+                }
+                // Expired while queued: clear it and start a fresh fill.
+                InFlight.TryRemove(new KeyValuePair<string, Pending>(key, existing));
+                continue;
+            }
             var tcs = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
             var created = new Pending { Task = tcs.Task };
             var winner = InFlight.GetOrAdd(key, created);
@@ -208,12 +238,14 @@ public static partial class SsrRpc
                 coalesced = false;
                 pending = created;
                 _ = Fill(policy, @params, key, counter, tcs, created);
+                break;
             }
-            else
+            if (winner.TryAttach())
             {
                 pending = winner;
-                Volatile.Write(ref pending.LastAttachMs, Environment.TickCount64);
+                break;
             }
+            InFlight.TryRemove(new KeyValuePair<string, Pending>(key, winner));
         }
 
         if (coalesced) Interlocked.Increment(ref counter.Coalesced);
@@ -285,7 +317,7 @@ public static partial class SsrRpc
                 // while this sat in the queue, and calling upstream now would
                 // only be stale traffic for nobody. A fresh reader that coalesced
                 // in the meantime keeps the fill alive.
-                if (Environment.TickCount64 - Volatile.Read(ref pending.LastAttachMs) > BudgetMs)
+                if (pending.TryExpire(BudgetMs))
                 {
                     throw new FillRejectedException("fill expired in queue");
                 }
