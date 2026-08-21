@@ -98,7 +98,10 @@ public sealed class NodeHealthTracker
     /// <param name="timedOut">The attempt ran into the client's per-node timeout.
     /// That IS a latency sample whatever the timeout is set to; the floor below
     /// only tells instant refusals (a down node is not "slow") from slow 5xx.</param>
-    public void RecordFailure(int nodeIndex, double elapsedMs, bool timedOut = false)
+    /// <returns>True when this failure parked the node (or it was already
+    /// parked): the caller should not retry it, a same-node retry would only
+    /// add another timeout and lengthen the park.</returns>
+    public bool RecordFailure(int nodeIndex, double elapsedMs, bool timedOut = false)
     {
         lock (_lock)
         {
@@ -119,6 +122,7 @@ public sealed class NodeHealthTracker
                 h.FailureParkedUntilMs = now + parkMs;
                 h.FailureParkStreak++;
             }
+            return h.FailureParkedUntilMs > now;
         }
     }
 

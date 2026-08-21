@@ -208,9 +208,9 @@ public sealed class HiveRpcClient
                     {
                         _health.RecordRateLimited(nodeIndex, e.RetryAfterMs);
                     }
-                    else
+                    else if (_health.RecordFailure(nodeIndex, NowMs - started, e.IsTimeout))
                     {
-                        _health.RecordFailure(nodeIndex, NowMs - started, e.IsTimeout);
+                        break; // this failure parked the node: no same-node retry
                     }
                     if (e.AdvanceImmediately)
                     {
@@ -220,7 +220,10 @@ public sealed class HiveRpcClient
                 catch (Exception e)
                 {
                     lastError = e;
-                    _health.RecordFailure(nodeIndex, NowMs - started);
+                    if (_health.RecordFailure(nodeIndex, NowMs - started))
+                    {
+                        break;
+                    }
                 }
             }
         }

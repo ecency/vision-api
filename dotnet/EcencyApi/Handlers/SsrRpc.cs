@@ -353,16 +353,24 @@ public static partial class SsrRpc
                 }
             }
             var started = Environment.TickCount64;
-            // The dotted method form: hived's legacy `call` dispatcher has no API
-            // named `bridge` (found on alpha: every bridge read failed with
-            // "Could not find API bridge"), while `bridge.get_post` is routed to
-            // hivemind. The node already hangs off the request body and cannot be
-            // re-parented into the envelope, so it travels as a clone.
-            var result = await Client.CallMethod($"{policy.Api}.{policy.Method}", @params.DeepClone());
+            JsonNode? result;
+            try
+            {
+                // The dotted method form: hived's legacy `call` dispatcher has no API
+                // named `bridge` (found on alpha: every bridge read failed with
+                // "Could not find API bridge"), while `bridge.get_post` is routed to
+                // hivemind. The node already hangs off the request body and cannot be
+                // re-parented into the envelope, so it travels as a clone.
+                result = await Client.CallMethod($"{policy.Api}.{policy.Method}", @params.DeepClone());
+            }
+            finally
+            {
+                // A fill that outran the budget is slow whether it then landed or
+                // threw: an upstream outage is exactly when the count matters.
+                if (Environment.TickCount64 - started > BudgetMs) Interlocked.Increment(ref counter.SlowFill);
+            }
             var bytes = Encoding.UTF8.GetBytes(result is null ? "null" : JsJson.Stringify(result));
-            var elapsed = Environment.TickCount64 - started;
-            counter.RecordUpstream(elapsed);
-            if (elapsed > BudgetMs) Interlocked.Increment(ref counter.SlowFill);
+            counter.RecordUpstream(Environment.TickCount64 - started);
             Cache.Set(key, bytes, policy.TtlMs);
             tcs.TrySetResult(bytes);
         }

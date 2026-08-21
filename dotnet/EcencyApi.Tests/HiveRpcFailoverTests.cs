@@ -242,6 +242,30 @@ public class HiveRpcFailoverTests
     }
 
     [Fact]
+    public async Task ParkingEndsTheSameNodeRetry_WithTheDefaultFailoverThreshold()
+    {
+        // failoverThreshold 2 (the default client) retries a node once before
+        // moving on. The failure that parks the node must end that retry too,
+        // or the parked node gets one more attempt, one more timeout, and a
+        // park that starts out twice as long.
+        await using var dead = new StubNode(() => -1);
+        await using var good = new StubNode(() => 200);
+        long now = 0;
+        var client = new HiveRpcClient(new[] { dead.Url, good.Url }, timeoutMs: 200, failoverThreshold: 2, clock: () => now);
+
+        await client.Call("condenser_api", "get_accounts", new JsonArray()); // dead: 2 attempts, then good
+        var view = client.HealthSnapshot()[0]!;
+        Assert.Equal(2, view["calls"]!.GetValue<long>());
+        Assert.Equal(0, view["parked_for_ms"]!.GetValue<long>());
+
+        now += 31_000;
+        await client.Call("condenser_api", "get_accounts", new JsonArray()); // third failure parks: ONE attempt
+        view = client.HealthSnapshot()[0]!;
+        Assert.Equal(3, view["calls"]!.GetValue<long>());
+        Assert.Equal(30_000, view["parked_for_ms"]!.GetValue<long>());
+    }
+
+    [Fact]
     public async Task AllNodesFailureParked_AreStillTried()
     {
         // A pool that is entirely parked degrades to "try them", never to
