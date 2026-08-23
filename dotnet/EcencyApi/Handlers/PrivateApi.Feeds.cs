@@ -68,6 +68,15 @@ public static partial class PrivateApi
         var shortContent = double.IsNaN(shortNum) ? 0 : (int)Math.Clamp(shortNum, int.MinValue, int.MaxValue);
 
         var posts = await ApiClient.GetPromotedEntries(limit, shortContent);
+
+        // Promoted entries are served from here, not from the waves indexer, so
+        // the moderation mute list has to be applied on this path too. A muted
+        // account buying a promoted slot would otherwise land in the most
+        // prominent position in the feed. Filtered after the cache read rather
+        // than before it, so a new mute takes effect on the mute list's own
+        // refresh instead of waiting out the promoted cache.
+        posts = ModerationMutes.FilterMutedAuthors(posts, await ModerationMutes.Get());
+
         await ctx.SendJson(200, posts);
     }
 
