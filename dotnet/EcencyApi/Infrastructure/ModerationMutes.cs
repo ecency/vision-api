@@ -30,6 +30,22 @@ public static class ModerationMutes
 
     private const double TtlSeconds = 300;
 
+    /// <summary>
+    /// How long a failed refresh is held before trying again. Short, so a blip
+    /// costs one interval of stale filtering, but not zero: caching the failure
+    /// is what stops every request behind the gate from running its own full
+    /// node-failover sweep.
+    /// </summary>
+    private const double FailureTtlSeconds = 30;
+
+    /// <summary>
+    /// How long a request waits for someone else's refresh before answering from
+    /// what it already has. A normal refresh is one RPC round trip, so waiters
+    /// get the real list; this only bounds the pathological case where the whole
+    /// node pool is timing out and the refresh takes tens of seconds.
+    /// </summary>
+    private static readonly TimeSpan RefreshWait = TimeSpan.FromSeconds(2);
+
     /// <summary>condenser_api.get_following caps a single response at 1000 rows.</summary>
     private const int PageSize = 1000;
 
@@ -63,7 +79,14 @@ public static class ModerationMutes
             return ToSet(cached);
         }
 
-        await RefreshGate.WaitAsync();
+        if (!await RefreshGate.WaitAsync(RefreshWait))
+        {
+            // A refresh is already running and is taking far longer than one RPC
+            // round trip. Queueing behind it would hand that latency to a
+            // promoted-entries request, so answer from the fallback instead.
+            return ToSet(MemCache.Get<string[]>(LastGoodCacheKey) ?? Array.Empty<string>());
+        }
+
         try
         {
             // Someone else may have refreshed while this request queued.
@@ -103,18 +126,17 @@ public static class ModerationMutes
         {
             // Deliberately silent: this runs on the promoted-entries request path
             // and the service keeps its logs quiet there (CLAUDE.md, "No hot-path
-            // logging"). The fallback below is what makes the failure survivable.
-            //
-            // Re-arm the short TTL with the stale list so a node outage does not
-            // put an RPC call on every promoted-entries request for its duration.
-            var lastGood = MemCache.Get<string[]>(LastGoodCacheKey);
-            if (lastGood != null)
-            {
-                MemCache.Set(CacheKey, lastGood, TtlSeconds);
-                return lastGood;
-            }
+            // logging"). The caching below is what makes the failure survivable.
+            var fallback = MemCache.Get<string[]>(LastGoodCacheKey) ?? Array.Empty<string>();
 
-            return Array.Empty<string>();
+            // Cache the failure, including the empty one. Without this the gate
+            // above turns a node outage into something worse than no gate at all:
+            // each queued request waits out the one ahead of it and then runs its
+            // own full failover sweep, so the Nth caller pays N times the timeout
+            // budget. Caching lets every waiter answer immediately and puts one
+            // retry on the clock instead of one per request.
+            MemCache.Set(CacheKey, fallback, FailureTtlSeconds);
+            return fallback;
         }
     }
 

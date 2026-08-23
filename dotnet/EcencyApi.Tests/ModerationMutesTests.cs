@@ -12,6 +12,9 @@ namespace EcencyApi.Tests;
 /// </summary>
 public class ModerationMutesTests
 {
+    private static long TotalRpcCalls() =>
+        ModerationMutes.Rpc.HealthSnapshot().Sum(n => n!["calls"]!.GetValue<long>());
+
     private static JsonArray Entries(params string?[] authors)
     {
         var arr = new JsonArray();
@@ -118,6 +121,72 @@ public class ModerationMutesTests
             new JsonObject { ["following"] = "spammer" });
 
         Assert.Equal(new[] { "spammer" }, ModerationMutes.ReadFollowing(rows));
+    }
+
+    [Fact]
+    public async Task AFailedRefreshIsCachedSoQueuedRequestsDoNotEachRetry()
+    {
+        // The refresh gate serializes callers. Without caching the failure, a
+        // dead node pool makes that worse than no gate at all: each queued
+        // request waits out the one ahead of it and then runs its own full
+        // failover sweep, so the Nth caller pays N times the timeout budget.
+        var original = ModerationMutes.Rpc;
+        MemCache.Del("moderation-muted-authors");
+        MemCache.Del("moderation-muted-authors-last-good");
+
+        // Port 9 (discard) refuses immediately, so this measures the code path
+        // rather than a real network timeout.
+        ModerationMutes.Rpc = new HiveRpcClient(
+            new[] { "http://127.0.0.1:9/" }, timeoutMs: 250, failoverThreshold: 1);
+
+        try
+        {
+            var first = await ModerationMutes.Get();
+            Assert.Empty(first);
+
+            // Count attempts rather than elapsed time: a refused connection
+            // fails in microseconds, so a timing assertion passes just as
+            // happily whether or not the failure was cached.
+            var callsAfterFirst = TotalRpcCalls();
+
+            var followers = await Task.WhenAll(
+                Enumerable.Range(0, 8).Select(_ => ModerationMutes.Get()));
+
+            Assert.All(followers, f => Assert.Empty(f));
+            Assert.Equal(callsAfterFirst, TotalRpcCalls());
+        }
+        finally
+        {
+            ModerationMutes.Rpc = original;
+            MemCache.Del("moderation-muted-authors");
+            MemCache.Del("moderation-muted-authors-last-good");
+        }
+    }
+
+    [Fact]
+    public async Task AFailedRefreshFallsBackToTheLastListSeen()
+    {
+        var original = ModerationMutes.Rpc;
+        MemCache.Del("moderation-muted-authors");
+
+        // Stand in for a previously successful fetch.
+        MemCache.Set("moderation-muted-authors-last-good", new[] { "spammer" });
+        ModerationMutes.Rpc = new HiveRpcClient(
+            new[] { "http://127.0.0.1:9/" }, timeoutMs: 250, failoverThreshold: 1);
+
+        try
+        {
+            // Stale filtering, not no filtering: an unreachable pool must not be
+            // a way for a muted account back into the feed.
+            var muted = await ModerationMutes.Get();
+            Assert.Equal(new[] { "spammer" }, muted.OrderBy(x => x));
+        }
+        finally
+        {
+            ModerationMutes.Rpc = original;
+            MemCache.Del("moderation-muted-authors");
+            MemCache.Del("moderation-muted-authors-last-good");
+        }
     }
 
     [Fact]
