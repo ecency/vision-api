@@ -90,6 +90,37 @@ public class ModerationMutesTests
     }
 
     [Fact]
+    public void AnAuthorThatCannotBeReadAsAStringDoesNotThrow()
+    {
+        // GetValue<string>() throws on a lone-surrogate escape, which JSON.parse
+        // accepts and Hive nodes do emit. Throwing here would fail the whole
+        // promoted-entries request over one malformed name.
+        var entries = new JsonArray(
+            new JsonObject { ["author"] = 42 },
+            new JsonObject { ["author"] = JsonValue.Create((string?)null) },
+            new JsonObject { ["author"] = new JsonObject() },
+            new JsonObject { ["author"] = "spammer" });
+
+        var result = ModerationMutes.FilterMutedAuthors(entries, ModerationMutes.ToSet(new[] { "spammer" }));
+
+        // The three unreadable ones survive; only the match is dropped.
+        Assert.Equal(3, result.Count);
+    }
+
+    [Fact]
+    public void AFollowingThatCannotBeReadAsAStringIsSkippedNotFatal()
+    {
+        // Same reasoning on the refresh side: one malformed row must not abort
+        // the mute-list refresh and leave the feed unfiltered.
+        var rows = new JsonArray(
+            new JsonObject { ["following"] = 7 },
+            new JsonObject { ["following"] = new JsonArray("nested") },
+            new JsonObject { ["following"] = "spammer" });
+
+        Assert.Equal(new[] { "spammer" }, ModerationMutes.ReadFollowing(rows));
+    }
+
+    [Fact]
     public void TheModerationAccountIsEcency()
     {
         // Pinned: this account name is the whole control surface. A typo here

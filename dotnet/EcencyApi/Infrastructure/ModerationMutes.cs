@@ -44,6 +44,14 @@ public static class ModerationMutes
     internal static HiveRpcClient Rpc = HiveClients.Default;
 
     /// <summary>
+    /// One refresh at a time. Without this, every request arriving after the TTL
+    /// lapses starts its own paging loop, so a burst turns one refresh into as
+    /// many RPC conversations as there are concurrent promoted-entries requests.
+    /// The waiters re-read the cache and take the winner's result.
+    /// </summary>
+    private static readonly SemaphoreSlim RefreshGate = new(1, 1);
+
+    /// <summary>
     /// The muted accounts, cached. Returns an empty set rather than throwing:
     /// a moderation filter that cannot load must not take a feed down with it.
     /// </summary>
@@ -55,27 +63,58 @@ public static class ModerationMutes
             return ToSet(cached);
         }
 
+        await RefreshGate.WaitAsync();
+        try
+        {
+            // Someone else may have refreshed while this request queued.
+            cached = MemCache.Get<string[]>(CacheKey);
+            if (cached != null)
+            {
+                return ToSet(cached);
+            }
+
+            return ToSet(await Refresh());
+        }
+        finally
+        {
+            RefreshGate.Release();
+        }
+    }
+
+    private static async Task<string[]> Refresh()
+    {
         try
         {
             var names = await Fetch();
             MemCache.Set(CacheKey, names, TtlSeconds);
-            MemCache.Set(LastGoodCacheKey, names);
-            return ToSet(names);
-        }
-        catch (Exception e)
-        {
-            Console.WriteLine($"warn: failed to fetch moderation mutes {e.Message}");
 
+            // Only a list with something in it is worth falling back to. An empty
+            // one is served live (unmuting everyone must take effect) but must not
+            // overwrite the fallback, or one empty answer would turn every later
+            // failure into no filtering at all.
+            if (names.Length > 0)
+            {
+                MemCache.Set(LastGoodCacheKey, names);
+            }
+
+            return names;
+        }
+        catch (Exception)
+        {
+            // Deliberately silent: this runs on the promoted-entries request path
+            // and the service keeps its logs quiet there (CLAUDE.md, "No hot-path
+            // logging"). The fallback below is what makes the failure survivable.
+            //
             // Re-arm the short TTL with the stale list so a node outage does not
             // put an RPC call on every promoted-entries request for its duration.
             var lastGood = MemCache.Get<string[]>(LastGoodCacheKey);
             if (lastGood != null)
             {
                 MemCache.Set(CacheKey, lastGood, TtlSeconds);
-                return ToSet(lastGood);
+                return lastGood;
             }
 
-            return ToSet(Array.Empty<string>());
+            return Array.Empty<string>();
         }
     }
 
@@ -86,10 +125,17 @@ public static class ModerationMutes
 
         for (var page = 0; page < MaxPages; page++)
         {
+            // Validate the shape at the client, so a node answering 200 with
+            // something that is not a row array fails over to another one and,
+            // if none can answer, throws. Without this an unusable answer read
+            // as "no more rows" and the caller cached an empty mute list --
+            // filtering silently off, with nothing anywhere saying so.
             var result = await Rpc.Call("condenser_api", "get_following",
-                new JsonArray(Account, start, "ignore", PageSize));
+                new JsonArray(Account, start, "ignore", PageSize),
+                validateResult: r => r is JsonArray);
 
-            if (result is not JsonArray rows || rows.Count == 0)
+            var rows = (JsonArray)result!;
+            if (rows.Count == 0)
             {
                 break;
             }
@@ -122,14 +168,26 @@ public static class ModerationMutes
         return names.ToArray();
     }
 
+    /// <summary>
+    /// Read one string property the lenient way. `GetValue&lt;string&gt;()` throws on
+    /// a lone-surrogate escape, which JSON.parse accepts and Hive nodes do emit;
+    /// letting that throw here would fail a promoted-entries request, or abort a
+    /// mute-list refresh, over one malformed account name.
+    /// </summary>
+    private static string? ReadString(JsonNode? owner, string property) =>
+        owner is JsonObject o
+        && o.TryGetPropertyValue(property, out var node)
+        && node is JsonValue value
+        && JsVal.TryGetStringLenient(value, out var s)
+            ? s
+            : null;
+
     internal static List<string> ReadFollowing(JsonArray rows)
     {
         var names = new List<string>();
         foreach (var row in rows)
         {
-            var name = row is JsonObject o && o.TryGetPropertyValue("following", out var f)
-                ? f?.GetValue<string>()
-                : null;
+            var name = ReadString(row, "following");
             if (!string.IsNullOrEmpty(name))
             {
                 names.Add(name);
@@ -156,9 +214,7 @@ public static class ModerationMutes
         var kept = new JsonArray();
         foreach (var entry in entries.ToArray())
         {
-            var author = entry is JsonObject o && o.TryGetPropertyValue("author", out var a)
-                ? a?.GetValue<string>()
-                : null;
+            var author = ReadString(entry, "author");
 
             if (author != null && muted.Contains(author))
             {
