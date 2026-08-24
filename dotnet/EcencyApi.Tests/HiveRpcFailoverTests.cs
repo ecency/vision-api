@@ -17,7 +17,7 @@ public class HiveRpcFailoverTests
     private sealed class StubNode : IAsyncDisposable
     {
         private readonly HttpListener _listener = new();
-        private readonly Func<int> _handler; // returns HTTP status; 200 => valid RPC result
+        private readonly Func<string, int> _handler; // returns HTTP status; 200 => valid RPC result
         public string Url { get; }
         public int Hits;
 
@@ -31,7 +31,14 @@ public class HiveRpcFailoverTests
             "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[{\"name\":\"served-by\",\"port\":\"" + Url
             + "\",\"posting_json_metadata\":" + (ServesMetadata ? "\"{\\\"profile\\\":{}}\"" : "\"\"") + "}]}";
 
-        public StubNode(Func<int> handler)
+        public StubNode(Func<int> handler) : this(_ => handler())
+        {
+        }
+
+        /// <param name="handler">Given the qualified method of the request, returns
+        /// the scripted status. Lets one node answer point reads quickly and feed
+        /// queries slowly, which is the shape the call-class split exists for.</param>
+        public StubNode(Func<string, int> handler)
         {
             _handler = handler;
             var port = GetFreePort();
@@ -50,7 +57,12 @@ public class HiveRpcFailoverTests
                 catch { return; }
 
                 Interlocked.Increment(ref Hits);
-                var status = _handler();
+                string requestBody;
+                using (var reader = new StreamReader(ctx.Request.InputStream))
+                {
+                    requestBody = await reader.ReadToEndAsync();
+                }
+                var status = _handler(MethodOf(requestBody));
                 byte[] body;
                 if (status == 200)
                 {
@@ -110,6 +122,25 @@ public class HiveRpcFailoverTests
                     ctx.Response.Close();
                 }
                 catch { /* client may have moved on */ }
+            }
+        }
+
+        /// <summary>The qualified method of a JSON-RPC request, in either the
+        /// dotted form or the legacy `call` envelope.</summary>
+        private static string MethodOf(string body)
+        {
+            try
+            {
+                var req = JsonNode.Parse(body);
+                var method = req?["method"]?.GetValue<string>() ?? "";
+                return method == "call"
+                    ? (req?["params"]?[0]?.GetValue<string>() ?? "") + "." +
+                      (req?["params"]?[1]?.GetValue<string>() ?? "")
+                    : method;
+            }
+            catch
+            {
+                return "";
             }
         }
 
@@ -470,6 +501,65 @@ public class HiveRpcFailoverTests
         await client.Call("condenser_api", "get_accounts", new JsonArray());
         Assert.Equal(3, slow.Hits);
         Assert.True(fast.Hits >= 1);
+    }
+
+    // The call-class split, end to end: upstream cost is bimodal, so a node can be
+    // the right choice for point reads and the wrong one for feed queries. With a
+    // single latency profile per node the ranking is learned from whichever class
+    // dominates by count and then used to pick a node for the other.
+    [Fact]
+    public async Task ANodeSlowOnlyOnFeedQueries_KeepsThePointReadsAndLosesTheFeeds()
+    {
+        // -2 answers 200 after 1.5s, above the 1s unproven prior; 200 is immediate.
+        await using var mixed = new StubNode(m => m.StartsWith("bridge.", StringComparison.Ordinal) ? -2 : 200);
+        await using var spare = new StubNode(_ => 200);
+
+        var client = new HiveRpcClient(new[] { mixed.Url, spare.Url }, timeoutMs: 5000, failoverThreshold: 1);
+
+        // Both classes start unproven, so config order sends them to the first node.
+        for (var i = 0; i < 3; i++)
+        {
+            await client.Call("condenser_api", "get_accounts", new JsonArray(), callClass: CallClass.Cheap);
+            await client.CallMethod("bridge.get_ranked_posts", new JsonObject(), callClass: CallClass.Heavy);
+        }
+        Assert.Equal(6, mixed.Hits);
+        Assert.Equal(0, spare.Hits);
+
+        // Its heavy profile is now trusted and above the prior, so the next feed
+        // query explores the node nothing is known about...
+        await client.CallMethod("bridge.get_ranked_posts", new JsonObject(), callClass: CallClass.Heavy);
+        Assert.Equal(1, spare.Hits);
+
+        // ...while point reads stay where they are measured to be quick.
+        await client.Call("condenser_api", "get_accounts", new JsonArray(), callClass: CallClass.Cheap);
+        Assert.Equal(7, mixed.Hits);
+        Assert.Equal(1, spare.Hits);
+
+        // Same node, two profiles, learned from their own samples only.
+        var view = client.HealthSnapshot()[0]!;
+        Assert.Equal(4, view["samples"]!.GetValue<int>());
+        Assert.Equal(3, view["heavy_samples"]!.GetValue<int>());
+        Assert.True(view["ewma_ms"]!.GetValue<double>() < 1000);
+        Assert.True(view["heavy_ewma_ms"]!.GetValue<double>() > 1000);
+    }
+
+    [Fact]
+    public async Task ACallerThatMakesOnePointReadShape_LeavesTheHeavyProfileEmpty()
+    {
+        // The default class: a client whose calls are all one shape keeps exactly
+        // one profile per node, as it did before classes existed.
+        await using var only = new StubNode(() => 200);
+
+        var client = new HiveRpcClient(new[] { only.Url }, timeoutMs: 1500);
+        for (var i = 0; i < 3; i++)
+        {
+            await client.Call("condenser_api", "get_accounts", new JsonArray());
+        }
+
+        var view = client.HealthSnapshot()[0]!;
+        Assert.Equal(3, view["samples"]!.GetValue<int>());
+        Assert.Equal(0, view["heavy_samples"]!.GetValue<int>());
+        Assert.Null(view["heavy_ewma_ms"]);
     }
 
     [Fact]

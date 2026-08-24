@@ -95,6 +95,7 @@ public class SsrRpcTests
     }
 
     private static readonly SsrRpc.MethodPolicy Post = SsrRpc.Allowlist["bridge.get_post"];
+    private static readonly SsrRpc.MethodPolicy Ranked = SsrRpc.Allowlist["bridge.get_ranked_posts"];
     private static readonly SsrRpc.MethodPolicy Props = SsrRpc.Allowlist["condenser_api.get_dynamic_global_properties"];
 
     private static void Use(RpcStub stub, long cacheBytes = 1 << 20, int budgetMs = 1500, int maxFills = 64, int maxQueued = 256)
@@ -106,6 +107,7 @@ public class SsrRpcTests
         SsrRpc.MaxQueuedFills = maxQueued;
         SsrRpc.SecretDigest = null;
         SsrRpc.Now = () => Environment.TickCount64;
+        SsrRpc.CallClasses = true;
         SsrRpc.ResetForTests();
     }
 
@@ -629,5 +631,86 @@ public class SsrRpcTests
         }
         Assert.False(SsrRpc.Allowlist.ContainsKey("condenser_api.broadcast_transaction"));
         Assert.False(SsrRpc.Allowlist.ContainsKey("database_api.get_accounts"));
+    }
+
+    [Fact]
+    public void Allowlist_classifies_the_feed_shaped_reads_as_heavy()
+    {
+        // A page of feed rows or a whole comment tree, built per request by
+        // hivemind; the rest are point reads. The pool is ordered from the
+        // latency profile of the class, so a misclassified method is ranked on
+        // measurements of a different call shape.
+        var heavy = SsrRpc.Allowlist.Values
+            .Where(p => p.Class == CallClass.Heavy)
+            .Select(p => p.Key)
+            .OrderBy(k => k, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(
+            new[] { "bridge.get_account_posts", "bridge.get_discussion", "bridge.get_ranked_posts" },
+            heavy);
+    }
+
+    [Fact]
+    public async Task A_heavy_read_is_measured_in_the_heavy_profile()
+    {
+        await using var stub = new RpcStub();
+        Use(stub);
+
+        await SsrRpc.Resolve(Ranked, new JsonObject { ["sort"] = "trending", ["tag"] = "" });
+        await SsrRpc.Resolve(Post, P("a", "b"));
+
+        var view = SsrRpc.Client.HealthSnapshot()[0]!;
+        Assert.Equal(1, view["samples"]!.GetValue<int>());
+        Assert.Equal(1, view["heavy_samples"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public async Task Stats_report_the_call_class_of_each_method_and_the_heavy_node_profile()
+    {
+        // The stats route is the only way to tell, on a running deployment,
+        // whether a node's blended number was hiding feed-query cost, so the
+        // fields that answer that have to be in the payload, not just in the
+        // snapshot the route reads from.
+        await using var stub = new RpcStub();
+        Use(stub);
+        SsrRpc.SecretDigest = SsrRpc.Digest("right-secret");
+        try
+        {
+            await SsrRpc.Resolve(Ranked, new JsonObject { ["sort"] = "trending", ["tag"] = "" });
+            await SsrRpc.Resolve(Post, P("a", "b"));
+
+            var stats = Request("GET", "/private-api/ssr/stats", "right-secret");
+            await SsrRpc.Stats(stats);
+            var body = JsonNode.Parse(ResponseText(stats))!;
+
+            Assert.True(body["call_classes"]!.GetValue<bool>());
+            Assert.Equal("heavy", body["methods"]!["bridge.get_ranked_posts"]!["class"]!.GetValue<string>());
+            Assert.Equal("cheap", body["methods"]!["bridge.get_post"]!["class"]!.GetValue<string>());
+
+            var node = Assert.Single(body["nodes"]!.AsArray())!;
+            Assert.Equal(1, node["samples"]!.GetValue<int>());
+            Assert.Equal(1, node["heavy_samples"]!.GetValue<int>());
+            Assert.NotNull(node["heavy_ewma_ms"]);
+        }
+        finally
+        {
+            SsrRpc.SecretDigest = null;
+        }
+    }
+
+    [Fact]
+    public async Task Call_classes_off_files_every_read_under_the_cheap_profile()
+    {
+        // The kill switch restores the single-profile ordering this service had
+        // before call classes existed, without a rebuild.
+        await using var stub = new RpcStub();
+        Use(stub);
+        SsrRpc.CallClasses = false;
+
+        await SsrRpc.Resolve(Ranked, new JsonObject { ["sort"] = "trending", ["tag"] = "" });
+
+        var view = SsrRpc.Client.HealthSnapshot()[0]!;
+        Assert.Equal(1, view["samples"]!.GetValue<int>());
+        Assert.Equal(0, view["heavy_samples"]!.GetValue<int>());
     }
 }

@@ -14,6 +14,10 @@ namespace EcencyApi.Infrastructure;
 ///  - Overload statuses (429/502/503/504) advance to the next node immediately
 ///    instead of burning a same-node retry.
 ///
+/// Latency is tracked per call class (see <see cref="CallClass"/>) because the
+/// reads made through this client are bimodal in cost. Failure state is not: it
+/// stays node-wide.
+///
 /// Not adopted (overkill at proxy call rates): request hedging, per-API failure
 /// profiles, and head-block staleness checks.
 /// </summary>
@@ -53,7 +57,7 @@ public sealed class HiveRpcClient
         var arr = new JsonArray();
         foreach (var v in _health.Snapshot())
         {
-            arr.Add(new JsonObject
+            var node = new JsonObject
             {
                 ["node"] = Uri.TryCreate(_nodes[v.Index], UriKind.Absolute, out var u) ? u.Host : _nodes[v.Index],
                 ["calls"] = v.Calls,
@@ -61,14 +65,24 @@ public sealed class HiveRpcClient
                 ["failures"] = v.Failures,
                 ["timeouts"] = v.Timeouts,
                 ["rate_limited"] = v.RateLimits,
-                ["ewma_ms"] = v.EwmaLatencyMs is { } e ? Math.Round(e, 1) : null,
-                ["samples"] = v.LatencySamples,
-                ["consecutive_failures"] = v.ConsecutiveFailures,
-                ["recent_failure"] = v.RecentFailure,
-                ["rate_limited_for_ms"] = v.RateLimitedForMs,
-                ["parked_for_ms"] = v.FailureParkedForMs,
-                ["failure_rate"] = Math.Round(v.FailureRate, 3),
-            });
+            };
+            // One EWMA per call class (see CallClass): the pool is ordered from
+            // the profile of the class being called, so both must be readable to
+            // tell "this node is slow" from "this node is slow at feed queries".
+            // ewma_ms/samples stay the cheap class, which is what they have always
+            // reported in practice, since cheap calls dominate by count.
+            var cheap = v.Latency.First(l => l.Class == CallClass.Cheap);
+            var heavy = v.Latency.First(l => l.Class == CallClass.Heavy);
+            node["ewma_ms"] = cheap.EwmaMs is { } ce ? JsonValue.Create(Math.Round(ce, 1)) : null;
+            node["samples"] = cheap.Samples;
+            node["heavy_ewma_ms"] = heavy.EwmaMs is { } he ? JsonValue.Create(Math.Round(he, 1)) : null;
+            node["heavy_samples"] = heavy.Samples;
+            node["consecutive_failures"] = v.ConsecutiveFailures;
+            node["recent_failure"] = v.RecentFailure;
+            node["rate_limited_for_ms"] = v.RateLimitedForMs;
+            node["parked_for_ms"] = v.FailureParkedForMs;
+            node["failure_rate"] = Math.Round(v.FailureRate, 3);
+            arr.Add(node);
         }
         return arr;
     }
@@ -104,9 +118,14 @@ public sealed class HiveRpcClient
     /// valid 200 with a usable array, so shape validation passes and the latency EWMA
     /// keeps such a node ranked first — silently blanking every metadata-derived
     /// feature (portfolio engine/chain token visibility) with no error and no log.</param>
+    /// <param name="callClass">Which latency profile this call's timings belong
+    /// to. That profile is also the one the pool is ordered from for this call.
+    /// Defaults to Cheap, so a caller that makes one shape of call keeps exactly
+    /// one profile per node.</param>
     public Task<JsonNode?> Call(string api, string method, JsonNode @params,
         Func<JsonNode?, bool>? validateResult = null,
-        Func<JsonNode?, bool>? preferResult = null)
+        Func<JsonNode?, bool>? preferResult = null,
+        CallClass callClass = CallClass.Cheap)
     {
         // The legacy `call` envelope the Node service always sent. hived resolves
         // it for its own APIs (condenser_api, database_api); hivemind's `bridge`
@@ -118,7 +137,7 @@ public sealed class HiveRpcClient
             ["method"] = "call",
             ["params"] = new JsonArray(api, method, @params),
         };
-        return Send(request, method, validateResult, preferResult);
+        return Send(request, method, validateResult, preferResult, callClass);
     }
 
     /// <summary>
@@ -128,7 +147,8 @@ public sealed class HiveRpcClient
     /// </summary>
     public Task<JsonNode?> CallMethod(string qualifiedMethod, JsonNode @params,
         Func<JsonNode?, bool>? validateResult = null,
-        Func<JsonNode?, bool>? preferResult = null)
+        Func<JsonNode?, bool>? preferResult = null,
+        CallClass callClass = CallClass.Cheap)
     {
         var request = new JsonObject
         {
@@ -137,12 +157,13 @@ public sealed class HiveRpcClient
             ["method"] = qualifiedMethod,
             ["params"] = @params,
         };
-        return Send(request, qualifiedMethod, validateResult, preferResult);
+        return Send(request, qualifiedMethod, validateResult, preferResult, callClass);
     }
 
     private async Task<JsonNode?> Send(JsonObject request, string method,
         Func<JsonNode?, bool>? validateResult,
-        Func<JsonNode?, bool>? preferResult)
+        Func<JsonNode?, bool>? preferResult,
+        CallClass callClass)
     {
         // JsJson: a lone-surrogate username from a client token must serialize
         // (JSON.stringify semantics) instead of throwing in the writer.
@@ -153,7 +174,7 @@ public sealed class HiveRpcClient
         var haveUnpreferred = false;
         var unpreferredCount = 0;
 
-        foreach (var nodeIndex in _health.OrderedNodeIndices())
+        foreach (var nodeIndex in _health.OrderedNodeIndices(callClass))
         {
             var node = _nodes[nodeIndex];
 
@@ -175,7 +196,7 @@ public sealed class HiveRpcClient
                     }
                     // The node is healthy either way — record the success before
                     // deciding whether its answer is the one we wanted.
-                    _health.RecordSuccess(nodeIndex, NowMs - started);
+                    _health.RecordSuccess(nodeIndex, NowMs - started, callClass);
                     if (preferResult != null && !preferResult(result))
                     {
                         // Keep the first such answer as the floor and try the next
@@ -196,7 +217,7 @@ public sealed class HiveRpcClient
                 {
                     // The node answered; the error is the application's. No
                     // failover (dhive semantics), and no failure mark.
-                    _health.RecordSuccess(nodeIndex, NowMs - started);
+                    _health.RecordSuccess(nodeIndex, NowMs - started, callClass);
                     // ...but if we only came to this node to improve on an answer we
                     // already hold, its error belongs to the optional probe, not to
                     // the caller's request. Rethrowing here would fail a call that
@@ -211,7 +232,7 @@ public sealed class HiveRpcClient
                     {
                         _health.RecordRateLimited(nodeIndex, e.RetryAfterMs);
                     }
-                    else if (_health.RecordFailure(nodeIndex, NowMs - started, e.IsTimeout))
+                    else if (_health.RecordFailure(nodeIndex, NowMs - started, callClass, e.IsTimeout))
                     {
                         break; // this failure parked the node: no same-node retry
                     }
@@ -223,7 +244,7 @@ public sealed class HiveRpcClient
                 catch (Exception e)
                 {
                     lastError = e;
-                    if (_health.RecordFailure(nodeIndex, NowMs - started))
+                    if (_health.RecordFailure(nodeIndex, NowMs - started, callClass))
                     {
                         break;
                     }

@@ -32,7 +32,13 @@ namespace EcencyApi.Handlers;
 /// </summary>
 public static partial class SsrRpc
 {
-    internal sealed record MethodPolicy(string Api, string Method, int TtlMs)
+    /// <param name="Class">What this read costs upstream. Feed-shaped reads (a
+    /// ranked page, an account's posts, a comment tree) cost several times a point
+    /// read. Unlike a point read the cost also varies by an order of magnitude
+    /// between nodes, so the pool is ordered for them from their own latency
+    /// profile (see <see cref="CallClass"/>). Required, not defaulted: a new
+    /// method has to be classified, not silently filed as cheap.</param>
+    internal sealed record MethodPolicy(string Api, string Method, int TtlMs, CallClass Class)
     {
         public string Key => $"{Api}.{Method}";
     }
@@ -42,18 +48,23 @@ public static partial class SsrRpc
     // votes/payout within tens of seconds, a profile or community rarely.
     internal static readonly IReadOnlyDictionary<string, MethodPolicy> Allowlist = new[]
     {
-        new MethodPolicy("bridge", "get_ranked_posts", 15_000),
-        new MethodPolicy("bridge", "get_account_posts", 30_000),
-        new MethodPolicy("bridge", "get_post", 30_000),
-        new MethodPolicy("bridge", "get_discussion", 30_000),
-        new MethodPolicy("bridge", "get_profile", 60_000),
-        new MethodPolicy("bridge", "get_profiles", 60_000),
-        new MethodPolicy("bridge", "get_community", 300_000),
-        new MethodPolicy("bridge", "list_communities", 300_000),
-        new MethodPolicy("condenser_api", "get_accounts", 30_000),
-        new MethodPolicy("condenser_api", "get_content", 30_000),
-        new MethodPolicy("condenser_api", "get_dynamic_global_properties", 3_000),
-        new MethodPolicy("condenser_api", "get_trending_tags", 300_000),
+        // Heavy: a page of feed rows or a whole comment tree, built per request by
+        // hivemind. Cheap: a point read of one post, account, profile or community.
+        // The class is a per-method proxy for cost: the same method can be cheaper
+        // or dearer depending on its params, so it follows the shape of the read
+        // rather than any one call.
+        new MethodPolicy("bridge", "get_ranked_posts", 15_000, CallClass.Heavy),
+        new MethodPolicy("bridge", "get_account_posts", 30_000, CallClass.Heavy),
+        new MethodPolicy("bridge", "get_discussion", 30_000, CallClass.Heavy),
+        new MethodPolicy("bridge", "get_post", 30_000, CallClass.Cheap),
+        new MethodPolicy("bridge", "get_profile", 60_000, CallClass.Cheap),
+        new MethodPolicy("bridge", "get_profiles", 60_000, CallClass.Cheap),
+        new MethodPolicy("bridge", "get_community", 300_000, CallClass.Cheap),
+        new MethodPolicy("bridge", "list_communities", 300_000, CallClass.Cheap),
+        new MethodPolicy("condenser_api", "get_accounts", 30_000, CallClass.Cheap),
+        new MethodPolicy("condenser_api", "get_content", 30_000, CallClass.Cheap),
+        new MethodPolicy("condenser_api", "get_dynamic_global_properties", 3_000, CallClass.Cheap),
+        new MethodPolicy("condenser_api", "get_trending_tags", 300_000, CallClass.Cheap),
     }.ToDictionary(p => p.Key, p => p);
 
     internal const string HeaderName = "X-Ecency-Internal";
@@ -76,6 +87,10 @@ public static partial class SsrRpc
     internal static BytesCache Cache = new(Config.SsrCacheBytes);
 
     internal static int BudgetMs = Config.SsrBudgetMs;
+
+    // Off collapses every read onto the cheap profile, which is how the pool was
+    // ordered before call classes existed. Replaceable for tests.
+    internal static bool CallClasses = Config.SsrCallClasses;
 
     // Clock behind the lookup deadline and the attach/expiry timestamps;
     // replaceable so tests can drive the post-deadline paths deterministically.
@@ -361,7 +376,8 @@ public static partial class SsrRpc
                 // "Could not find API bridge"), while `bridge.get_post` is routed to
                 // hivemind. The node already hangs off the request body and cannot be
                 // re-parented into the envelope, so it travels as a clone.
-                result = await Client.CallMethod($"{policy.Api}.{policy.Method}", @params.DeepClone());
+                result = await Client.CallMethod($"{policy.Api}.{policy.Method}", @params.DeepClone(),
+                    callClass: CallClasses ? policy.Class : CallClass.Cheap);
             }
             finally
             {
@@ -453,6 +469,13 @@ public static partial class SsrRpc
             var c = kv.Value;
             methods[kv.Key] = new JsonObject
             {
+                // Which latency profile orders the pool for this method, so the
+                // timeout/slow_fill columns can be read per class. Null only if a
+                // counter outlives its allowlist entry, which the route cannot
+                // produce (every counter key comes from a policy).
+                ["class"] = Allowlist.TryGetValue(kv.Key, out var p)
+                    ? p.Class.ToString().ToLowerInvariant()
+                    : null,
                 ["hit"] = Interlocked.Read(ref c.Hit),
                 ["miss"] = Interlocked.Read(ref c.Miss),
                 ["coalesced"] = Interlocked.Read(ref c.Coalesced),
@@ -472,6 +495,7 @@ public static partial class SsrRpc
                 ["budget"] = Cache.Budget,
             },
             ["budget_ms"] = BudgetMs,
+            ["call_classes"] = CallClasses,
             ["methods"] = methods,
             ["nodes"] = Client.HealthSnapshot(),
         });
