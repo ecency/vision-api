@@ -15,6 +15,11 @@ public sealed class EngineRpcClient
 {
     private readonly string[] _nodes;
     private readonly KeyValuePair<string, string>[] _headers;
+    // Every call this client makes is filed under one latency class. The tracker
+    // splits latency per call class for pools whose call mix is bimodal; this one
+    // is not split. (Its /contracts pool does mix a fixed-shape Find with the
+    // caller-supplied raw passthrough, which is a candidate for the same
+    // treatment. Out of scope here.)
     private readonly NodeHealthTracker _health;
 
     /// <param name="nodes">Base node URLs; "/contracts" is appended per call.</param>
@@ -39,7 +44,7 @@ public sealed class EngineRpcClient
     {
         Exception? lastError = null;
 
-        foreach (var nodeIndex in _health.OrderedNodeIndices())
+        foreach (var nodeIndex in _health.OrderedNodeIndices(CallClass.Cheap))
         {
             var node = _nodes[nodeIndex];
             var started = NowMs;
@@ -57,21 +62,21 @@ public sealed class EngineRpcClient
                 }
                 if (resp.Status is < 200 or >= 300)
                 {
-                    _health.RecordFailure(nodeIndex, NowMs - started);
+                    _health.RecordFailure(nodeIndex, NowMs - started, CallClass.Cheap);
                     lastError = new Exception($"engine node {node} returned {resp.Status}");
                     continue;
                 }
                 if (resp.Json?["result"] is JsonArray result)
                 {
-                    _health.RecordSuccess(nodeIndex, NowMs - started);
+                    _health.RecordSuccess(nodeIndex, NowMs - started, CallClass.Cheap);
                     return result;
                 }
-                _health.RecordFailure(nodeIndex, NowMs - started);
+                _health.RecordFailure(nodeIndex, NowMs - started, CallClass.Cheap);
                 lastError = new Exception($"engine node {node} returned no result array");
             }
             catch (Exception e) // timeout, DNS failure, connection refused
             {
-                _health.RecordFailure(nodeIndex, NowMs - started);
+                _health.RecordFailure(nodeIndex, NowMs - started, CallClass.Cheap);
                 lastError = e;
             }
         }
@@ -108,7 +113,7 @@ public sealed class EngineRpcClient
         UpstreamResponse? lastResponse = null;
         var attempts = 0;
 
-        foreach (var nodeIndex in _health.OrderedNodeIndices())
+        foreach (var nodeIndex in _health.OrderedNodeIndices(CallClass.Cheap))
         {
             if (attempts++ >= maxAttempts) break;
             var node = _nodes[nodeIndex];
@@ -127,17 +132,17 @@ public sealed class EngineRpcClient
                 }
                 if (resp.Status >= 500)
                 {
-                    _health.RecordFailure(nodeIndex, NowMs - started);
+                    _health.RecordFailure(nodeIndex, NowMs - started, CallClass.Cheap);
                     lastResponse = resp;
                     continue;
                 }
 
-                _health.RecordSuccess(nodeIndex, NowMs - started);
+                _health.RecordSuccess(nodeIndex, NowMs - started, CallClass.Cheap);
                 return resp;
             }
             catch (Exception e)
             {
-                _health.RecordFailure(nodeIndex, NowMs - started);
+                _health.RecordFailure(nodeIndex, NowMs - started, CallClass.Cheap);
                 lastError = e;
             }
         }

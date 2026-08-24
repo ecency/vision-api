@@ -65,6 +65,15 @@ public static class Config
     public static int SsrMaxQueuedFills { get; } =
         int.TryParse(Env("SSR_RPC_MAX_QUEUED_FILLS"), out var q) && q > 0 ? q : 256;
 
+    /// <summary>
+    /// Whether the cache orders the node pool per call class (see CallClass) or
+    /// files every read under one profile, which is how it behaved before classes
+    /// existed. On by default; set to 0 to collapse it on a running deployment
+    /// without a rebuild. Break-glass, so the off spellings are permissive.
+    /// </summary>
+    public static bool SsrCallClasses { get; } =
+        Env("SSR_RPC_CALL_CLASSES")?.Trim().ToLowerInvariant() is not ("0" or "false" or "off");
+
     private static string? NonEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static string? Env(string name) => Environment.GetEnvironmentVariable(name);
