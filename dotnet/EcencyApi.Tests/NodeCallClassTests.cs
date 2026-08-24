@@ -23,6 +23,17 @@ public class NodeCallClassTests
         t.Snapshot()[node].Latency.First(l => l.Class == cls).Samples;
 
     [Fact]
+    public void CallClassValues_StayContiguousFromZero()
+    {
+        // Each node holds one latency profile per class in an array indexed by the
+        // enum value, on the ordering hot path. A gap, a negative member or a
+        // renumbering would index outside that array, so the layout is pinned here
+        // instead of trusted, and the check costs nothing.
+        var values = Enum.GetValues<CallClass>().Select(v => (int)v).ToArray();
+        Assert.Equal(Enumerable.Range(0, values.Length).ToArray(), values);
+    }
+
+    [Fact]
     public void EachClassKeepsItsOwnLatencyProfile()
     {
         var (t, _) = Build(1);
