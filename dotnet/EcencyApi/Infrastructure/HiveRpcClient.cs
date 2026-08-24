@@ -434,16 +434,21 @@ public static class HiveClients
     // portfolio engine/chain layers came back empty for everyone. GetAccounts
     // also routes around such a node at runtime, but keeping them out of the pool
     // means correctness here does not depend on that fallback firing.
-    // hive-api.arcange.eu is absent too: it never completes a TCP connect from
-    // any host this service runs on (SYN, no answer), so every attempt cost the
-    // full per-node timeout and, in bursts, took every in-flight fill with it.
+    // hive-api.arcange.eu and hive-api.3speak.tv are absent for the same reason
+    // as each other: neither completes a TCP connect from any host this service
+    // runs on (SYN, no answer, on 443 and on 80), so every attempt cost the full
+    // per-node timeout and, in bursts, took every in-flight fill with it. A node
+    // that answers nothing is worse for the pool than a slow one, because the
+    // health tracker learns latency from answers and has none to learn from: it
+    // parks after three consecutive failures, the park lapses, it is probed
+    // again. While unparked it sits in config order, which is where any
+    // unproven latency profile starts.
     public static readonly IReadOnlyList<string> DefaultNodes = new[]
     {
         "https://api.hive.blog",
         "https://api.deathwing.me",
         "https://rpc.mahdiyari.info",
         "https://api.openhive.network",
-        "https://hive-api.3speak.tv",
         "https://api.syncad.com",
         "https://api.c0ff33a.uk",
     };
