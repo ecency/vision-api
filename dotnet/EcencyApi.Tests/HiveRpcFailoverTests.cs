@@ -474,8 +474,13 @@ public class HiveRpcFailoverTests
     [Fact]
     public void DefaultPool_DoesNotCarryTheUnreachableNode()
     {
+        // Nodes dropped for never completing a TCP connect. A node that answers
+        // nothing costs a full per-node timeout every time the ordering reaches
+        // it, which is every cold start and every lapsed park.
         Assert.DoesNotContain(HiveClients.DefaultNodes, n => n.Contains("arcange", StringComparison.Ordinal));
+        Assert.DoesNotContain(HiveClients.DefaultNodes, n => n.Contains("3speak", StringComparison.Ordinal));
         Assert.True(HiveClients.DefaultNodes.Count >= 6);
+        Assert.Equal(HiveClients.DefaultNodes.Count, HiveClients.DefaultNodes.Distinct().Count());
     }
 
     [Fact]
