@@ -155,6 +155,7 @@ public static partial class Routes
         app.MapPost("/private-api/boosted-post", PrivateApi.BoostedPost);
         app.MapPost("/private-api/ai-generate-price", PrivateApi.AiGeneratePrice);
         app.MapPost("/private-api/ai-generate-image", PrivateApi.AiGenerateImage);
+        app.MapPost("/private-api/ai-images", PrivateApi.AiImagesHistory);
         app.MapPost("/private-api/ai-assist-price", PrivateApi.AiAssistPrice);
         app.MapPost("/private-api/ai-assist", PrivateApi.AiAssist);
         app.MapPost("/private-api/ai-transcribe-price", PrivateApi.AiTranscribePrice);
