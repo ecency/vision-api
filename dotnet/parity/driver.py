@@ -224,6 +224,13 @@ AI_TRANSCRIBE_DIVERGENCE = (
     "::pop and ::badcode for every POST route, which is why all three appear here."
 )
 
+AI_IMAGES_DIVERGENCE = (
+    "Per-user AI image history route added after the port (ePoints users/<u>/ai-images). "
+    "The reference build has no such route and answers 404; this one validates the "
+    "signed code and answers 401 or proxies the history. Deterministic and additive -- "
+    "no behavior the reference ever had is changing."
+)
+
 # Cases where the C# port intentionally differs from Node (Node bugs the port fixes).
 KNOWN_DIVERGENCES = {
     "/auth-api/hs-token-refresh::min":
@@ -256,6 +263,15 @@ KNOWN_DIVERGENCES = {
         AI_TRANSCRIBE_DIVERGENCE,
     "/private-api/ai-transcribe::badcode":
         AI_TRANSCRIBE_DIVERGENCE,
+    # Per-user AI image history, added after the port (ePoints users/<u>/ai-images).
+    # Same shape as the dictation entries: the reference build has no such route and
+    # answers 404 while this one validates the code and answers 401/proxies. Additive.
+    "/private-api/ai-images::min":
+        AI_IMAGES_DIVERGENCE,
+    "/private-api/ai-images::pop":
+        AI_IMAGES_DIVERGENCE,
+    "/private-api/ai-images::badcode":
+        AI_IMAGES_DIVERGENCE,
 }
 
 # Deliberately NOT listed above: /wallet-api/portfolio-v2::pop, whose HP action list
