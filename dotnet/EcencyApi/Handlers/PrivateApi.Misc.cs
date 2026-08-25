@@ -558,7 +558,9 @@ public static partial class PrivateApi
         {
             ["us"] = username,
         };
-        MiscCopyIfPresent(data, body, "prompt", "aspect_ratio", "power");
+        // idempotency_key lets a retry recover the same paid generation instead of
+        // charging a second one; the upstream validates its format itself.
+        MiscCopyIfPresent(data, body, "prompt", "aspect_ratio", "power", "idempotency_key");
         // AI image generation legitimately takes 10-60s+; keep it long.
         await Upstream.Pipe(
             ApiClient.ApiRequest("ai-image-generate", HttpMethod.Post, null, data, null, 120000), ctx);
