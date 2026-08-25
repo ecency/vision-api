@@ -566,6 +566,25 @@ public static partial class PrivateApi
             ApiClient.ApiRequest("ai-image-generate", HttpMethod.Post, null, data, null, 120000), ctx);
     }
 
+    /// <summary>
+    /// Per-user AI image generation history (the upstream's last 20 successful
+    /// generations). The username comes ONLY from the validated code: prompts are
+    /// private to their author, so a body-supplied username would let any caller
+    /// read someone else's generation history.
+    /// </summary>
+    public static async Task AiImagesHistory(HttpContext ctx)
+    {
+        var body = await ctx.ReadBody();
+        var username = await ValidateCode(body);
+        if (username == null)
+        {
+            await ctx.SendText(401, "Unauthorized");
+            return;
+        }
+        await Upstream.Pipe(
+            ApiClient.ApiRequest($"users/{username}/ai-images", HttpMethod.Get), ctx);
+    }
+
     public static async Task AiAssistPrice(HttpContext ctx)
     {
         var body = await ctx.ReadBody();
