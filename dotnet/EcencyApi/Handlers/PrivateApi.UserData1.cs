@@ -11,6 +11,40 @@ namespace EcencyApi.Handlers;
 public static partial class PrivateApi
 {
     /// <summary>
+    /// Who a notifications request is for, and whether it may see the complete feed.
+    ///
+    /// A null Username means unauthorized. `requestedUser` is the body's `user` field
+    /// after JS-truthiness, or null when it was absent or falsy.
+    ///
+    /// Two rules, both of which were wrong before:
+    ///   - a validated code is REQUIRED. `requestedUser` used to satisfy the guard on its
+    ///     own, so an unauthenticated caller could name any account.
+    ///   - only a SELF view sees the complete feed. Naming another account is still
+    ///     supported, because Decks builds notification columns for arbitrary accounts and
+    ///     notifications are largely public, but it is served enotify's restricted feed.
+    /// </summary>
+    public static (string? Username, bool FullScope) ResolveNotificationsTarget(
+        string? validatedUsername, string? requestedUser)
+    {
+        if (string.IsNullOrEmpty(validatedUsername))
+        {
+            return (null, false);
+        }
+
+        if (requestedUser == null)
+        {
+            return (validatedUsername, true);
+        }
+
+        return (
+            requestedUser,
+            string.Equals(requestedUser, validatedUsername, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Header enotify reads the shared secret from.</summary>
+    public const string EnotifyInternalTokenHeader = "X-Ecency-Internal-Token";
+
+    /// <summary>
     /// Upstream path for the notifications feed, or null when a value cannot be
     /// expressed as a single path segment.
     ///
@@ -62,37 +96,18 @@ public static partial class PrivateApi
     public static async Task Notifications(HttpContext ctx)
     {
         var body = await ctx.ReadBody();
-        var username = await ValidateCode(body);
         var user = body.Field("user");
 
-        // A valid code is required. This guard used to accept a bare `user` field in
-        // place of one, so an unauthenticated caller could name any account and be
-        // served its notifications.
-        if (string.IsNullOrEmpty(username))
+        // IsTruthy here rather than in the resolver, to keep the JS truthiness parity
+        // this port is built on while the decision itself stays pure and testable.
+        var (username, fullScope) = ResolveNotificationsTarget(
+            await ValidateCode(body),
+            JsJson.IsTruthy(user) ? UserData1Helpers.Template(user) : null);
+
+        if (username == null)
         {
             await ctx.SendText(401, "Unauthorized");
             return;
-        }
-
-        // Decks builds a notifications column for an arbitrary account and sends that
-        // name here alongside the signed-in user's own code (vision-web
-        // deck-notifications-column.tsx passes settings.username). That stays supported:
-        // notifications are largely public data and the column exists for that reason.
-        //
-        // But the feed also carries Ecency-only activity that is not public, notably
-        // favorites and bookmarks, which reveal who a user follows and what they saved,
-        // plus Points transfers and the various streaks and aggregates. So a request for
-        // SOMEONE ELSE's notifications is left at enotify's restricted default, and only
-        // a self-view asks for scope=full. This service is the only layer that can make
-        // that call, because it is the only one that has validated who is asking.
-        // Only a caller asking for their OWN notifications gets the complete feed.
-        var fullScope = true;
-
-        if (JsJson.IsTruthy(user))
-        {
-            var requested = UserData1Helpers.Template(user);
-            fullScope = string.Equals(requested, username, StringComparison.OrdinalIgnoreCase);
-            username = requested;
         }
 
         var filter = body.Field("filter");
@@ -112,7 +127,14 @@ public static partial class PrivateApi
             return;
         }
 
-        await Upstream.Pipe(ApiClient.ApiRequest(u, HttpMethod.Get), ctx);
+        // The secret rides alongside scope=full. enotify honours the parameter only when
+        // the header matches, and fails closed otherwise, so a missing or wrong token
+        // costs this user their own private activity rather than exposing anyone else's.
+        var extraHeaders = fullScope && Config.EnotifyInternalToken.Length > 0
+            ? new[] { new KeyValuePair<string, string>(EnotifyInternalTokenHeader, Config.EnotifyInternalToken) }
+            : null;
+
+        await Upstream.Pipe(ApiClient.ApiRequest(u, HttpMethod.Get, extraHeaders), ctx);
     }
 
     // GET ^/private-api/pub-notifications/:username
