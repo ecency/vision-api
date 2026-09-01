@@ -21,19 +21,19 @@ public class NotificationsPathTests
         // change every live request.
         Assert.Equal(
             "activities/good-karma",
-            PrivateApi.NotificationsPath("good-karma", null, null, null));
+            PrivateApi.NotificationsPath("good-karma", null, null, null, false));
         Assert.Equal(
             "follows/good-karma",
-            PrivateApi.NotificationsPath("good-karma", "follows", null, null));
+            PrivateApi.NotificationsPath("good-karma", "follows", null, null, false));
         Assert.Equal(
             "activities/user.name?since=f-179530372",
-            PrivateApi.NotificationsPath("user.name", null, "f-179530372", null));
+            PrivateApi.NotificationsPath("user.name", null, "f-179530372", null, false));
         Assert.Equal(
             "follows/good-karma?since=f-179530372&limit=50",
-            PrivateApi.NotificationsPath("good-karma", "follows", "f-179530372", "50"));
+            PrivateApi.NotificationsPath("good-karma", "follows", "f-179530372", "50", false));
         Assert.Equal(
             "activities/good-karma?limit=50",
-            PrivateApi.NotificationsPath("good-karma", null, null, "50"));
+            PrivateApi.NotificationsPath("good-karma", null, null, "50", false));
     }
 
     [Theory]
@@ -50,7 +50,7 @@ public class NotificationsPathTests
     [InlineData("a", "b#f")]
     public void StructuralCharactersCannotEscapeTheirSegment(string username, string? filter)
     {
-        var path = PrivateApi.NotificationsPath(username, filter, null, null);
+        var path = PrivateApi.NotificationsPath(username, filter, null, null, false);
 
         Assert.NotNull(path);
         Assert.DoesNotContain("?x=1", path);
@@ -68,17 +68,17 @@ public class NotificationsPathTests
     [InlineData("a", "..")]
     public void DotSegmentsAreRejected(string username, string? filter)
     {
-        Assert.Null(PrivateApi.NotificationsPath(username, filter, null, null));
+        Assert.Null(PrivateApi.NotificationsPath(username, filter, null, null, false));
     }
 
     [Fact]
     public void QueryValuesCannotAddParameters()
     {
         // A cursor or limit carrying `&` would otherwise append parameters of its own.
-        var path = PrivateApi.NotificationsPath("good-karma", null, "a&limit=999", null);
+        var path = PrivateApi.NotificationsPath("good-karma", null, "a&limit=999", null, false);
         Assert.Equal("activities/good-karma?since=a%26limit%3D999", path);
 
-        var withLimit = PrivateApi.NotificationsPath("good-karma", null, null, "1&x=2");
+        var withLimit = PrivateApi.NotificationsPath("good-karma", null, null, "1&x=2", false);
         Assert.Equal("activities/good-karma?limit=1%26x%3D2", withLimit);
     }
 
@@ -89,9 +89,50 @@ public class NotificationsPathTests
         // `?` when it is not, so an existing client's paging URLs do not change shape.
         Assert.Equal(
             "activities/x?since=s&limit=10",
-            PrivateApi.NotificationsPath("x", null, "s", "10"));
+            PrivateApi.NotificationsPath("x", null, "s", "10", false));
         Assert.Equal(
             "activities/x?limit=10",
-            PrivateApi.NotificationsPath("x", null, null, "10"));
+            PrivateApi.NotificationsPath("x", null, null, "10", false));
+    }
+
+    [Fact]
+    public void PublicScopeIsAppendedOnlyForACrossAccountView()
+    {
+        // Nobody's own feed changes shape: without the flag the path is byte-identical
+        // to what it was before scope existed.
+        Assert.Equal(
+            "activities/good-karma",
+            PrivateApi.NotificationsPath("good-karma", null, null, null, false));
+
+        Assert.Equal(
+            "activities/good-karma?scope=public",
+            PrivateApi.NotificationsPath("good-karma", null, null, null, true));
+    }
+
+    [Fact]
+    public void PublicScopeJoinsCorrectlyWithExistingQueryValues()
+    {
+        Assert.Equal(
+            "follows/good-karma?since=f-179530372&limit=50&scope=public",
+            PrivateApi.NotificationsPath("good-karma", "follows", "f-179530372", "50", true));
+
+        Assert.Equal(
+            "activities/good-karma?limit=50&scope=public",
+            PrivateApi.NotificationsPath("good-karma", null, null, "50", true));
+
+        Assert.Equal(
+            "activities/good-karma?since=s&scope=public",
+            PrivateApi.NotificationsPath("good-karma", null, "s", null, true));
+    }
+
+    [Fact]
+    public void ACallerCannotForgeTheScopeParameter()
+    {
+        // scope is decided by the handler from the validated code, never read from the
+        // body. A value trying to smuggle its own parameter is escaped into a literal.
+        var path = PrivateApi.NotificationsPath("good-karma", null, "s&scope=all", null, true);
+
+        Assert.Equal("activities/good-karma?since=s%26scope%3Dall&scope=public", path);
+        Assert.EndsWith("&scope=public", path);
     }
 }

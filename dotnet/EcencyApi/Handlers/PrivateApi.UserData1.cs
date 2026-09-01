@@ -23,7 +23,8 @@ public static partial class PrivateApi
     /// unreserved characters, which EscapeDataString leaves byte-identical, so real
     /// traffic is unaffected.
     /// </summary>
-    public static string? NotificationsPath(string username, string? filter, string? since, string? limit)
+    public static string? NotificationsPath(
+        string username, string? filter, string? since, string? limit, bool publicScope)
     {
         if (IsDotSegment(username) || (filter != null && IsDotSegment(filter)))
         {
@@ -34,21 +35,26 @@ public static partial class PrivateApi
             ? $"{Uri.EscapeDataString(filter)}/{Uri.EscapeDataString(username)}"
             : $"activities/{Uri.EscapeDataString(username)}";
 
+        var query = new List<string>();
+
         if (since != null)
         {
-            u += $"?since={Uri.EscapeDataString(since)}";
-
-            if (limit != null)
-            {
-                u += $"&limit={Uri.EscapeDataString(limit)}";
-            }
+            query.Add($"since={Uri.EscapeDataString(since)}");
         }
-        else if (limit != null)
+
+        if (limit != null)
         {
-            u += $"?limit={Uri.EscapeDataString(limit)}";
+            query.Add($"limit={Uri.EscapeDataString(limit)}");
         }
 
-        return u;
+        // Restricts the upstream feed to chain-derived activity. Set only when one
+        // account is asking for another's notifications, so nobody's own feed changes.
+        if (publicScope)
+        {
+            query.Add("scope=public");
+        }
+
+        return query.Count == 0 ? u : $"{u}?{string.Join("&", query)}";
     }
 
     // POST ^/private-api/notifications$
@@ -69,13 +75,22 @@ public static partial class PrivateApi
 
         // Decks builds a notifications column for an arbitrary account and sends that
         // name here alongside the signed-in user's own code (vision-web
-        // deck-notifications-column.tsx passes settings.username). Kept deliberately so
-        // that feature keeps working, but it is now reachable only by an authenticated
-        // caller rather than by anyone. Whether one account should be able to read
-        // another's Ecency-private activity at all is a separate product question.
+        // deck-notifications-column.tsx passes settings.username). That stays supported:
+        // notifications are largely public data and the column exists for that reason.
+        //
+        // But the feed also carries Ecency-only activity that is not public, notably
+        // favorites and bookmarks, which reveal who a user follows and what they saved,
+        // plus Points transfers and the various streaks and aggregates. So a request for
+        // SOMEONE ELSE's notifications is downgraded to scope=public, which enotify
+        // restricts to chain-derived types. This service is the only layer that can make
+        // that call, because it is the only one that has validated who is asking.
+        var publicScope = false;
+
         if (JsJson.IsTruthy(user))
         {
-            username = UserData1Helpers.Template(user);
+            var requested = UserData1Helpers.Template(user);
+            publicScope = !string.Equals(requested, username, StringComparison.OrdinalIgnoreCase);
+            username = requested;
         }
 
         var filter = body.Field("filter");
@@ -86,7 +101,8 @@ public static partial class PrivateApi
             username,
             JsJson.IsTruthy(filter) ? UserData1Helpers.Template(filter) : null,
             JsJson.IsTruthy(since) ? UserData1Helpers.Template(since) : null,
-            JsJson.IsTruthy(limit) ? UserData1Helpers.Template(limit) : null);
+            JsJson.IsTruthy(limit) ? UserData1Helpers.Template(limit) : null,
+            publicScope);
 
         if (u == null)
         {
