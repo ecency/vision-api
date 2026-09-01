@@ -24,7 +24,7 @@ public static partial class PrivateApi
     /// traffic is unaffected.
     /// </summary>
     public static string? NotificationsPath(
-        string username, string? filter, string? since, string? limit, bool publicScope)
+        string username, string? filter, string? since, string? limit, bool fullScope)
     {
         if (IsDotSegment(username) || (filter != null && IsDotSegment(filter)))
         {
@@ -47,11 +47,12 @@ public static partial class PrivateApi
             query.Add($"limit={Uri.EscapeDataString(limit)}");
         }
 
-        // Restricts the upstream feed to chain-derived activity. Set only when one
-        // account is asking for another's notifications, so nobody's own feed changes.
-        if (publicScope)
+        // Opts in to the complete feed. enotify defaults to chain-derived activity only,
+        // so omitting this is the safe direction: a cross-account view, or any request
+        // that never reaches this handler, gets the restricted feed.
+        if (fullScope)
         {
-            query.Add("scope=public");
+            query.Add("scope=full");
         }
 
         return query.Count == 0 ? u : $"{u}?{string.Join("&", query)}";
@@ -81,15 +82,16 @@ public static partial class PrivateApi
         // But the feed also carries Ecency-only activity that is not public, notably
         // favorites and bookmarks, which reveal who a user follows and what they saved,
         // plus Points transfers and the various streaks and aggregates. So a request for
-        // SOMEONE ELSE's notifications is downgraded to scope=public, which enotify
-        // restricts to chain-derived types. This service is the only layer that can make
+        // SOMEONE ELSE's notifications is left at enotify's restricted default, and only
+        // a self-view asks for scope=full. This service is the only layer that can make
         // that call, because it is the only one that has validated who is asking.
-        var publicScope = false;
+        // Only a caller asking for their OWN notifications gets the complete feed.
+        var fullScope = true;
 
         if (JsJson.IsTruthy(user))
         {
             var requested = UserData1Helpers.Template(user);
-            publicScope = !string.Equals(requested, username, StringComparison.OrdinalIgnoreCase);
+            fullScope = string.Equals(requested, username, StringComparison.OrdinalIgnoreCase);
             username = requested;
         }
 
@@ -102,7 +104,7 @@ public static partial class PrivateApi
             JsJson.IsTruthy(filter) ? UserData1Helpers.Template(filter) : null,
             JsJson.IsTruthy(since) ? UserData1Helpers.Template(since) : null,
             JsJson.IsTruthy(limit) ? UserData1Helpers.Template(limit) : null,
-            publicScope);
+            fullScope);
 
         if (u == null)
         {

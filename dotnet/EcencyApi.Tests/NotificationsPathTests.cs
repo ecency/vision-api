@@ -96,32 +96,32 @@ public class NotificationsPathTests
     }
 
     [Fact]
-    public void PublicScopeIsAppendedOnlyForACrossAccountView()
+    public void FullScopeIsAppendedOnlyForASelfView()
     {
-        // Nobody's own feed changes shape: without the flag the path is byte-identical
-        // to what it was before scope existed.
+        // Omitting the flag is the SAFE direction: enotify defaults to chain-derived
+        // activity only, so a cross-account view needs no parameter at all.
         Assert.Equal(
             "activities/good-karma",
             PrivateApi.NotificationsPath("good-karma", null, null, null, false));
 
         Assert.Equal(
-            "activities/good-karma?scope=public",
+            "activities/good-karma?scope=full",
             PrivateApi.NotificationsPath("good-karma", null, null, null, true));
     }
 
     [Fact]
-    public void PublicScopeJoinsCorrectlyWithExistingQueryValues()
+    public void FullScopeJoinsCorrectlyWithExistingQueryValues()
     {
         Assert.Equal(
-            "follows/good-karma?since=f-179530372&limit=50&scope=public",
+            "follows/good-karma?since=f-179530372&limit=50&scope=full",
             PrivateApi.NotificationsPath("good-karma", "follows", "f-179530372", "50", true));
 
         Assert.Equal(
-            "activities/good-karma?limit=50&scope=public",
+            "activities/good-karma?limit=50&scope=full",
             PrivateApi.NotificationsPath("good-karma", null, null, "50", true));
 
         Assert.Equal(
-            "activities/good-karma?since=s&scope=public",
+            "activities/good-karma?since=s&scope=full",
             PrivateApi.NotificationsPath("good-karma", null, "s", null, true));
     }
 
@@ -129,10 +129,11 @@ public class NotificationsPathTests
     public void ACallerCannotForgeTheScopeParameter()
     {
         // scope is decided by the handler from the validated code, never read from the
-        // body. A value trying to smuggle its own parameter is escaped into a literal.
-        var path = PrivateApi.NotificationsPath("good-karma", null, "s&scope=all", null, true);
+        // body. A value trying to smuggle its own parameter is escaped into a literal,
+        // and the real one is appended last regardless.
+        var path = PrivateApi.NotificationsPath("good-karma", null, "s&scope=full", null, false);
 
-        Assert.Equal("activities/good-karma?since=s%26scope%3Dall&scope=public", path);
-        Assert.EndsWith("&scope=public", path);
+        Assert.Equal("activities/good-karma?since=s%26scope%3Dfull", path);
+        Assert.DoesNotContain("&scope=full", path);
     }
 }
