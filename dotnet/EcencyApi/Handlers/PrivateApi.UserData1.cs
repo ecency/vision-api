@@ -10,6 +10,47 @@ namespace EcencyApi.Handlers;
 /// </summary>
 public static partial class PrivateApi
 {
+    /// <summary>
+    /// Upstream path for the notifications feed, or null when a value cannot be
+    /// expressed as a single path segment.
+    ///
+    /// Every caller-supplied value is escaped. These are arbitrary body strings, so
+    /// one carrying `/`, `?` or `#` would otherwise be re-parsed as URL structure
+    /// once this string becomes a Uri, addressing a different upstream resource with
+    /// this service's credentials attached. Same reasoning as PostTipsPath.
+    ///
+    /// Hive account names, filter names, notification ids and integer limits are all
+    /// unreserved characters, which EscapeDataString leaves byte-identical, so real
+    /// traffic is unaffected.
+    /// </summary>
+    public static string? NotificationsPath(string username, string? filter, string? since, string? limit)
+    {
+        if (IsDotSegment(username) || (filter != null && IsDotSegment(filter)))
+        {
+            return null;
+        }
+
+        var u = filter != null
+            ? $"{Uri.EscapeDataString(filter)}/{Uri.EscapeDataString(username)}"
+            : $"activities/{Uri.EscapeDataString(username)}";
+
+        if (since != null)
+        {
+            u += $"?since={Uri.EscapeDataString(since)}";
+
+            if (limit != null)
+            {
+                u += $"&limit={Uri.EscapeDataString(limit)}";
+            }
+        }
+        else if (limit != null)
+        {
+            u += $"?limit={Uri.EscapeDataString(limit)}";
+        }
+
+        return u;
+    }
+
     // POST ^/private-api/notifications$
     public static async Task Notifications(HttpContext ctx)
     {
@@ -17,16 +58,21 @@ public static partial class PrivateApi
         var username = await ValidateCode(body);
         var user = body.Field("user");
 
+        // A valid code is required. This guard used to accept a bare `user` field in
+        // place of one, so an unauthenticated caller could name any account and be
+        // served its notifications.
         if (string.IsNullOrEmpty(username))
         {
-            if (!JsJson.IsTruthy(user))
-            {
-                await ctx.SendText(401, "Unauthorized");
-                return;
-            }
-            username = UserData1Helpers.Template(user);
+            await ctx.SendText(401, "Unauthorized");
+            return;
         }
-        // if user defined but not same as user's code
+
+        // Decks builds a notifications column for an arbitrary account and sends that
+        // name here alongside the signed-in user's own code (vision-web
+        // deck-notifications-column.tsx passes settings.username). Kept deliberately so
+        // that feature keeps working, but it is now reachable only by an authenticated
+        // caller rather than by anyone. Whether one account should be able to read
+        // another's Ecency-private activity at all is a separate product question.
         if (JsJson.IsTruthy(user))
         {
             username = UserData1Helpers.Template(user);
@@ -36,26 +82,16 @@ public static partial class PrivateApi
         var since = body.Field("since");
         var limit = body.Field("limit");
 
-        var u = $"activities/{username}";
+        var u = NotificationsPath(
+            username,
+            JsJson.IsTruthy(filter) ? UserData1Helpers.Template(filter) : null,
+            JsJson.IsTruthy(since) ? UserData1Helpers.Template(since) : null,
+            JsJson.IsTruthy(limit) ? UserData1Helpers.Template(limit) : null);
 
-        if (JsJson.IsTruthy(filter))
+        if (u == null)
         {
-            u = $"{UserData1Helpers.Template(filter)}/{username}";
-        }
-
-        if (JsJson.IsTruthy(since))
-        {
-            u += $"?since={UserData1Helpers.Template(since)}";
-        }
-
-        if (JsJson.IsTruthy(since) && JsJson.IsTruthy(limit))
-        {
-            u += $"&limit={UserData1Helpers.Template(limit)}";
-        }
-
-        if (!JsJson.IsTruthy(since) && JsJson.IsTruthy(limit))
-        {
-            u += $"?limit={UserData1Helpers.Template(limit)}";
+            await ctx.SendText(400, "Invalid user or filter");
+            return;
         }
 
         await Upstream.Pipe(ApiClient.ApiRequest(u, HttpMethod.Get), ctx);
