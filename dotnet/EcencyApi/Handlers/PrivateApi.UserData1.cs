@@ -10,55 +10,131 @@ namespace EcencyApi.Handlers;
 /// </summary>
 public static partial class PrivateApi
 {
+    /// <summary>
+    /// Who a notifications request is for, and whether it may see the complete feed.
+    ///
+    /// A null Username means unauthorized. `requestedUser` is the body's `user` field
+    /// after JS-truthiness, or null when it was absent or falsy.
+    ///
+    /// Two rules, both of which were wrong before:
+    ///   - a validated code is REQUIRED. `requestedUser` used to satisfy the guard on its
+    ///     own, so an unauthenticated caller could name any account.
+    ///   - only a SELF view sees the complete feed. Naming another account is still
+    ///     supported, because Decks builds notification columns for arbitrary accounts and
+    ///     notifications are largely public, but it is served enotify's restricted feed.
+    /// </summary>
+    public static (string? Username, bool FullScope) ResolveNotificationsTarget(
+        string? validatedUsername, string? requestedUser)
+    {
+        if (string.IsNullOrEmpty(validatedUsername))
+        {
+            return (null, false);
+        }
+
+        if (requestedUser == null)
+        {
+            return (validatedUsername, true);
+        }
+
+        return (
+            requestedUser,
+            string.Equals(requestedUser, validatedUsername, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Header enotify reads the shared secret from.</summary>
+    public const string EnotifyInternalTokenHeader = "X-Ecency-Internal-Token";
+
+    /// <summary>
+    /// Upstream path for the notifications feed, or null when a value cannot be
+    /// expressed as a single path segment.
+    ///
+    /// Every caller-supplied value is escaped. These are arbitrary body strings, so
+    /// one carrying `/`, `?` or `#` would otherwise be re-parsed as URL structure
+    /// once this string becomes a Uri, addressing a different upstream resource with
+    /// this service's credentials attached. Same reasoning as PostTipsPath.
+    ///
+    /// Hive account names, filter names, notification ids and integer limits are all
+    /// unreserved characters, which EscapeDataString leaves byte-identical, so real
+    /// traffic is unaffected.
+    /// </summary>
+    public static string? NotificationsPath(
+        string username, string? filter, string? since, string? limit, bool fullScope)
+    {
+        if (IsDotSegment(username) || (filter != null && IsDotSegment(filter)))
+        {
+            return null;
+        }
+
+        var u = filter != null
+            ? $"{Uri.EscapeDataString(filter)}/{Uri.EscapeDataString(username)}"
+            : $"activities/{Uri.EscapeDataString(username)}";
+
+        var query = new List<string>();
+
+        if (since != null)
+        {
+            query.Add($"since={Uri.EscapeDataString(since)}");
+        }
+
+        if (limit != null)
+        {
+            query.Add($"limit={Uri.EscapeDataString(limit)}");
+        }
+
+        // Opts in to the complete feed. enotify defaults to chain-derived activity only,
+        // so omitting this is the safe direction: a cross-account view, or any request
+        // that never reaches this handler, gets the restricted feed.
+        if (fullScope)
+        {
+            query.Add("scope=full");
+        }
+
+        return query.Count == 0 ? u : $"{u}?{string.Join("&", query)}";
+    }
+
     // POST ^/private-api/notifications$
     public static async Task Notifications(HttpContext ctx)
     {
         var body = await ctx.ReadBody();
-        var username = await ValidateCode(body);
         var user = body.Field("user");
 
-        if (string.IsNullOrEmpty(username))
+        // IsTruthy here rather than in the resolver, to keep the JS truthiness parity
+        // this port is built on while the decision itself stays pure and testable.
+        var (username, fullScope) = ResolveNotificationsTarget(
+            await ValidateCode(body),
+            JsJson.IsTruthy(user) ? UserData1Helpers.Template(user) : null);
+
+        if (username == null)
         {
-            if (!JsJson.IsTruthy(user))
-            {
-                await ctx.SendText(401, "Unauthorized");
-                return;
-            }
-            username = UserData1Helpers.Template(user);
-        }
-        // if user defined but not same as user's code
-        if (JsJson.IsTruthy(user))
-        {
-            username = UserData1Helpers.Template(user);
+            await ctx.SendText(401, "Unauthorized");
+            return;
         }
 
         var filter = body.Field("filter");
         var since = body.Field("since");
         var limit = body.Field("limit");
 
-        var u = $"activities/{username}";
+        var u = NotificationsPath(
+            username,
+            JsJson.IsTruthy(filter) ? UserData1Helpers.Template(filter) : null,
+            JsJson.IsTruthy(since) ? UserData1Helpers.Template(since) : null,
+            JsJson.IsTruthy(limit) ? UserData1Helpers.Template(limit) : null,
+            fullScope);
 
-        if (JsJson.IsTruthy(filter))
+        if (u == null)
         {
-            u = $"{UserData1Helpers.Template(filter)}/{username}";
+            await ctx.SendText(400, "Invalid user or filter");
+            return;
         }
 
-        if (JsJson.IsTruthy(since))
-        {
-            u += $"?since={UserData1Helpers.Template(since)}";
-        }
+        // The secret rides alongside scope=full. enotify honours the parameter only when
+        // the header matches, and fails closed otherwise, so a missing or wrong token
+        // costs this user their own private activity rather than exposing anyone else's.
+        var extraHeaders = fullScope && Config.EnotifyInternalToken.Length > 0
+            ? new[] { new KeyValuePair<string, string>(EnotifyInternalTokenHeader, Config.EnotifyInternalToken) }
+            : null;
 
-        if (JsJson.IsTruthy(since) && JsJson.IsTruthy(limit))
-        {
-            u += $"&limit={UserData1Helpers.Template(limit)}";
-        }
-
-        if (!JsJson.IsTruthy(since) && JsJson.IsTruthy(limit))
-        {
-            u += $"?limit={UserData1Helpers.Template(limit)}";
-        }
-
-        await Upstream.Pipe(ApiClient.ApiRequest(u, HttpMethod.Get), ctx);
+        await Upstream.Pipe(ApiClient.ApiRequest(u, HttpMethod.Get, extraHeaders), ctx);
     }
 
     // GET ^/private-api/pub-notifications/:username

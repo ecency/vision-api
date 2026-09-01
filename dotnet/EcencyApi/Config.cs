@@ -12,6 +12,15 @@ public static class Config
     public static string PrivateApiAuth { get; } =
         Env("PRIVATE_API_AUTH") ?? "privateapiauth";
 
+    /// <summary>
+    /// Shared secret presented to enotify to unlock a user's complete notification feed.
+    /// enotify has no authentication of its own and defaults to chain-derived activity
+    /// only, so without this a self-view silently loses favorites, bookmarks, Points
+    /// transfers and the aggregates. Must match [APP] INTERNAL_TOKEN there.
+    /// </summary>
+    public static string EnotifyInternalToken { get; } =
+        Env("ENOTIFY_INTERNAL_TOKEN") ?? "";
+
     public static string HsClientSecret { get; } =
         Env("HIVESIGNER_SECRET") ?? "hivesignerclientsecret";
 
