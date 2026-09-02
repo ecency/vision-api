@@ -62,6 +62,9 @@ BODIES = {
     "/private-api/account-create-friend": {"username": "newuser123",
                                            "email": "x@example.com", "friend": True},
     "/private-api/subscribe": {"email": "x@example.com"},
+    "/private-api/favorite-tags-check": {"code": "invalid", "tag": "photography"},
+    "/private-api/favorite-tags-add": {"code": "invalid", "tag": "photography"},
+    "/private-api/favorite-tags-delete": {"code": "invalid", "tag": "photography"},
     "/private-api/notifications": {"code": "invalid", "filter": "", "since": 0,
                                    "limit": 50, "user": "good-karma"},
     "/private-api/report": {"type": "content", "data": {"a": 1}},
@@ -224,6 +227,13 @@ AI_TRANSCRIBE_DIVERGENCE = (
     "::pop and ::badcode for every POST route, which is why all three appear here."
 )
 
+FAVORITE_TAGS_DIVERGENCE = (
+    "Followed-hashtag routes added after the port (the favorites passthroughs, keyed by "
+    "tag instead of account). The reference build has no such route and answers 404; "
+    "this one validates the signed code and answers 401 or proxies. Deterministic and "
+    "additive -- no behavior the reference ever had is changing."
+)
+
 AI_IMAGES_DIVERGENCE = (
     "Per-user AI image history route added after the port (ePoints users/<u>/ai-images). "
     "The reference build has no such route and answers 404; this one validates the "
@@ -272,6 +282,32 @@ KNOWN_DIVERGENCES = {
         AI_IMAGES_DIVERGENCE,
     "/private-api/ai-images::badcode":
         AI_IMAGES_DIVERGENCE,
+    # Followed-hashtag passthroughs, added after the port. Same shape as the entries
+    # above: additive routes the reference build never had.
+    "/private-api/favorite-tags::min":
+        FAVORITE_TAGS_DIVERGENCE,
+    "/private-api/favorite-tags::pop":
+        FAVORITE_TAGS_DIVERGENCE,
+    "/private-api/favorite-tags::badcode":
+        FAVORITE_TAGS_DIVERGENCE,
+    "/private-api/favorite-tags-check::min":
+        FAVORITE_TAGS_DIVERGENCE,
+    "/private-api/favorite-tags-check::pop":
+        FAVORITE_TAGS_DIVERGENCE,
+    "/private-api/favorite-tags-check::badcode":
+        FAVORITE_TAGS_DIVERGENCE,
+    "/private-api/favorite-tags-add::min":
+        FAVORITE_TAGS_DIVERGENCE,
+    "/private-api/favorite-tags-add::pop":
+        FAVORITE_TAGS_DIVERGENCE,
+    "/private-api/favorite-tags-add::badcode":
+        FAVORITE_TAGS_DIVERGENCE,
+    "/private-api/favorite-tags-delete::min":
+        FAVORITE_TAGS_DIVERGENCE,
+    "/private-api/favorite-tags-delete::pop":
+        FAVORITE_TAGS_DIVERGENCE,
+    "/private-api/favorite-tags-delete::badcode":
+        FAVORITE_TAGS_DIVERGENCE,
 }
 
 # Deliberately NOT listed above: /wallet-api/portfolio-v2::pop, whose HP action list
