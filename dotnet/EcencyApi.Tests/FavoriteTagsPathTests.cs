@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using EcencyApi.Handlers;
 using Xunit;
 
@@ -34,14 +35,35 @@ public class FavoriteTagsPathTests
             PrivateApi.FavoriteTagPath("isfavoritetag", "good-karma", "#photography"));
     }
 
-    [Fact]
-    public void MissingTagIsTheLiteralUndefinedSegment()
+    [Theory]
+    // A missing tag must not become the literal "undefined" the way a missing
+    // account does in the favorites handlers: "undefined", "null", "true" and "123"
+    // are all valid tag names upstream, so templating would check or delete a follow
+    // the caller never named.
+    [InlineData("{}")]
+    [InlineData("{\"tag\": null}")]
+    [InlineData("{\"tag\": true}")]
+    [InlineData("{\"tag\": 123}")]
+    [InlineData("{\"tag\": \"\"}")]
+    [InlineData("{\"tag\": [\"photography\"]}")]
+    [InlineData("{\"tag\": {\"name\": \"photography\"}}")]
+    public void AbsentOrNonStringTagIsRejected(string json)
     {
-        // TemplateField renders an absent body field as "undefined", the same way the
-        // favorites handlers do for a missing account; it stays one plain segment.
-        Assert.Equal(
-            "favoriteTag/good-karma/undefined",
-            PrivateApi.FavoriteTagPath("favoriteTag", "good-karma", "undefined"));
+        var body = (JsonObject)JsonNode.Parse(json)!;
+
+        Assert.Null(PrivateApi.FavoriteTagField(body));
+    }
+
+    [Fact]
+    public void StringTagIsReadAsIs()
+    {
+        // Read leniently and passed through untouched: normalising is the upstream's job.
+        var body = (JsonObject)JsonNode.Parse("{\"tag\": \"#Photography\"}")!;
+        Assert.Equal("#Photography", PrivateApi.FavoriteTagField(body));
+
+        // Lone surrogates are valid JSON string content and must not be dropped.
+        var lone = (JsonObject)JsonNode.Parse("{\"tag\": \"\\ud800\"}")!;
+        Assert.Equal("\ud800", PrivateApi.FavoriteTagField(lone));
     }
 
     [Theory]
