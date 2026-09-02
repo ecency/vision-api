@@ -127,6 +127,10 @@ public static partial class Routes
         app.MapPost("/private-api/favorites-check", PrivateApi.FavoritesCheck);
         app.MapPost("/private-api/favorites-add", PrivateApi.FavoritesAdd);
         app.MapPost("/private-api/favorites-delete", PrivateApi.FavoritesDelete);
+        app.MapPost("/private-api/favorite-tags", PrivateApi.FavoriteTags);
+        app.MapPost("/private-api/favorite-tags-check", PrivateApi.FavoriteTagsCheck);
+        app.MapPost("/private-api/favorite-tags-add", PrivateApi.FavoriteTagsAdd);
+        app.MapPost("/private-api/favorite-tags-delete", PrivateApi.FavoriteTagsDelete);
         app.MapPost("/private-api/fragments", PrivateApi.Fragments);
         app.MapPost("/private-api/fragments-add", PrivateApi.FragmentsAdd);
         app.MapPost("/private-api/fragments-update", PrivateApi.FragmentsUpdate);

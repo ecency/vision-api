@@ -129,6 +129,94 @@ public static partial class PrivateApi
         await Upstream.Pipe(ApiClient.ApiRequest($"favoriteUser/{username}/{account}", HttpMethod.Delete), ctx);
     }
 
+    /// <summary>
+    /// Upstream path for a followed-tag check or removal, or null when a value cannot
+    /// be expressed as a single path segment.
+    ///
+    /// The tag is a body string, so one carrying `/`, `?` or `#` would otherwise be
+    /// re-parsed as URL structure once this string becomes a Uri, addressing a
+    /// different upstream resource with this service's credentials attached. Same
+    /// reasoning as NotificationsPath. Real tags are lowercase words with digits and
+    /// hyphens, which EscapeDataString leaves byte-identical. A leading `#` a client
+    /// may send is escaped rather than dropped: normalising the tag is the upstream's
+    /// job, and it strips one.
+    /// </summary>
+    public static string? FavoriteTagPath(string action, string username, string tag)
+    {
+        if (IsDotSegment(username) || IsDotSegment(tag))
+        {
+            return null;
+        }
+
+        return $"{action}/{Uri.EscapeDataString(username)}/{Uri.EscapeDataString(tag)}";
+    }
+
+    public static async Task FavoriteTags(HttpContext ctx)
+    {
+        var body = await ctx.ReadBody();
+        var username = await ValidateCode(body);
+        if (username == null)
+        {
+            await ctx.SendText(401, "Unauthorized");
+            return;
+        }
+        await Upstream.Pipe(
+            ApiClient.ApiRequest($"favorite-tags/{username}", HttpMethod.Get, null, null, UserData2Js.Query(ctx)),
+            ctx);
+    }
+
+    public static async Task FavoriteTagsCheck(HttpContext ctx)
+    {
+        var body = await ctx.ReadBody();
+        var username = await ValidateCode(body);
+        if (username == null)
+        {
+            await ctx.SendText(401, "Unauthorized");
+            return;
+        }
+        var tag = UserData2Js.TemplateField(body, "tag");
+        var path = FavoriteTagPath("isfavoritetag", username, tag);
+        if (path == null)
+        {
+            await ctx.SendText(400, "Invalid tag");
+            return;
+        }
+        await Upstream.Pipe(ApiClient.ApiRequest(path, HttpMethod.Get), ctx);
+    }
+
+    public static async Task FavoriteTagsAdd(HttpContext ctx)
+    {
+        var body = await ctx.ReadBody();
+        var username = await ValidateCode(body);
+        if (username == null)
+        {
+            await ctx.SendText(401, "Unauthorized");
+            return;
+        }
+        var data = new JsonObject { ["username"] = username };
+        UserData2Js.CopyIfPresent(body, data, "tag");
+        await Upstream.Pipe(ApiClient.ApiRequest("favorite-tag", HttpMethod.Post, null, data), ctx);
+    }
+
+    public static async Task FavoriteTagsDelete(HttpContext ctx)
+    {
+        var body = await ctx.ReadBody();
+        var username = await ValidateCode(body);
+        if (username == null)
+        {
+            await ctx.SendText(401, "Unauthorized");
+            return;
+        }
+        var tag = UserData2Js.TemplateField(body, "tag");
+        var path = FavoriteTagPath("favoriteTag", username, tag);
+        if (path == null)
+        {
+            await ctx.SendText(400, "Invalid tag");
+            return;
+        }
+        await Upstream.Pipe(ApiClient.ApiRequest(path, HttpMethod.Delete), ctx);
+    }
+
     public static async Task Fragments(HttpContext ctx)
     {
         var body = await ctx.ReadBody();
