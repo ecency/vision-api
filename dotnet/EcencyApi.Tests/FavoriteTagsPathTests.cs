@@ -68,6 +68,21 @@ public class FavoriteTagsPathTests
         Assert.Equal(2, path.Split('/').Length - 1);
     }
 
+    [Fact]
+    public void LoneSurrogateIsEncodedNotThrown()
+    {
+        // JSON strings are arbitrary UTF-16, so a lone surrogate reaches the helper as
+        // a real value (see TryGetStringLenient). On the runtime this service targets,
+        // EscapeDataString encodes it as U+FFFD rather than throwing, so the request
+        // stays on the handler's own path instead of falling through to the 500 page.
+        Assert.Equal(
+            "isfavoritetag/good-karma/%EF%BF%BD",
+            PrivateApi.FavoriteTagPath("isfavoritetag", "good-karma", "\ud800"));
+        Assert.Equal(
+            "favoriteTag/good-karma/a%EF%BF%BDb",
+            PrivateApi.FavoriteTagPath("favoriteTag", "good-karma", "a\udc00b"));
+    }
+
     [Theory]
     // Dot segments cannot be fixed by escaping: Uri decodes %2E back to `.` before it
     // removes dot segments, so they have to be rejected outright.
