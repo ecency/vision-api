@@ -120,6 +120,15 @@ public static partial class PrivateApi
                 return null;
             }
 
+            // A message typed "login" only says who signed it. HiveSigner answers
+            // /api/me for one and refuses everything else, and no Ecency client
+            // ever sends one here, so it is not a session here either. Decided
+            // before any node lookup: the shape alone settles it.
+            if (IsLoginOnlyMessage(signedMessage))
+            {
+                return null;
+            }
+
             var currentTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
             // rawMessage = JSON.stringify({ signed_message, authors, timestamp })
@@ -191,6 +200,18 @@ public static partial class PrivateApi
             return null;
         }
     }
+
+    /// <summary>
+    /// True for a signed_message whose type is the string "login": a proof of
+    /// identity for another app, never a session. Anything else, including a
+    /// missing or non-string type, is left to the signature checks as before.
+    /// </summary>
+    internal static bool IsLoginOnlyMessage(JsonNode? signedMessage) =>
+        signedMessage is JsonObject obj
+        && obj.TryGetPropertyValue("type", out var typeNode)
+        && typeNode is JsonValue typeValue
+        && JsVal.TryGetStringLenient(typeValue, out var type)
+        && type == "login";
 
     /// <summary>key_auths.map(([key]) => key) — throws on non-array input like .map on a non-array.</summary>
     private static List<string?> MapKeyAuths(JsonNode? keyAuths)
