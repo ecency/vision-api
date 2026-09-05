@@ -73,23 +73,28 @@ public class CurationDeskAuthTests
     }
 
     [Fact]
-    public async Task WithoutTheTokenWritesAuthenticateThenAnswer503()
+    public async Task WithoutTheTokenWritesAnswer503BeforeValidatingAnything()
     {
         var upstream = Install(token: null);
+        var validations = 0;
+        PrivateApi.DeskValidateCode = _ => { validations++; return Task.FromResult<string?>("alice"); };
 
         foreach (var (name, handler, body) in SignedWrites())
         {
-            var ok = Post("/private-api/curation-desk/" + name, body);
-            await handler(ok);
-            Assert.Equal(503, ok.Response.StatusCode);
-            Assert.Equal("curation desk not configured", Body(ok));
-
-            // An unauthenticated caller learns nothing about the configuration.
-            var anon = Post("/private-api/curation-desk/" + name, "{}");
-            await handler(anon);
-            Assert.Equal(401, anon.Response.StatusCode);
-            Assert.Equal("Unauthorized", Body(anon));
+            // A dark desk answers the same to a signed body and to an anonymous
+            // one, and neither costs a chain lookup: there is no work behind the
+            // route to authorize.
+            foreach (var payload in new[] { body, "{}" })
+            {
+                var ctx = Post("/private-api/curation-desk/" + name, payload);
+                await handler(ctx);
+                await Start(ctx);
+                Assert.Equal(503, ctx.Response.StatusCode);
+                Assert.Equal("curation desk not configured", Body(ctx));
+                Assert.Null(CacheControl(ctx));
+            }
         }
+        Assert.Equal(0, validations);
         Assert.Empty(upstream.Calls);
     }
 
@@ -141,7 +146,9 @@ public class CurationDeskAuthTests
         var upstream = Install();
         var validations = 0;
         PrivateApi.DeskValidateCode = _ => { validations++; return Task.FromResult<string?>("alice"); };
-        PrivateApi.DeskAuthMemoSeconds = 0.2;
+        // Wide enough that two back-to-back in-process calls cannot straddle it
+        // on a loaded runner; the delay below is what expires it.
+        PrivateApi.DeskAuthMemoSeconds = 2;
         var code = "memo-" + Guid.NewGuid().ToString("N");
         var body = "{\"code\":\"" + code + "\",\"author\":\"bob\",\"permlink\":\"p\"}";
 
@@ -155,7 +162,7 @@ public class CurationDeskAuthTests
         await PrivateApi.CurationDeskMarkClear(Post("/private-api/curation-desk/mark-clear", body.Replace(code, code + "x")));
         Assert.Equal(2, validations);
 
-        await Task.Delay(350);
+        await Task.Delay(2300);
         await PrivateApi.CurationDeskMarkClear(Post("/private-api/curation-desk/mark-clear", body));
         Assert.Equal(3, validations);
     }
@@ -357,6 +364,106 @@ public class CurationDeskAuthTests
             Assert.Equal(200, r.Response.StatusCode);
             Assert.Equal("{\"behind_seconds\":3}", Body(r));
         });
+    }
+
+    [Fact]
+    public async Task ASlowReaderDoesNotHoldTheGateOfItsKey()
+    {
+        var upstream = Install();
+        var fill = new TaskCompletionSource<UpstreamResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+        upstream.Answer = _ => fill.Task;
+
+        // A reader whose socket never drains takes the gate and starts the fill.
+        var slowBody = new BlockingBody();
+        var slow = Get("/private-api/curation-desk/status");
+        slow.Response.Body = slowBody;
+        var slowRequest = PrivateApi.CurationDeskStatus(slow);
+        await Task.Delay(100);
+        Assert.Single(upstream.Calls);
+
+        // A second reader of the same key arrives during the fill, so it is
+        // queued on the gate rather than served from the memo.
+        var fast = Get("/private-api/curation-desk/status");
+        var fastRequest = PrivateApi.CurationDeskStatus(fast);
+        await Task.Delay(100);
+        Assert.False(fastRequest.IsCompleted);
+
+        fill.SetResult(JsonResponse(200, "{\"behind_seconds\":3}"));
+        await slowBody.WriteReached;
+
+        // The fill is done and the slow reader is stuck in its write. The bound
+        // is far under CurationDeskMemo.FillWait on purpose: waiting for the
+        // gate to time out would also "answer", just seconds later.
+        await fastRequest.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal(200, fast.Response.StatusCode);
+        Assert.Equal("{\"behind_seconds\":3}", Body(fast));
+        Assert.False(slowRequest.IsCompleted);
+
+        slowBody.Release();
+        await slowRequest.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal("{\"behind_seconds\":3}", slowBody.Text);
+        Assert.Single(upstream.Calls);
+    }
+
+    [Fact]
+    public async Task A200ThatIsNotAJsonBodyIsNeitherCachedNorMemoized()
+    {
+        var upstream = Install();
+        upstream.Answer = _ => Task.FromResult(TextResponse(200, "<html>gateway login</html>"));
+
+        var page = Get("/private-api/curation-desk/status");
+        await PrivateApi.CurationDeskStatus(page);
+        await Start(page);
+        Assert.Equal(200, page.Response.StatusCode);
+        Assert.Equal("<html>gateway login</html>", Body(page));
+        Assert.StartsWith("text/html", page.Response.ContentType);
+        Assert.Null(CacheControl(page));
+        Assert.Equal(0, CurationDeskMemo.Fresh.Count);
+        Assert.Equal(0, CurationDeskMemo.LastGood.Count);
+
+        // A JSON body that is not an object or an array is the same case.
+        upstream.Answer = _ => Task.FromResult(JsonResponse(200, "\"maintenance\""));
+        var scalar = Get("/private-api/curation-desk/status");
+        await PrivateApi.CurationDeskStatus(scalar);
+        await Start(scalar);
+        Assert.Equal(200, scalar.Response.StatusCode);
+        Assert.Null(CacheControl(scalar));
+        Assert.Equal(0, CurationDeskMemo.Fresh.Count);
+
+        // And an answer the desk did give is preferred over that page, with the
+        // route's policy on it because it is a body this service holds.
+        CurationDeskMemo.ResetForTests();
+        upstream.Answer = _ => Task.FromResult(JsonResponse(200, "{\"behind_seconds\":3}"));
+        await PrivateApi.CurationDeskStatus(Get("/private-api/curation-desk/status"));
+        CurationDeskMemo.Fresh = new BytesCache(CurationDeskMemo.BudgetBytes);
+
+        upstream.Answer = _ => Task.FromResult(TextResponse(200, "<html>gateway login</html>"));
+        var stale = Get("/private-api/curation-desk/status");
+        await PrivateApi.CurationDeskStatus(stale);
+        await Start(stale);
+        Assert.Equal(200, stale.Response.StatusCode);
+        Assert.Equal("{\"behind_seconds\":3}", Body(stale));
+        Assert.StartsWith("application/json", stale.Response.ContentType);
+        Assert.Equal(CachePolicy.CurationDeskStatus, CacheControl(stale));
+    }
+
+    [Fact]
+    public async Task AJsonErrorBodyPassesThroughTheSameFenceAsAServedOne()
+    {
+        var upstream = Install();
+        upstream.Answer = _ => Task.FromResult(JsonResponse(404,
+            "{\"error\":\"unknown post\",\"excluded_reason\":\"abuser\",\"detail\":{\"set_by\":\"alice\"}}"));
+
+        var ctx = Get("/private-api/curation-desk/post/good-karma/nope", "",
+            new[] { ("author", "good-karma"), ("permlink", "nope") });
+        await PrivateApi.CurationDeskPost(ctx);
+        await Start(ctx);
+        Assert.Equal(404, ctx.Response.StatusCode);
+        Assert.Null(CacheControl(ctx));
+        var body = Body(ctx);
+        Assert.Contains("\"error\":\"unknown post\"", body);
+        Assert.DoesNotContain("excluded_reason", body);
+        Assert.DoesNotContain("set_by", body);
     }
 
     [Fact]

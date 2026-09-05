@@ -84,6 +84,44 @@ public class CurationDeskPublicPayloadTests
     }
 
     [Fact]
+    public void ALoneSurrogateSurvivesTheStrip()
+    {
+        // JavaScript strings are arbitrary UTF-16 and a title can carry half a
+        // surrogate pair. Stripping a key next to one re-serializes the tree, so
+        // that path has to go through JsJson.Stringify: System.Text.Json's writer
+        // throws on a lone surrogate and would turn one odd title into a 500 for
+        // the whole feed page.
+        var r = JsonResponse(200,
+            "{\"items\":[{\"title\":\"lone \\ud83d end\",\"note\":\"secret\"}],\"generated_at\":\"t\"}");
+
+        var bytes = CurationDeskPublicPayload.ToPublicBytes(r);
+        var text = Encoding.UTF8.GetString(bytes);
+        Assert.DoesNotContain("\"note\"", text);
+        Assert.Contains("\\ud83d", text);
+        Assert.Contains("\"generated_at\":\"t\"", text);
+    }
+
+    [Fact]
+    public async Task ALoneSurrogateIsServedAndMemoizedTheSameWay()
+    {
+        var upstream = Install();
+        upstream.Answer = _ => Task.FromResult(JsonResponse(200,
+            "{\"items\":[{\"title\":\"lone \\ud83d end\",\"note\":\"secret\"}],\"generated_at\":\"t\"}"));
+
+        var ctx = Get("/private-api/curation-desk/status");
+        await PrivateApi.CurationDeskStatus(ctx);
+        Assert.Equal(200, ctx.Response.StatusCode);
+        var served = Body(ctx);
+        Assert.DoesNotContain("\"note\"", served);
+        Assert.Contains("\\ud83d", served);
+
+        var again = Get("/private-api/curation-desk/status");
+        await PrivateApi.CurationDeskStatus(again);
+        Assert.Equal(served, Body(again));
+        Assert.Single(upstream.Calls);
+    }
+
+    [Fact]
     public async Task EveryPublicRouteServesAndMemoizesTheStrippedBody()
     {
         var upstream = Install();

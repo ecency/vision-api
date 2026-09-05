@@ -203,8 +203,78 @@ public class CurationDeskPayloadTests
         var unknown = Ok(CurationDeskWrites.RosterFeed, "{\"sort\":\"payout\",\"seed\":\"abcd1234\",\"view\":\"excluded\",\"hide_reviewed\":false}");
         Assert.False(unknown.ContainsKey("sort"));
         Assert.False(unknown.ContainsKey("seed"));
+        // The roster is the only feed that lists excluded rows, so its view
+        // allowlist is the public one plus that.
         Assert.Equal("excluded", unknown["view"]!.GetValue<string>());
         Assert.False(unknown["hide_reviewed"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void RosterFeedTakesOnlyASeedTheBackendCanHashWith()
+    {
+        foreach (var seed in new[] { "\"abc\"", "\"" + new string('a', 17) + "\"", "\"ABCD1234\"", "\"abcd 1234\"", "\"abcd1234\\n\"", "42", "null" })
+        {
+            var payload = Ok(CurationDeskWrites.RosterFeed, "{\"sort\":\"random\",\"seed\":" + seed + "}");
+            Assert.False(payload.ContainsKey("seed"), seed);
+        }
+        Assert.Equal(new string('a', 16),
+            Ok(CurationDeskWrites.RosterFeed, "{\"sort\":\"random\",\"seed\":\"" + new string('a', 16) + "\"}")["seed"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void RosterFeedFiltersFollowThePublicFeedsValueRules()
+    {
+        // Allowlists: a value the public feed drops is dropped here too, so the
+        // two feeds answer the same question for the same request.
+        var enums = Ok(CurationDeskWrites.RosterFeed,
+            "{\"view\":\"secret\",\"app\":\"hive\",\"window\":\"week\",\"community\":\"photography\",\"cursor\":\"a b\"}");
+        Assert.Equal(new[] { "username" }, enums.Select(kv => kv.Key).ToArray());
+
+        var kept = Ok(CurationDeskWrites.RosterFeed,
+            "{\"view\":\"queue\",\"app\":\"ecency\",\"window\":\"full\",\"community\":\"hive-125125\",\"cursor\":\"s:abc.1:25\"}");
+        Assert.Equal("queue", kept["view"]!.GetValue<string>());
+        Assert.Equal("ecency", kept["app"]!.GetValue<string>());
+        Assert.Equal("full", kept["window"]!.GetValue<string>());
+        Assert.Equal("hive-125125", kept["community"]!.GetValue<string>());
+        Assert.Equal("s:abc.1:25", kept["cursor"]!.GetValue<string>());
+
+        // Trailing newlines and non-ASCII digits are not the value either.
+        var newline = Ok(CurationDeskWrites.RosterFeed, "{\"community\":\"hive-125125\\n\",\"cursor\":\"abc\\n\",\"view\":\"queue\\n\"}");
+        Assert.Equal(new[] { "username" }, newline.Select(kv => kv.Key).ToArray());
+        Assert.False(Ok(CurationDeskWrites.RosterFeed, "{\"community\":\"hive-\\u0661\\u0662\\u0663\\u0664\\u0665\"}").ContainsKey("community"));
+
+        // Ranges clamp instead of travelling as sent, from a number or its
+        // string spelling; something that is neither is dropped.
+        var ranges = Ok(CurationDeskWrites.RosterFeed,
+            "{\"rep_min\":150,\"rep_max\":-1,\"min_words\":999999,\"max_words\":\"300\",\"limit\":\"99999999999\"}");
+        Assert.Equal(100, ranges["rep_min"]!.GetValue<int>());
+        Assert.Equal(0, ranges["rep_max"]!.GetValue<int>());
+        Assert.Equal(50000, ranges["min_words"]!.GetValue<int>());
+        Assert.Equal(300, ranges["max_words"]!.GetValue<int>());
+        Assert.Equal(50, ranges["limit"]!.GetValue<int>());
+
+        var unusable = Ok(CurationDeskWrites.RosterFeed, "{\"limit\":\"lots\",\"rep_min\":true,\"max_words\":null}");
+        Assert.Equal(new[] { "username" }, unusable.Select(kv => kv.Key).ToArray());
+    }
+
+    [Fact]
+    public void TheTickNamesAtMost100IdsPerList()
+    {
+        var need = string.Join(",", Enumerable.Range(1, 150));
+        var visible = string.Join(",", Enumerable.Range(1000, 101));
+        var payload = Ok(CurationDeskWrites.Tick,
+            "{\"since\":\"t\",\"need\":[" + need + "],\"visible\":[" + visible + "]}");
+
+        Assert.Equal(CurationDeskWrites.MaxTickIds, ((JsonArray)payload["need"]!).Count);
+        Assert.Equal(CurationDeskWrites.MaxTickIds, ((JsonArray)payload["visible"]!).Count);
+        Assert.Equal(1, payload["need"]![0]!.GetValue<int>());
+        Assert.Equal(100, payload["need"]![99]!.GetValue<int>());
+        Assert.Equal(1000, payload["visible"]![0]!.GetValue<int>());
+
+        // A list that already fits travels unchanged.
+        var short_ = Ok(CurationDeskWrites.Tick, "{\"since\":\"t\",\"need\":[1,2,3],\"visible\":[]}");
+        Assert.Equal(3, ((JsonArray)short_["need"]!).Count);
+        Assert.Empty((JsonArray)short_["visible"]!);
     }
 
     // ---- route 5 path --------------------------------------------------------
@@ -242,6 +312,9 @@ public class CurationDeskPayloadTests
     [InlineData("good-karma", "a_b")]
     [InlineData("", "p")]
     [InlineData("undefined-undefined", "p")]
+    // `$` would match before a trailing newline; these anchor with \A and \z.
+    [InlineData("good-karma\n", "p")]
+    [InlineData("good-karma", "p\n")]
     public void AnythingOutsideTheNameGrammarIsRejected(string author, string permlink)
     {
         Assert.Null(PrivateApi.CurationDeskPostPath(author, permlink));

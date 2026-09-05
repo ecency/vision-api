@@ -10,49 +10,55 @@ namespace EcencyApi.Tests;
 /// </summary>
 public class CachePolicyTests
 {
-    public static TheoryData<string> AllPolicies() =>
+    // Keyed by route: several routes share a policy string, and a theory row
+    // that repeats its arguments is a duplicate test id that xUnit reports as a
+    // skip rather than running.
+    public static TheoryData<string, string> AllPolicies() =>
         new()
         {
-            CachePolicy.ProMembers, CachePolicy.Announcements, CachePolicy.PostTips,
-            CachePolicy.CurationDeskFeed, CachePolicy.CurationDeskStatus, CachePolicy.CurationDeskRoster,
-            CachePolicy.CurationDeskRecommendations, CachePolicy.CurationDeskPost,
+            { "pro-members", CachePolicy.ProMembers },
+            { "announcements", CachePolicy.Announcements },
+            { "post-tips", CachePolicy.PostTips },
+            { "desk-feed", CachePolicy.CurationDeskFeed },
+            { "desk-status", CachePolicy.CurationDeskStatus },
+            { "desk-roster", CachePolicy.CurationDeskRoster },
+            { "desk-recommendations", CachePolicy.CurationDeskRecommendations },
+            { "desk-post", CachePolicy.CurationDeskPost },
         };
 
-    public static TheoryData<string, int> DeskPolicies() =>
+    public static TheoryData<string, string, int> DeskPolicies() =>
         new()
         {
-            { CachePolicy.CurationDeskFeed, 30 },
-            { CachePolicy.CurationDeskStatus, 15 },
-            { CachePolicy.CurationDeskRoster, 600 },
-            { CachePolicy.CurationDeskRecommendations, 30 },
-            { CachePolicy.CurationDeskPost, 15 },
+            { "desk-feed", CachePolicy.CurationDeskFeed, 30 },
+            { "desk-status", CachePolicy.CurationDeskStatus, 15 },
+            { "desk-roster", CachePolicy.CurationDeskRoster, 600 },
+            { "desk-recommendations", CachePolicy.CurationDeskRecommendations, 30 },
+            { "desk-post", CachePolicy.CurationDeskPost, 15 },
         };
 
     [Theory]
     [MemberData(nameof(AllPolicies))]
-    public void EveryPolicyIsPubliclyCacheableWithAMaxAge(string policy)
+    public void EveryPolicyIsPubliclyCacheableWithAMaxAge(string route, string policy)
     {
-        Assert.StartsWith("public, max-age=", policy);
+        Assert.True(policy.StartsWith("public, max-age=", StringComparison.Ordinal), route + ": " + policy);
         Assert.DoesNotContain("no-store", policy);
         Assert.DoesNotContain("private", policy);
     }
 
     [Theory]
     [MemberData(nameof(AllPolicies))]
-    public void APolicyOnlyAppliesToASuccessfulResponse(string policy)
+    public void APolicyOnlyAppliesToASuccessfulResponse(string route, string policy)
     {
         Assert.Equal(policy, CachePolicy.ForStatus(200, policy));
 
-        // Pipe() turns upstream transport failures into these after the handler
-        // has already attached the policy. Caching one would keep a healthy
+        // Pipe() turns upstream transport failures into 504/500 after the
+        // handler has already attached the policy, and an upstream error
+        // passthrough keeps its own status. Caching either would keep a healthy
         // endpoint broken for the whole max-age.
-        Assert.Null(CachePolicy.ForStatus(504, policy));
-        Assert.Null(CachePolicy.ForStatus(500, policy));
-
-        // Upstream error passthroughs must not be cached either.
-        Assert.Null(CachePolicy.ForStatus(404, policy));
-        Assert.Null(CachePolicy.ForStatus(401, policy));
-        Assert.Null(CachePolicy.ForStatus(429, policy));
+        foreach (var status in new[] { 504, 500, 404, 401, 429 })
+        {
+            Assert.True(CachePolicy.ForStatus(status, policy) == null, route + " " + status);
+        }
     }
 
     [Fact]
@@ -66,12 +72,12 @@ public class CachePolicyTests
 
     [Theory]
     [MemberData(nameof(DeskPolicies))]
-    public void DeskPoliciesRevalidateInTheBrowserAndAreSharedForTheirSMaxAge(string policy, int sMaxAge)
+    public void DeskPoliciesRevalidateInTheBrowserAndAreSharedForTheirSMaxAge(string route, string policy, int sMaxAge)
     {
         // max-age=0 makes every browser poll revalidate; s-maxage is what shared
         // caches and the in-process memo hold the body for.
-        Assert.Equal(0, MaxAge(policy));
-        Assert.Equal(sMaxAge, CachePolicy.SharedMaxAge(policy));
+        Assert.True(MaxAge(policy) == 0, route);
+        Assert.True(CachePolicy.SharedMaxAge(policy) == sMaxAge, route);
         Assert.DoesNotContain("stale-while-revalidate", policy);
     }
 

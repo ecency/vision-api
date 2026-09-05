@@ -41,6 +41,48 @@ internal static class CurationDeskTestSupport
         }
     }
 
+    /// <summary>
+    /// A response body whose writes block until the test releases them, so one
+    /// request can be held inside its response write while another runs. Stands
+    /// in for a reader on a slow connection.
+    /// </summary>
+    public sealed class BlockingBody : Stream
+    {
+        private readonly MemoryStream _inner = new();
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Completes once the handler has reached its first write.</summary>
+        public Task WriteReached => _started.Task;
+
+        public void Release() => _release.TrySetResult();
+
+        public string Text => Encoding.UTF8.GetString(_inner.ToArray());
+
+        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            _started.TrySetResult();
+            await _release.Task;
+            await _inner.WriteAsync(buffer, cancellationToken);
+        }
+
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            WriteAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override void Write(byte[] buffer, int offset, int count) =>
+            WriteAsync(buffer, offset, count, CancellationToken.None).GetAwaiter().GetResult();
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => _inner.Length;
+        public override long Position { get => _inner.Position; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+    }
+
     public sealed record Call(string Endpoint, HttpMethod Method, List<KeyValuePair<string, string>> Headers, JsonNode? Payload)
     {
         public string? Header(string name) =>

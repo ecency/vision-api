@@ -49,6 +49,9 @@ public class CurationDeskQueryTests
     [InlineData("1", "limit=1")]
     [InlineData("50", "limit=50")]
     [InlineData("999", "limit=50")]
+    // Beyond int.MaxValue: "as many as you can", not "give me the default".
+    [InlineData("99999999999", "limit=50")]
+    [InlineData("-99999999999", "limit=1")]
     [InlineData("25", "")]
     [InlineData("abc", "")]
     [InlineData("1e1", "")]
@@ -133,6 +136,28 @@ public class CurationDeskQueryTests
         Assert.Equal("curation/desk/feed", Feed(("community", "hive-1234567")));
         Assert.Equal("curation/desk/feed", Feed(("community", "photography")));
         Assert.Equal("curation/desk/feed", Feed(("community", "hive-125125/x")));
+    }
+
+    [Fact]
+    public void AValueWithATrailingNewlineIsNotTheValue()
+    {
+        // `$` in .NET also matches before a trailing newline, so every pattern
+        // here anchors with \A and \z instead.
+        Assert.Equal("curation/desk/feed", Feed(("cursor", "abc\n")));
+        Assert.Equal("curation/desk/feed", Feed(("community", "hive-125125\n")));
+        Assert.Equal("curation/desk/feed", Feed(("sort", "queue\n")));
+        Assert.Equal("curation/desk/feed", Feed(("view", "queue\n")));
+        Assert.Equal("curation/desk/recommendations", Recommendations(("cursor", "abc\n")));
+    }
+
+    [Fact]
+    public void CommunityDigitsAreAsciiDigitsOnly()
+    {
+        // .NET's `\d` matches every Unicode decimal digit; a community name is
+        // five or six ASCII digits and nothing else.
+        Assert.Equal("curation/desk/feed", Feed(("community", "hive-\u0661\u0662\u0663\u0664\u0665")));
+        Assert.Equal("curation/desk/feed", Feed(("community", "hive-\u09E7\u09E8\u09E9\u09EA\u09EB\u09EC")));
+        Assert.Equal("curation/desk/feed?community=hive-125125", Feed(("community", "hive-125125")));
     }
 
     [Fact]
