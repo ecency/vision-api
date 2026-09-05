@@ -21,6 +21,16 @@ public static class Config
     public static string EnotifyInternalToken { get; } =
         Env("ENOTIFY_INTERNAL_TOKEN") ?? "";
 
+    /// <summary>
+    /// Shared secret presented to the curation desk backend on every desk call,
+    /// public reads included: the desk answers only requests that carry it, so
+    /// the memo and rate limits in front of it cannot be bypassed by going
+    /// around this service. No default: when unset the desk routes fail closed
+    /// (503) rather than forward an empty secret.
+    /// </summary>
+    public static string DeskInternalToken { get; } =
+        Env("DESK_INTERNAL_TOKEN") ?? "";
+
     public static string HsClientSecret { get; } =
         Env("HIVESIGNER_SECRET") ?? "hivesignerclientsecret";
 

@@ -37,6 +37,44 @@ public static class CachePolicy
     public const string PostTips = "public, max-age=60, stale-while-revalidate=600";
 
     /// <summary>
+    /// Curation desk public reads. `max-age=0` makes browsers revalidate on every
+    /// poll while `s-maxage` lets shared caches absorb the polling; the in-process
+    /// memo of each route uses the same s-maxage as its TTL (see
+    /// <see cref="SharedMaxAge"/>), so the two layers never disagree on freshness.
+    /// The feed and the recommendations list move with every new post; status is
+    /// the poll target and stays short; the roster changes when a curator is added
+    /// or promoted, so it can stay put for minutes; a single post's recommenders
+    /// are optimistic on the client and confirmed from here.
+    /// </summary>
+    public const string CurationDeskFeed = "public, max-age=0, s-maxage=30";
+    public const string CurationDeskStatus = "public, max-age=0, s-maxage=15";
+    public const string CurationDeskRoster = "public, max-age=0, s-maxage=600";
+    public const string CurationDeskRecommendations = "public, max-age=0, s-maxage=30";
+    public const string CurationDeskPost = "public, max-age=0, s-maxage=15";
+
+    /// <summary>
+    /// The `s-maxage` of a policy in seconds, or its `max-age` when it has no
+    /// shared-cache directive. Handlers that memoize a response derive their TTL
+    /// from this so the memo can never outlive what the policy promises.
+    /// </summary>
+    public static int SharedMaxAge(string policy)
+    {
+        var tokens = policy.Split(',', StringSplitOptions.TrimEntries);
+        foreach (var name in new[] { "s-maxage=", "max-age=" })
+        {
+            foreach (var token in tokens)
+            {
+                if (token.StartsWith(name, StringComparison.Ordinal)
+                    && int.TryParse(token.AsSpan(name.Length), out var seconds) && seconds >= 0)
+                {
+                    return seconds;
+                }
+            }
+        }
+        throw new ArgumentException("policy carries no max-age", nameof(policy));
+    }
+
+    /// <summary>
     /// A policy applies only to a successful response. Handlers attach it before
     /// the upstream call resolves, and <see cref="Upstream.Pipe"/> can still turn
     /// a transport failure into 504/500 afterwards — caching either would pin an

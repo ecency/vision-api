@@ -173,6 +173,23 @@ public static partial class Routes
         app.MapPost("/private-api/chats-update", PrivateApi.ChatsUpdate);
         app.MapPost("/private-api/channel-add", PrivateApi.ChannelAdd);
 
+        // ---- Curation desk (see PrivateApi.CurationDesk.cs) ----
+        // Literal segments under curation-desk/: a different first segment from
+        // the curation/{duration} route above, so the two can never collide.
+        app.MapGet("/private-api/curation-desk/feed", PrivateApi.CurationDeskFeed);
+        app.MapGet("/private-api/curation-desk/status", PrivateApi.CurationDeskStatus);
+        app.MapGet("/private-api/curation-desk/roster", PrivateApi.CurationDeskRoster);
+        app.MapGet("/private-api/curation-desk/recommendations", PrivateApi.CurationDeskRecommendations);
+        app.MapGet("/private-api/curation-desk/post/{author}/{permlink}", PrivateApi.CurationDeskPost);
+        app.MapPost("/private-api/curation-desk/roster-feed", PrivateApi.CurationDeskRosterFeed);
+        app.MapPost("/private-api/curation-desk/tick", PrivateApi.CurationDeskTick);
+        app.MapPost("/private-api/curation-desk/mark", PrivateApi.CurationDeskMark);
+        app.MapPost("/private-api/curation-desk/mark-clear", PrivateApi.CurationDeskMarkClear);
+        app.MapPost("/private-api/curation-desk/marks", PrivateApi.CurationDeskMarks);
+        app.MapPost("/private-api/curation-desk/cursor", PrivateApi.CurationDeskCursor);
+        app.MapPost("/private-api/curation-desk/recommend-meta", PrivateApi.CurationDeskRecommendMeta);
+        app.MapPost("/private-api/curation-desk/recommendation-dismiss", PrivateApi.CurationDeskRecommendationDismiss);
+
         // ---- SSR RPC cache (internal, header-gated; see SsrRpc.cs) ----
         app.MapPost("/private-api/ssr/rpc", SsrRpc.Rpc);
         app.MapGet("/private-api/ssr/stats", SsrRpc.Stats);
