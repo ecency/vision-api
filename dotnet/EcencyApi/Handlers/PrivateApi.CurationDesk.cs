@@ -312,11 +312,14 @@ public static partial class PrivateApi
     ///
     /// A hit goes out with the rest of its window rather than a new one, so the
     /// memo and the caches downstream expire the same body at the same moment
-    /// instead of holding it for one lifetime each in series.
+    /// instead of holding it for one lifetime each in series. The remaining
+    /// lifetime is the only freshness signal sent: an Age header on top of an
+    /// already shortened s-maxage would be subtracted a second time by a cache
+    /// that honours both, leaving the body stale on arrival.
     /// </summary>
     private static async Task SendPublicJson(HttpContext ctx, string policy, string contentType, byte[] bytes, int ageSeconds)
     {
-        ctx.CacheWhenOk(CachePolicy.Aged(policy, ageSeconds), ageSeconds);
+        ctx.CacheWhenOk(CachePolicy.Aged(policy, ageSeconds));
         await WriteBytes(ctx, 200, contentType, bytes);
     }
 
@@ -328,7 +331,10 @@ public static partial class PrivateApi
     /// </summary>
     private static async Task SendStaleJson(HttpContext ctx, string policy, string contentType, byte[] bytes, int ageSeconds)
     {
-        ctx.CacheWhenOk(CachePolicy.Stale(policy), ageSeconds);
+        // the body's real age is not advertised: the short window alone is the
+        // freshness, and an Age older than it would make the answer stale at once
+        _ = ageSeconds;
+        ctx.CacheWhenOk(CachePolicy.Stale(policy));
         await WriteBytes(ctx, 200, contentType, bytes);
     }
 

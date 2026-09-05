@@ -256,7 +256,7 @@ public class CurationDeskAuthTests
             Assert.Equal(200, ok.Response.StatusCode);
             Assert.Equal(policy, CacheControl(ok));
             // Filled by this request, so the whole window and no age spent yet.
-            Assert.Equal("0", Age(ok));
+            Assert.Null(Age(ok));
             Assert.StartsWith("application/json", ok.Response.ContentType);
 
             CurationDeskMemo.ResetForTests();
@@ -310,7 +310,7 @@ public class CurationDeskAuthTests
         await PrivateApi.CurationDeskRoster(fill);
         await Start(fill);
         Assert.Equal(CachePolicy.CurationDeskRoster, CacheControl(fill));
-        Assert.Equal("0", Age(fill));
+        Assert.Null(Age(fill));
 
         // 590 s into the roster's 600 s window. Sending the whole window again
         // here would let a shared cache hold this body for another 600 s on top
@@ -322,7 +322,7 @@ public class CurationDeskAuthTests
         Assert.Equal(200, hit.Response.StatusCode);
         Assert.Equal(body, Body(hit));
         Assert.Equal("public, max-age=0, s-maxage=10", CacheControl(hit));
-        Assert.Equal("590", Age(hit));
+        Assert.Null(Age(hit));
 
         // Both readers were answered from one upstream call.
         Assert.Single(upstream.Calls);
@@ -344,12 +344,12 @@ public class CurationDeskAuthTests
         await PrivateApi.CurationDeskStatus(hit);
         await Start(hit);
         Assert.Equal("public, max-age=0, s-maxage=1", CacheControl(hit));
-        Assert.Equal("20", Age(hit));
+        Assert.Null(Age(hit));
         Assert.Single(upstream.Calls);
     }
 
     [Fact]
-    public async Task TheLastGoodBodyCarriesTheShortWindowAndItsRealAge()
+    public async Task TheLastGoodBodyCarriesTheShortWindowAndNoAgeHeader()
     {
         var upstream = Install();
         var clock = UseTestClock();
@@ -373,7 +373,7 @@ public class CurationDeskAuthTests
         // readers within a poll or two, not ten minutes later.
         Assert.Equal("public, max-age=0, s-maxage=5", CacheControl(stale));
         Assert.Equal(CachePolicy.Stale(CachePolicy.CurationDeskRoster), CacheControl(stale));
-        Assert.Equal("120", Age(stale));
+        Assert.Null(Age(stale));
     }
 
     [Fact]
