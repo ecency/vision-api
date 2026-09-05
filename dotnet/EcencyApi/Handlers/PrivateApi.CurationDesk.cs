@@ -143,10 +143,11 @@ public static partial class PrivateApi
         await ServeDeskRead(ctx, path, CachePolicy.CurationDeskRecommender);
     }
 
-    // \A and \z, not ^ and $: in .NET `$` also matches before a trailing
-    // newline, so "good-karma\n" would pass a `$`-anchored name check and
-    // travel into the upstream path.
-    private static readonly Regex DeskAuthorPattern = new(@"\A[a-z0-9.-]{3,16}\z", RegexOptions.Compiled);
+    // Names go through HiveNames.IsAccountName, a character walk that knows the
+    // label rules a character class cannot express ("abc-", "a..b", "ab.cdef").
+    // The permlink grammar is a plain class, anchored with \A and \z, not ^ and
+    // $: in .NET `$` also matches before a trailing newline, so "p\n" would pass
+    // a `$`-anchored check and travel into the upstream path.
     private static readonly Regex DeskPermlinkPattern = new(@"\A[a-z0-9-]{1,255}\z", RegexOptions.Compiled);
 
     /// <summary>
@@ -160,11 +161,14 @@ public static partial class PrivateApi
     /// </summary>
     public static string? CurationDeskPostPath(string author, string permlink)
     {
+        // The name grammar has no room for a dot segment (every label is three
+        // letters or more); the permlink grammar has no dot at all. Both checks
+        // stay written out so the fence does not depend on that reading.
         if (author is "." or ".." || permlink is "." or "..")
         {
             return null;
         }
-        if (!DeskAuthorPattern.IsMatch(author) || !DeskPermlinkPattern.IsMatch(permlink))
+        if (!HiveNames.IsAccountName(author) || !DeskPermlinkPattern.IsMatch(permlink))
         {
             return null;
         }
@@ -181,7 +185,7 @@ public static partial class PrivateApi
     /// single shared-cache key.
     /// </summary>
     public static string? CurationDeskRecommenderPath(string username) =>
-        username is "." or ".." || !DeskAuthorPattern.IsMatch(username)
+        username is "." or ".." || !HiveNames.IsAccountName(username)
             ? null
             : $"curation/desk/recommenders/{Uri.EscapeDataString(username)}";
 
