@@ -1,0 +1,428 @@
+using System.Text.Json.Nodes;
+using EcencyApi.Handlers;
+using EcencyApi.Infrastructure;
+using Xunit;
+using static EcencyApi.Tests.CurationDeskTestSupport;
+
+namespace EcencyApi.Tests;
+
+/// <summary>
+/// Handler-level behaviour of the desk routes: the shared secret on every
+/// upstream call, the fail-closed 503, the validation memo, the byte memo with
+/// its single flight and last-good fallback, and the Cache-Control rules.
+/// </summary>
+[Collection("curation-desk")]
+public class CurationDeskAuthTests
+{
+    // ---- the token -----------------------------------------------------------
+
+    [Fact]
+    public async Task EveryUpstreamCallCarriesTheDeskToken()
+    {
+        var upstream = Install();
+
+        foreach (var (name, handler, request, _) in PublicReads())
+        {
+            await handler(request());
+            var call = Assert.Single(upstream.Calls);
+            Assert.Equal(Token, call.Header(PrivateApi.DeskTokenHeader));
+            Assert.Equal(HttpMethod.Get, call.Method);
+            Assert.StartsWith("curation/desk/", call.Endpoint);
+            Assert.Null(call.Payload);
+            upstream.Calls.Clear();
+            CurationDeskMemo.ResetForTests();
+        }
+
+        foreach (var (name, handler, body) in SignedWrites())
+        {
+            await handler(Post("/private-api/curation-desk/" + name, body));
+            var call = Assert.Single(upstream.Calls);
+            Assert.Equal(Token, call.Header(PrivateApi.DeskTokenHeader));
+            Assert.Equal(HttpMethod.Post, call.Method);
+            Assert.StartsWith("curation/desk/", call.Endpoint);
+            Assert.Equal("alice", call.Payload!["username"]!.GetValue<string>());
+            Assert.False(((JsonObject)call.Payload).ContainsKey("code"));
+            upstream.Calls.Clear();
+        }
+    }
+
+    [Fact]
+    public void TheTokenComesFromItsOwnEnvironmentVariable()
+    {
+        // Not set in the test environment: the desk is switched off by default.
+        Assert.Equal("", Config.DeskInternalToken);
+    }
+
+    // ---- fail closed ---------------------------------------------------------
+
+    [Fact]
+    public async Task WithoutTheTokenReadsAnswer503BeforeAnyUpstreamCall()
+    {
+        var upstream = Install(token: null);
+
+        foreach (var (name, handler, request, _) in PublicReads())
+        {
+            var ctx = request();
+            await handler(ctx);
+            await Start(ctx);
+            Assert.Equal(503, ctx.Response.StatusCode);
+            Assert.Equal("curation desk not configured", Body(ctx));
+            Assert.Null(CacheControl(ctx));
+        }
+        Assert.Empty(upstream.Calls);
+    }
+
+    [Fact]
+    public async Task WithoutTheTokenWritesAuthenticateThenAnswer503()
+    {
+        var upstream = Install(token: null);
+
+        foreach (var (name, handler, body) in SignedWrites())
+        {
+            var ok = Post("/private-api/curation-desk/" + name, body);
+            await handler(ok);
+            Assert.Equal(503, ok.Response.StatusCode);
+            Assert.Equal("curation desk not configured", Body(ok));
+
+            // An unauthenticated caller learns nothing about the configuration.
+            var anon = Post("/private-api/curation-desk/" + name, "{}");
+            await handler(anon);
+            Assert.Equal(401, anon.Response.StatusCode);
+            Assert.Equal("Unauthorized", Body(anon));
+        }
+        Assert.Empty(upstream.Calls);
+    }
+
+    [Fact]
+    public async Task InvalidSignedCodesAre401WithTheRealValidator()
+    {
+        var upstream = Install();
+        PrivateApi.DeskValidateCode = PrivateApi.ValidateCode;
+
+        foreach (var (name, handler, _) in SignedWrites())
+        {
+            var empty = Post("/private-api/curation-desk/" + name, "{}");
+            await handler(empty);
+            Assert.Equal(401, empty.Response.StatusCode);
+
+            // The parity probe: decodes to {"not":"valid"}, fails on structure
+            // before any account lookup.
+            var probe = Post("/private-api/curation-desk/" + name, "{\"code\":\"eyJub3QiOiJ2YWxpZCJ9\"}");
+            await handler(probe);
+            Assert.Equal(401, probe.Response.StatusCode);
+            Assert.Equal("Unauthorized", Body(probe));
+        }
+        Assert.Empty(upstream.Calls);
+    }
+
+    [Fact]
+    public async Task ARejectedPayloadIs400AndNeverReachesUpstream()
+    {
+        var upstream = Install();
+
+        var mark = Post("/private-api/curation-desk/mark", "{\"code\":\"as:alice\",\"author\":\"bob\",\"permlink\":\"p\",\"state\":\"deleted\"}");
+        await PrivateApi.CurationDeskMark(mark);
+        Assert.Equal(400, mark.Response.StatusCode);
+        Assert.Equal("invalid state", Body(mark));
+
+        var meta = Post("/private-api/curation-desk/recommend-meta", "{\"code\":\"as:alice\",\"author\":\"bob\",\"permlink\":\"p\",\"trx_id\":\"nope\"}");
+        await PrivateApi.CurationDeskRecommendMeta(meta);
+        Assert.Equal(400, meta.Response.StatusCode);
+        Assert.Equal("invalid trx_id", Body(meta));
+
+        Assert.Empty(upstream.Calls);
+    }
+
+    // ---- the validation memo -------------------------------------------------
+
+    [Fact]
+    public async Task ASuccessfulValidationIsRememberedWithinTheTtlAndForgottenAfter()
+    {
+        var upstream = Install();
+        var validations = 0;
+        PrivateApi.DeskValidateCode = _ => { validations++; return Task.FromResult<string?>("alice"); };
+        PrivateApi.DeskAuthMemoSeconds = 0.2;
+        var code = "memo-" + Guid.NewGuid().ToString("N");
+        var body = "{\"code\":\"" + code + "\",\"author\":\"bob\",\"permlink\":\"p\"}";
+
+        await PrivateApi.CurationDeskMarkClear(Post("/private-api/curation-desk/mark-clear", body));
+        await PrivateApi.CurationDeskMarkClear(Post("/private-api/curation-desk/mark-clear", body));
+        Assert.Equal(1, validations);
+        Assert.Equal(2, upstream.Calls.Count);
+        Assert.All(upstream.Calls, c => Assert.Equal("alice", c.Payload!["username"]!.GetValue<string>()));
+
+        // A different code is a different memo entry.
+        await PrivateApi.CurationDeskMarkClear(Post("/private-api/curation-desk/mark-clear", body.Replace(code, code + "x")));
+        Assert.Equal(2, validations);
+
+        await Task.Delay(350);
+        await PrivateApi.CurationDeskMarkClear(Post("/private-api/curation-desk/mark-clear", body));
+        Assert.Equal(3, validations);
+    }
+
+    [Fact]
+    public async Task AFailedValidationIsNeverRemembered()
+    {
+        var upstream = Install();
+        var validations = 0;
+        string? answer = null;
+        PrivateApi.DeskValidateCode = _ => { validations++; return Task.FromResult(answer); };
+        var code = "fail-" + Guid.NewGuid().ToString("N");
+        var body = "{\"code\":\"" + code + "\",\"author\":\"bob\",\"permlink\":\"p\"}";
+
+        for (var i = 0; i < 3; i++)
+        {
+            var ctx = Post("/private-api/curation-desk/mark-clear", body);
+            await PrivateApi.CurationDeskMarkClear(ctx);
+            Assert.Equal(401, ctx.Response.StatusCode);
+        }
+        Assert.Equal(3, validations);
+        Assert.Empty(upstream.Calls);
+
+        // Once the code validates it is remembered from that point, not before.
+        answer = "alice";
+        await PrivateApi.CurationDeskMarkClear(Post("/private-api/curation-desk/mark-clear", body));
+        await PrivateApi.CurationDeskMarkClear(Post("/private-api/curation-desk/mark-clear", body));
+        Assert.Equal(4, validations);
+        Assert.Equal(2, upstream.Calls.Count);
+    }
+
+    [Fact]
+    public async Task AMemoizedIdentityIsStillTheValidatedOneNotTheBodysUsername()
+    {
+        var upstream = Install();
+        var body = "{\"code\":\"as:alice\",\"username\":\"victim\",\"author\":\"bob\",\"permlink\":\"p\"}";
+        await PrivateApi.CurationDeskMarkClear(Post("/private-api/curation-desk/mark-clear", body));
+        await PrivateApi.CurationDeskMarkClear(Post("/private-api/curation-desk/mark-clear", body));
+        Assert.All(upstream.Calls, c => Assert.Equal("alice", c.Payload!["username"]!.GetValue<string>()));
+    }
+
+    // ---- client address ------------------------------------------------------
+
+    [Fact]
+    public async Task OnlyRecommendMetaForwardsTheProxySetClientAddress()
+    {
+        var upstream = Install();
+
+        foreach (var (name, handler, body) in SignedWrites())
+        {
+            var ctx = Post("/private-api/curation-desk/" + name, body);
+            ctx.Request.Headers["X-Real-IP"] = "198.51.100.7";
+            ctx.Request.Headers["X-Forwarded-For"] = "203.0.113.9, 198.51.100.7";
+            await handler(ctx);
+            var call = Assert.Single(upstream.Calls);
+            Assert.Equal(name == "recommend-meta" ? "198.51.100.7" : null, call.Header("X-Real-IP-V"));
+            upstream.Calls.Clear();
+        }
+
+        // No proxy header: an empty value, never the forwarded-for chain.
+        var bare = Post("/private-api/curation-desk/recommend-meta", "{\"code\":\"as:alice\",\"author\":\"bob\",\"permlink\":\"p\"}");
+        bare.Request.Headers["X-Forwarded-For"] = "203.0.113.9";
+        await PrivateApi.CurationDeskRecommendMeta(bare);
+        Assert.Equal("", Assert.Single(upstream.Calls).Header("X-Real-IP-V"));
+    }
+
+    [Fact]
+    public async Task RecommendMetaAcceptsABodyWithoutATrxId()
+    {
+        var upstream = Install();
+        upstream.Answer = _ => Task.FromResult(JsonResponse(202, "{\"ok\":true}"));
+        var ctx = Post("/private-api/curation-desk/recommend-meta", "{\"code\":\"as:alice\",\"author\":\"bob\",\"permlink\":\"p\"}");
+        await PrivateApi.CurationDeskRecommendMeta(ctx);
+        Assert.Equal(202, ctx.Response.StatusCode);
+        Assert.Equal("{\"ok\":true}", Body(ctx));
+        Assert.Equal("curation/desk/recommendations/meta", Assert.Single(upstream.Calls).Endpoint);
+    }
+
+    // ---- Cache-Control -------------------------------------------------------
+
+    [Fact]
+    public async Task ReadsCarryTheirPolicyOnlyOnA200()
+    {
+        var upstream = Install();
+
+        foreach (var (name, handler, request, policy) in PublicReads())
+        {
+            var ok = request();
+            await handler(ok);
+            await Start(ok);
+            Assert.Equal(200, ok.Response.StatusCode);
+            Assert.Equal(policy, CacheControl(ok));
+            Assert.StartsWith("application/json", ok.Response.ContentType);
+
+            CurationDeskMemo.ResetForTests();
+            upstream.Answer = _ => Task.FromResult(JsonResponse(404, "{\"error\":\"not found\"}"));
+            var missing = request();
+            await handler(missing);
+            await Start(missing);
+            Assert.Equal(404, missing.Response.StatusCode);
+            Assert.Null(CacheControl(missing));
+            Assert.Equal("{\"error\":\"not found\"}", Body(missing));
+
+            upstream.Answer = _ => throw new UpstreamTimeoutException("u", new TimeoutException());
+            CurationDeskMemo.ResetForTests();
+            var timeout = request();
+            await handler(timeout);
+            await Start(timeout);
+            Assert.Equal(504, timeout.Response.StatusCode);
+            Assert.Equal("Upstream Timeout", Body(timeout));
+            Assert.Null(CacheControl(timeout));
+
+            upstream.Answer = _ => Task.FromResult(JsonResponse(200, "{}"));
+            CurationDeskMemo.ResetForTests();
+        }
+    }
+
+    [Fact]
+    public async Task WritesAreNeverCacheable()
+    {
+        Install();
+        foreach (var (name, handler, body) in SignedWrites())
+        {
+            var ctx = Post("/private-api/curation-desk/" + name, body);
+            await handler(ctx);
+            await Start(ctx);
+            Assert.Equal(200, ctx.Response.StatusCode);
+            Assert.Equal("no-store", CacheControl(ctx));
+        }
+    }
+
+    [Fact]
+    public void EachPolicySharedMaxAgeIsTheMemoTtl()
+    {
+        Assert.Equal(30, CachePolicy.SharedMaxAge(CachePolicy.CurationDeskFeed));
+        Assert.Equal(15, CachePolicy.SharedMaxAge(CachePolicy.CurationDeskStatus));
+        Assert.Equal(600, CachePolicy.SharedMaxAge(CachePolicy.CurationDeskRoster));
+        Assert.Equal(30, CachePolicy.SharedMaxAge(CachePolicy.CurationDeskRecommendations));
+        Assert.Equal(15, CachePolicy.SharedMaxAge(CachePolicy.CurationDeskPost));
+    }
+
+    // ---- the byte memo -------------------------------------------------------
+
+    [Fact]
+    public async Task ASecondReadWithinTheTtlIsServedFromTheMemoAsBytes()
+    {
+        var upstream = Install();
+        const string body = "{\"items\":[{\"post_id\":1}],\"feed_version\":\"v1\"}";
+        upstream.Answer = _ => Task.FromResult(JsonResponse(200, body));
+
+        var first = Get("/private-api/curation-desk/feed", "limit=10&sort=queue");
+        await PrivateApi.CurationDeskFeed(first);
+        var second = Get("/private-api/curation-desk/feed", "sort=queue&limit=10&x=1");
+        await PrivateApi.CurationDeskFeed(second);
+
+        Assert.Single(upstream.Calls);
+        Assert.Equal("curation/desk/feed?limit=10&sort=queue", upstream.Calls[0].Endpoint);
+        Assert.Equal(body, Body(first));
+        Assert.Equal(body, Body(second));
+
+        // Stored as the bytes that were served, keyed by the normalized endpoint.
+        Assert.True(CurationDeskMemo.Fresh.TryGet("curation/desk/feed?limit=10&sort=queue", out var stored, out var tag));
+        Assert.IsType<byte[]>(stored);
+        Assert.Equal(body, System.Text.Encoding.UTF8.GetString(stored));
+        Assert.Equal("application/json; charset=utf-8", tag);
+        Assert.False(CurationDeskMemo.Fresh.TryGet("curation/desk/feed", out _));
+    }
+
+    [Fact]
+    public async Task DifferentQuestionsAreDifferentMemoEntries()
+    {
+        var upstream = Install();
+        await PrivateApi.CurationDeskFeed(Get("/private-api/curation-desk/feed", "sort=queue"));
+        await PrivateApi.CurationDeskFeed(Get("/private-api/curation-desk/feed", "sort=unique"));
+        await PrivateApi.CurationDeskFeed(Get("/private-api/curation-desk/feed", "window=full"));
+        Assert.Equal(3, upstream.Calls.Count);
+        Assert.Equal(3, CurationDeskMemo.Fresh.Count);
+    }
+
+    [Fact]
+    public async Task ConcurrentReadsOfOneKeyMakeOneUpstreamCall()
+    {
+        var upstream = Install();
+        var release = new TaskCompletionSource<UpstreamResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+        upstream.Answer = _ => release.Task;
+
+        var requests = Enumerable.Range(0, 8).Select(_ => Get("/private-api/curation-desk/status")).ToArray();
+        var pending = requests.Select(r => PrivateApi.CurationDeskStatus(r)).ToArray();
+
+        // Give every request time to reach the gate before the fill completes.
+        await Task.Delay(100);
+        Assert.Single(upstream.Calls);
+        release.SetResult(JsonResponse(200, "{\"behind_seconds\":3}"));
+        await Task.WhenAll(pending);
+
+        Assert.Single(upstream.Calls);
+        Assert.All(requests, r =>
+        {
+            Assert.Equal(200, r.Response.StatusCode);
+            Assert.Equal("{\"behind_seconds\":3}", Body(r));
+        });
+    }
+
+    [Fact]
+    public async Task AnUpstreamErrorAnswersWithTheLastGoodBody()
+    {
+        var upstream = Install();
+        upstream.Answer = _ => Task.FromResult(JsonResponse(200, "{\"curators\":[{\"username\":\"alice\"}]}"));
+        await PrivateApi.CurationDeskRoster(Get("/private-api/curation-desk/roster"));
+
+        // The fresh entry lapses (simulated), the last-good one is still there.
+        CurationDeskMemo.Fresh = new BytesCache(CurationDeskMemo.BudgetBytes);
+
+        upstream.Answer = _ => throw new UpstreamTimeoutException("u", new TimeoutException());
+        var stale = Get("/private-api/curation-desk/roster");
+        await PrivateApi.CurationDeskRoster(stale);
+        Assert.Equal(200, stale.Response.StatusCode);
+        Assert.Equal("{\"curators\":[{\"username\":\"alice\"}]}", Body(stale));
+
+        upstream.Answer = _ => Task.FromResult(TextResponse(502, "<html>bad gateway</html>"));
+        var down = Get("/private-api/curation-desk/roster");
+        await PrivateApi.CurationDeskRoster(down);
+        Assert.Equal(200, down.Response.StatusCode);
+        Assert.Equal("{\"curators\":[{\"username\":\"alice\"}]}", Body(down));
+
+        // With nothing good to fall back on, the backend's answer passes through.
+        CurationDeskMemo.ResetForTests();
+        var bare = Get("/private-api/curation-desk/roster");
+        await PrivateApi.CurationDeskRoster(bare);
+        Assert.Equal(502, bare.Response.StatusCode);
+        Assert.Equal("<html>bad gateway</html>", Body(bare));
+
+        // Errors are never memoized: the next read tries upstream again.
+        upstream.Answer = _ => Task.FromResult(JsonResponse(200, "{\"curators\":[]}"));
+        var recovered = Get("/private-api/curation-desk/roster");
+        await PrivateApi.CurationDeskRoster(recovered);
+        Assert.Equal(200, recovered.Response.StatusCode);
+        Assert.Equal("{\"curators\":[]}", Body(recovered));
+    }
+
+    [Fact]
+    public async Task ANon200IsPipedThroughAndNotMemoized()
+    {
+        var upstream = Install();
+        upstream.Answer = _ => Task.FromResult(JsonResponse(404, "{\"error\":\"unknown post\"}"));
+        var ctx = Get("/private-api/curation-desk/post/good-karma/nope", "", new[] { ("author", "good-karma"), ("permlink", "nope") });
+        await PrivateApi.CurationDeskPost(ctx);
+        Assert.Equal(404, ctx.Response.StatusCode);
+        Assert.Equal("{\"error\":\"unknown post\"}", Body(ctx));
+        Assert.Equal(0, CurationDeskMemo.Fresh.Count);
+        Assert.Equal(0, CurationDeskMemo.LastGood.Count);
+        Assert.Equal("curation/desk/post/good-karma/nope", Assert.Single(upstream.Calls).Endpoint);
+    }
+
+    [Fact]
+    public async Task AnInvalidPostPathIs400BeforeAnyUpstreamCall()
+    {
+        var upstream = Install();
+        foreach (var (author, permlink) in new[] { ("..", "p"), ("good-karma", "a/b"), ("good-karma", "p?x=1"), ("x", "p") })
+        {
+            var ctx = Get("/private-api/curation-desk/post/x/y", "", new[] { ("author", author), ("permlink", permlink) });
+            await PrivateApi.CurationDeskPost(ctx);
+            await Start(ctx);
+            Assert.Equal(400, ctx.Response.StatusCode);
+            Assert.Equal("Invalid author or permlink", Body(ctx));
+            Assert.Null(CacheControl(ctx));
+        }
+        Assert.Empty(upstream.Calls);
+    }
+}
