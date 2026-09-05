@@ -239,6 +239,9 @@ internal static class CurationDeskTestSupport
         yield return ("post", PrivateApi.CurationDeskPost,
             () => Get("/private-api/curation-desk/post/good-karma/hello-world", "",
                 new[] { ("author", "good-karma"), ("permlink", "hello-world") }), CachePolicy.CurationDeskPost);
+        yield return ("recommender", PrivateApi.CurationDeskRecommender,
+            () => Get("/private-api/curation-desk/recommender/good-karma", "",
+                new[] { ("username", "good-karma") }), CachePolicy.CurationDeskRecommender);
     }
 
     /// <summary>Every signed write, as (handler, a body that passes validation).</summary>

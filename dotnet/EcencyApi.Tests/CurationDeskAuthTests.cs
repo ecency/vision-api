@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using EcencyApi.Handlers;
 using EcencyApi.Infrastructure;
+using Microsoft.AspNetCore.Http;
 using Xunit;
 using static EcencyApi.Tests.CurationDeskTestSupport;
 
@@ -384,6 +385,7 @@ public class CurationDeskAuthTests
         Assert.Equal(600, CachePolicy.SharedMaxAge(CachePolicy.CurationDeskRoster));
         Assert.Equal(30, CachePolicy.SharedMaxAge(CachePolicy.CurationDeskRecommendations));
         Assert.Equal(15, CachePolicy.SharedMaxAge(CachePolicy.CurationDeskPost));
+        Assert.Equal(60, CachePolicy.SharedMaxAge(CachePolicy.CurationDeskRecommender));
     }
 
     // ---- the byte memo -------------------------------------------------------
@@ -729,5 +731,144 @@ public class CurationDeskAuthTests
     private static readonly (string Author, string Permlink)[] MalformedPostPaths =
     {
         ("..", "p"), ("good-karma", "a/b"), ("good-karma", "p?x=1"), ("x", "p"),
+    };
+
+    // ---- the recommender scorecard -------------------------------------------
+
+    private static DefaultHttpContext RecommenderRequest(string username, string query = "") =>
+        Get("/private-api/curation-desk/recommender/" + username, query, new[] { ("username", username) });
+
+    private const string Scorecard =
+        "{\"username\":\"good-karma\",\"window_days\":90,\"recommended\":12,\"curated\":9,"
+        + "\"dismissed\":1,\"withdrawn\":0,\"precision\":0.75,\"trusted\":true,\"computed_at\":\"t\"}";
+
+    [Fact]
+    public async Task AScorecardIsPipedUnderTheTokenAndCachedForAMinute()
+    {
+        var upstream = Install();
+        var clock = UseTestClock();
+        upstream.Answer = _ => Task.FromResult(JsonResponse(200, Scorecard));
+
+        var fill = RecommenderRequest("good-karma");
+        await PrivateApi.CurationDeskRecommender(fill);
+        await Start(fill);
+
+        var call = Assert.Single(upstream.Calls);
+        Assert.Equal("curation/desk/recommenders/good-karma", call.Endpoint);
+        Assert.Equal(HttpMethod.Get, call.Method);
+        Assert.Equal(Token, call.Header(PrivateApi.DeskTokenHeader));
+        Assert.Equal(200, fill.Response.StatusCode);
+        Assert.Equal(Scorecard, Body(fill));
+        Assert.StartsWith("application/json", fill.Response.ContentType);
+        Assert.Equal("public, max-age=0, s-maxage=60", CacheControl(fill));
+        Assert.Equal(CachePolicy.CurationDeskRecommender, CacheControl(fill));
+        Assert.Null(Age(fill));
+
+        // 45 s into the minute the policy promises: the hit is offered only the
+        // rest of that window; its age is not advertised a second time.
+        clock.Advance(TimeSpan.FromSeconds(45));
+        var hit = RecommenderRequest("good-karma");
+        await PrivateApi.CurationDeskRecommender(hit);
+        await Start(hit);
+        Assert.Equal(200, hit.Response.StatusCode);
+        Assert.Equal(Scorecard, Body(hit));
+        Assert.Equal("public, max-age=0, s-maxage=15", CacheControl(hit));
+        Assert.Null(Age(hit));
+        Assert.Single(upstream.Calls);
+    }
+
+    [Fact]
+    public async Task TheScorecardIsKeyedByTheNameAloneAndTakesNoQueryParameters()
+    {
+        var upstream = Install();
+        upstream.Answer = _ => Task.FromResult(JsonResponse(200, Scorecard));
+
+        await PrivateApi.CurationDeskRecommender(RecommenderRequest("good-karma"));
+        await PrivateApi.CurationDeskRecommender(RecommenderRequest("good-karma", "window_days=7&limit=50"));
+
+        // One question, one upstream call and one memo entry: a query string
+        // cannot fork the key or reach the backend.
+        var call = Assert.Single(upstream.Calls);
+        Assert.Equal("curation/desk/recommenders/good-karma", call.Endpoint);
+        Assert.True(CurationDeskMemo.TryGetFresh("curation/desk/recommenders/good-karma", out _, out _, out _));
+        Assert.Equal(1, CurationDeskMemo.Fresh.Count);
+
+        // A different name is a different entry.
+        await PrivateApi.CurationDeskRecommender(RecommenderRequest("user.name"));
+        Assert.Equal(2, upstream.Calls.Count);
+        Assert.Equal("curation/desk/recommenders/user.name", upstream.Calls[1].Endpoint);
+    }
+
+    [Fact]
+    public async Task AnInvalidRecommenderNameIs400BeforeAnyUpstreamCall()
+    {
+        var upstream = Install();
+        foreach (var username in MalformedRecommenderNames)
+        {
+            var ctx = RecommenderRequest(username);
+            await PrivateApi.CurationDeskRecommender(ctx);
+            await Start(ctx);
+            Assert.Equal(400, ctx.Response.StatusCode);
+            Assert.Equal("Invalid username", Body(ctx));
+            Assert.Null(CacheControl(ctx));
+        }
+        Assert.Empty(upstream.Calls);
+    }
+
+    [Fact]
+    public async Task WithoutTheTokenAMalformedRecommenderNameIs503LikeEveryOtherRoute()
+    {
+        var upstream = Install(token: null);
+
+        // The 503 is decided before the route value is read, so a dark desk does
+        // not single this route out by reporting on the name it was given.
+        foreach (var username in MalformedRecommenderNames)
+        {
+            var ctx = RecommenderRequest(username);
+            await PrivateApi.CurationDeskRecommender(ctx);
+            await Start(ctx);
+            Assert.Equal(503, ctx.Response.StatusCode);
+            Assert.Equal("curation desk not configured", Body(ctx));
+            Assert.Null(CacheControl(ctx));
+        }
+
+        // Including a request that carries no route value at all.
+        var bare = Get("/private-api/curation-desk/recommender/good-karma");
+        await PrivateApi.CurationDeskRecommender(bare);
+        await Start(bare);
+        Assert.Equal(503, bare.Response.StatusCode);
+        Assert.Equal("curation desk not configured", Body(bare));
+        Assert.Empty(upstream.Calls);
+    }
+
+    [Fact]
+    public async Task AScorecardGoesThroughTheSameFenceAsEveryOtherPublicBody()
+    {
+        var upstream = Install();
+        upstream.Answer = _ => Task.FromResult(JsonResponse(200,
+            "{\"username\":\"good-karma\",\"precision\":0.75,\"trusted\":true,\"ip_hash\":\"ab\","
+            + "\"key_id\":3,\"note\":\"secret\",\"computed_at\":\"t\"}"));
+
+        var ctx = RecommenderRequest("good-karma");
+        await PrivateApi.CurationDeskRecommender(ctx);
+        await Start(ctx);
+        Assert.Equal(200, ctx.Response.StatusCode);
+        var body = Body(ctx);
+        Assert.Contains("\"precision\":0.75", body);
+        Assert.Contains("\"computed_at\":\"t\"", body);
+        Assert.DoesNotContain("ip_hash", body);
+        Assert.DoesNotContain("key_id", body);
+        Assert.DoesNotContain("note", body);
+
+        // The memo holds the stripped bytes, so a hit cannot leak them either.
+        var hit = RecommenderRequest("good-karma");
+        await PrivateApi.CurationDeskRecommender(hit);
+        Assert.Equal(body, Body(hit));
+        Assert.Single(upstream.Calls);
+    }
+
+    private static readonly string[] MalformedRecommenderNames =
+    {
+        "..", "a%2Fb", "good-karma?x=1", "Good-Karma", new string('a', 17),
     };
 }

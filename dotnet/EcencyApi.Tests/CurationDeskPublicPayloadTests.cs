@@ -142,6 +142,6 @@ public class CurationDeskPublicPayloadTests
             AssertClean(JsonNode.Parse(Body(again)));
         }
 
-        Assert.Equal(5, upstream.Calls.Count);
+        Assert.Equal(PublicReads().Count(), upstream.Calls.Count);
     }
 }

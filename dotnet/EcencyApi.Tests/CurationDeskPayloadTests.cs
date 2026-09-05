@@ -360,4 +360,47 @@ public class CurationDeskPayloadTests
         Assert.NotNull(PrivateApi.CurationDeskPostPath(new string('a', 16), "p"));
         Assert.Null(PrivateApi.CurationDeskPostPath(new string('a', 17), "p"));
     }
+
+    // ---- route 14 path -------------------------------------------------------
+
+    [Fact]
+    public void ARecommenderNameMapsToTheUpstreamPathUnchanged()
+    {
+        Assert.Equal("curation/desk/recommenders/good-karma",
+            PrivateApi.CurationDeskRecommenderPath("good-karma"));
+        Assert.Equal("curation/desk/recommenders/user.name",
+            PrivateApi.CurationDeskRecommenderPath("user.name"));
+        Assert.Equal("curation/desk/recommenders/" + new string('a', 16),
+            PrivateApi.CurationDeskRecommenderPath(new string('a', 16)));
+    }
+
+    [Theory]
+    // Dot segments would resolve upward once the string becomes a Uri.
+    [InlineData("..")]
+    [InlineData(".")]
+    // Route values arrive percent-decoded, so a slash is a slash; and the
+    // still-encoded spelling is not a name character either.
+    [InlineData("a/b")]
+    [InlineData("a%2Fb")]
+    // A question mark or hash would truncate the path.
+    [InlineData("good-karma?x=1")]
+    [InlineData("good-karma#f")]
+    // Outside the Hive name grammar, on either side of the length bound.
+    [InlineData("")]
+    [InlineData("ab")]
+    [InlineData("Good-Karma")]
+    [InlineData("good_karma")]
+    // `$` would match before a trailing newline; this anchors with \A and \z.
+    [InlineData("good-karma\n")]
+    public void ANameOutsideTheGrammarHasNoRecommenderPath(string username)
+    {
+        Assert.Null(PrivateApi.CurationDeskRecommenderPath(username));
+    }
+
+    [Fact]
+    public void TheRecommenderNameLengthBoundIsEnforced()
+    {
+        Assert.NotNull(PrivateApi.CurationDeskRecommenderPath(new string('a', 3)));
+        Assert.Null(PrivateApi.CurationDeskRecommenderPath(new string('a', 17)));
+    }
 }

@@ -256,6 +256,7 @@ CURATION_DESK_ROUTES = [
     "/private-api/curation-desk/roster::get",
     "/private-api/curation-desk/recommendations::get",
     "/private-api/curation-desk/post/x/x::get",
+    "/private-api/curation-desk/recommender/good-karma::get",
 ] + [
     f"/private-api/curation-desk/{route}::{case}"
     for route in ("roster-feed", "tick", "mark", "mark-clear", "marks", "cursor",
@@ -330,7 +331,7 @@ KNOWN_DIVERGENCES = {
         FAVORITE_TAGS_DIVERGENCE,
     "/private-api/favorite-tags-delete::badcode":
         FAVORITE_TAGS_DIVERGENCE,
-    # Curation desk routes, added after the port: five public reads and eight signed
+    # Curation desk routes, added after the port: six public reads and eight signed
     # writes. Same shape as the entries above; one entry per generated case.
     **{case: CURATION_DESK_DIVERGENCE for case in CURATION_DESK_ROUTES},
 }

@@ -11,7 +11,7 @@ namespace EcencyApi.Handlers;
 /// <summary>
 /// Curation desk gateway: /private-api/curation-desk/* -> curation/desk/* upstream.
 ///
-/// Five public reads and eight signed writes. This service does three things
+/// Six public reads and eight signed writes. This service does three things
 /// for the desk that the generic pipe handlers do not:
 ///
 ///  - every upstream call carries a shared secret header, reads included. The
@@ -104,7 +104,7 @@ public static partial class PrivateApi
         // The unconfigured answer comes first, before this route looks at
         // anything the caller sent. A dark desk answers 503 on every route the
         // same way; answering 400 here instead would make this one route report
-        // on its own path grammar while the other four report nothing.
+        // on its own path grammar while the other five report nothing.
         if (DeskToken == null)
         {
             await ctx.SendText(503, DeskNotConfigured);
@@ -120,6 +120,27 @@ public static partial class PrivateApi
             return;
         }
         await ServeDeskRead(ctx, path, CachePolicy.CurationDeskPost);
+    }
+
+    // GET /private-api/curation-desk/recommender/{username}
+    public static async Task CurationDeskRecommender(HttpContext ctx)
+    {
+        // Same order as the post route: while the desk is dark every route
+        // answers 503, before this one looks at the name it was given.
+        if (DeskToken == null)
+        {
+            await ctx.SendText(503, DeskNotConfigured);
+            return;
+        }
+
+        var username = ctx.Request.RouteValues["username"]?.ToString() ?? "";
+        var path = CurationDeskRecommenderPath(username);
+        if (path == null)
+        {
+            await ctx.SendText(400, "Invalid username");
+            return;
+        }
+        await ServeDeskRead(ctx, path, CachePolicy.CurationDeskRecommender);
     }
 
     // \A and \z, not ^ and $: in .NET `$` also matches before a trailing
@@ -149,6 +170,20 @@ public static partial class PrivateApi
         }
         return $"curation/desk/post/{Uri.EscapeDataString(author)}/{Uri.EscapeDataString(permlink)}";
     }
+
+    /// <summary>
+    /// Upstream path for one recommender's public scorecard, or null when the
+    /// value is not a plain Hive name. The name travels in the path, so it goes
+    /// through the same fence as <see cref="CurationDeskPostPath"/>: the name
+    /// grammar first, escaping as a second fence, then the dot-segment check for
+    /// the one case escaping cannot fix. The route takes no query parameters, so
+    /// every spelling of the question about one name is a single memo entry and a
+    /// single shared-cache key.
+    /// </summary>
+    public static string? CurationDeskRecommenderPath(string username) =>
+        username is "." or ".." || !DeskAuthorPattern.IsMatch(username)
+            ? null
+            : $"curation/desk/recommenders/{Uri.EscapeDataString(username)}";
 
     private static IEnumerable<KeyValuePair<string, string>> RawQuery(HttpContext ctx)
     {

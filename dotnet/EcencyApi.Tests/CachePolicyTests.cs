@@ -24,6 +24,7 @@ public class CachePolicyTests
             { "desk-roster", CachePolicy.CurationDeskRoster },
             { "desk-recommendations", CachePolicy.CurationDeskRecommendations },
             { "desk-post", CachePolicy.CurationDeskPost },
+            { "desk-recommender", CachePolicy.CurationDeskRecommender },
         };
 
     public static TheoryData<string, string, int> DeskPolicies() =>
@@ -34,6 +35,7 @@ public class CachePolicyTests
             { "desk-roster", CachePolicy.CurationDeskRoster, 600 },
             { "desk-recommendations", CachePolicy.CurationDeskRecommendations, 30 },
             { "desk-post", CachePolicy.CurationDeskPost, 15 },
+            { "desk-recommender", CachePolicy.CurationDeskRecommender, 60 },
         };
 
     [Theory]
