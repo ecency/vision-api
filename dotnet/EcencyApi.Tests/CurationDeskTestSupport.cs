@@ -256,5 +256,7 @@ internal static class CurationDeskTestSupport
         yield return ("cursor", PrivateApi.CurationDeskCursor, "{" + code + ",\"post_id\":42,\"action\":\"advance\"}");
         yield return ("recommend-meta", PrivateApi.CurationDeskRecommendMeta, "{" + code + ",\"author\":\"bob\",\"permlink\":\"p\",\"ua_class\":\"web\"}");
         yield return ("recommendation-dismiss", PrivateApi.CurationDeskRecommendationDismiss, "{" + code + ",\"author\":\"bob\",\"permlink\":\"p\",\"action\":\"dismiss\"}");
+        yield return ("ingest", PrivateApi.CurationDeskIngest,
+            "{" + code + ",\"v\":1,\"type\":\"flag\",\"id\":\"flag:bob/p:hivewatchers\",\"ts\":\"2026-09-05T10:00:00Z\",\"attempts\":0,\"payload\":{\"author\":\"bob\",\"permlink\":\"p\",\"weight\":-10000}}");
     }
 }
