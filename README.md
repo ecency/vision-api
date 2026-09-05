@@ -48,6 +48,7 @@ docker run -it --rm -p 4000:4000 \
 | `SEARCH_API_ADDR` | hivesearcher api endpoint |
 | `SEARCH_API_SECRET` | hivesearcher api auth token |
 | `STRIPE_INTERNAL_SECRET` | shared secret for the Stripe money endpoints (unset = they fail closed) |
+| `DESK_INTERNAL_TOKEN` | shared secret sent on every curation desk call (`/private-api/curation-desk/*`), public reads included (unset = the desk routes answer 503) |
 | `TURNSTILE_SECRET` | Cloudflare Turnstile secret for account-create captcha |
 | `CAPTCHA_MODE` | `hard` (default) or `off` (operator break-glass) |
 | `BLOCKSTREAM_CLIENT_ID` / `BLOCKSTREAM_CLIENT_SECRET` | optional Blockstream Enterprise esplora auth (BTC fallback) |

@@ -241,6 +241,27 @@ AI_IMAGES_DIVERGENCE = (
     "no behavior the reference ever had is changing."
 )
 
+CURATION_DESK_DIVERGENCE = (
+    "Curation desk gateway route added after the port. The reference build has no such "
+    "route and answers 404 (POST) or the unmatched-GET template page; this one answers "
+    "503 while its shared secret is unconfigured, 401 for a missing or invalid signed "
+    "code, 400 for a rejected path or body, and otherwise proxies. Deterministic and "
+    "additive -- no behavior the reference ever had is changing."
+)
+
+CURATION_DESK_ROUTES = [
+    "/private-api/curation-desk/feed::get",
+    "/private-api/curation-desk/status::get",
+    "/private-api/curation-desk/roster::get",
+    "/private-api/curation-desk/recommendations::get",
+    "/private-api/curation-desk/post/x/x::get",
+] + [
+    f"/private-api/curation-desk/{route}::{case}"
+    for route in ("roster-feed", "tick", "mark", "mark-clear", "marks", "cursor",
+                  "recommend-meta", "recommendation-dismiss")
+    for case in ("min", "pop", "badcode")
+]
+
 # Cases where the C# port intentionally differs from Node (Node bugs the port fixes).
 KNOWN_DIVERGENCES = {
     "/auth-api/hs-token-refresh::min":
@@ -308,6 +329,9 @@ KNOWN_DIVERGENCES = {
         FAVORITE_TAGS_DIVERGENCE,
     "/private-api/favorite-tags-delete::badcode":
         FAVORITE_TAGS_DIVERGENCE,
+    # Curation desk routes, added after the port: five public reads and eight signed
+    # writes. Same shape as the entries above; one entry per generated case.
+    **{case: CURATION_DESK_DIVERGENCE for case in CURATION_DESK_ROUTES},
 }
 
 # Deliberately NOT listed above: /wallet-api/portfolio-v2::pop, whose HP action list
