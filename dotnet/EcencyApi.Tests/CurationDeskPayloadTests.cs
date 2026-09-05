@@ -277,6 +277,8 @@ public class CurationDeskPayloadTests
         // clamps to the bound the same way that value does in a query string.
         Assert.Equal(50, Ok(CurationDeskWrites.RosterFeed, "{\"limit\":1e6}")["limit"]!.GetValue<int>());
         Assert.Equal(50, Ok(CurationDeskWrites.RosterFeed, "{\"limit\":1000000}")["limit"]!.GetValue<int>());
+        Assert.Equal(1, Ok(CurationDeskWrites.RosterFeed, "{\"limit\":-5}")["limit"]!.GetValue<int>());
+        Assert.Equal(new[] { "username" }, Ok(CurationDeskWrites.RosterFeed, "{\"limit\":-1.5}").Select(kv => kv.Key).ToArray());
 
         // A string is read by the query string's rule, so only a plain signed
         // integer is a number there.

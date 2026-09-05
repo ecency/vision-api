@@ -422,7 +422,7 @@ public class CurationDeskAuthTests
         await Task.Delay(100);
         Assert.Single(upstream.Calls);
         firstFill.SetResult(JsonResponse(200, "{\"behind_seconds\":1}"));
-        await firstRequest;
+        await firstRequest.WaitAsync(TimeSpan.FromSeconds(3));
         Assert.Equal("{\"behind_seconds\":1}", Body(first));
 
         // That entry lapses (simulated), so the next reader fills again.
@@ -440,7 +440,7 @@ public class CurationDeskAuthTests
         Assert.False(await late.Semaphore.WaitAsync(TimeSpan.Zero));
 
         secondFill.SetResult(JsonResponse(200, "{\"behind_seconds\":2}"));
-        await secondRequest;
+        await secondRequest.WaitAsync(TimeSpan.FromSeconds(3));
         Assert.Equal("{\"behind_seconds\":2}", Body(second));
 
         // Once admitted it finds the answer memoized, so the key was filled once
