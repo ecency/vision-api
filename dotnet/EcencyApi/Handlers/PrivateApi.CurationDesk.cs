@@ -434,6 +434,14 @@ public static partial class PrivateApi
     public static Task CurationDeskRecommendMeta(HttpContext ctx) =>
         ServeDeskWrite(ctx, CurationDeskWrites.RecommendMeta);
 
+    // POST /private-api/curation-desk/ingest
+    // erobot's observations (post cards, trail votes, curator votes, flags), sent
+    // as the @ecency account with its own signed code: the same write pipeline as
+    // every other desk route, so the backend sees the validated username and
+    // decides whether that account may ingest.
+    public static Task CurationDeskIngest(HttpContext ctx) =>
+        ServeDeskWrite(ctx, CurationDeskWrites.Ingest);
+
     // POST /private-api/curation-desk/recommendation-dismiss
     public static Task CurationDeskRecommendationDismiss(HttpContext ctx) =>
         ServeDeskWrite(ctx, CurationDeskWrites.RecommendationDismiss);
@@ -741,6 +749,10 @@ public static class CurationDeskWrites
     public static readonly IReadOnlySet<string> DismissActions = new HashSet<string> { "dismiss", "restore" };
     public static readonly IReadOnlySet<string> UaClasses = new HashSet<string> { "web", "mobile" };
     public static readonly IReadOnlySet<string> RosterSorts = new HashSet<string> { "queue", "newest", "unique", "random" };
+    /// <summary>The four event types erobot pushes (spec 7.2).</summary>
+    public static readonly IReadOnlySet<string> IngestTypes = new HashSet<string> { "post", "vote", "curator_vote", "flag" };
+    /// <summary>The backend keeps the event id in a varchar(200).</summary>
+    public const int MaxIngestIdLength = 200;
 
     /// <summary>
     /// Views the roster feed takes: the public ones plus `excluded`, which is
@@ -779,6 +791,13 @@ public static class CurationDeskWrites
 
     public static readonly Route RecommendationDismiss = new("curation/desk/recommendations/dismiss",
         new[] { "author", "permlink", "action" });
+
+    /// <summary>
+    /// erobot's event envelope. `attempts` is the sender's retry counter and stays
+    /// behind; `payload` is forwarded as the object it is, the backend range-checks
+    /// every field of it before storing anything.
+    /// </summary>
+    public static readonly Route Ingest = new("curation/desk/ingest", new[] { "v", "type", "id", "ts", "payload" });
 
     /// <summary>
     /// The upstream body: the validated username plus the route's whitelisted
@@ -972,6 +991,30 @@ public static class CurationDeskWrites
         if (ReferenceEquals(route, RecommendationDismiss))
         {
             return RequireAuthorPermlink(body) ?? RequireOneOf(body, "action", DismissActions);
+        }
+        if (ReferenceEquals(route, Ingest))
+        {
+            // The envelope shape the backend accepts (spec 7.2): anything else is a
+            // 4xx there too, so refusing here saves the authenticated round trip.
+            if (body.Field("v") is not JsonValue version || !version.TryGetValue<int>(out var v) || v != 1)
+            {
+                return "unsupported envelope version";
+            }
+            var typeError = RequireOneOf(body, "type", IngestTypes);
+            if (typeError != null) return typeError;
+            if (body.Str("id") is not { Length: > 0 and <= MaxIngestIdLength })
+            {
+                return "id required";
+            }
+            if (body.ContainsKey("ts") && body.Str("ts") == null)
+            {
+                return "invalid ts";
+            }
+            if (body.Field("payload") is not JsonObject)
+            {
+                return "payload required";
+            }
+            return null;
         }
         return null;
     }

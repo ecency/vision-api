@@ -260,7 +260,7 @@ CURATION_DESK_ROUTES = [
 ] + [
     f"/private-api/curation-desk/{route}::{case}"
     for route in ("roster-feed", "tick", "mark", "mark-clear", "marks", "cursor",
-                  "recommend-meta", "recommendation-dismiss")
+                  "recommend-meta", "recommendation-dismiss", "ingest")
     for case in ("min", "pop", "badcode")
 ]
 

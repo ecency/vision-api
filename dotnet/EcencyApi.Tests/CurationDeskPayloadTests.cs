@@ -15,8 +15,12 @@ public class CurationDeskPayloadTests
     {
         CurationDeskWrites.RosterFeed, CurationDeskWrites.Tick, CurationDeskWrites.Mark,
         CurationDeskWrites.MarkClear, CurationDeskWrites.Marks, CurationDeskWrites.Cursor,
-        CurationDeskWrites.RecommendMeta, CurationDeskWrites.RecommendationDismiss,
+        CurationDeskWrites.RecommendMeta, CurationDeskWrites.RecommendationDismiss, CurationDeskWrites.Ingest,
     };
+
+    private const string IngestBody =
+        "\"v\":1,\"type\":\"post\",\"id\":\"post:bob/p\",\"ts\":\"2026-09-05T10:00:00Z\",\"attempts\":3,"
+        + "\"payload\":{\"author\":\"bob\",\"permlink\":\"p\",\"rep\":71,\"flags\":{\"spaminator\":true}}";
 
     private static JsonObject Body(string json) => (JsonObject)JsonNode.Parse(json)!;
 
@@ -48,7 +52,54 @@ public class CurationDeskPayloadTests
             return "{" + forged + "\"post_id\":7,\"action\":\"advance\"}";
         if (ReferenceEquals(route, CurationDeskWrites.RecommendationDismiss))
             return "{" + forged + "\"author\":\"bob\",\"permlink\":\"p\",\"action\":\"restore\"}";
+        if (ReferenceEquals(route, CurationDeskWrites.Ingest))
+            return "{" + forged + IngestBody + "}";
         return "{" + forged + "\"limit\":5}";
+    }
+
+    // ---- ingest envelope -----------------------------------------------------
+
+    [Fact]
+    public void TheIngestEnvelopeIsForwardedWithoutTheSendersRetryCounter()
+    {
+        var payload = Ok(CurationDeskWrites.Ingest, "{" + IngestBody + "}");
+        Assert.Equal("alice", payload["username"]!.GetValue<string>());
+        Assert.Equal(1, payload["v"]!.GetValue<int>());
+        Assert.Equal("post", payload["type"]!.GetValue<string>());
+        Assert.Equal("post:bob/p", payload["id"]!.GetValue<string>());
+        Assert.Equal("2026-09-05T10:00:00Z", payload["ts"]!.GetValue<string>());
+        // The nested object travels as it is: the backend range-checks its fields.
+        Assert.Equal("bob", payload["payload"]!["author"]!.GetValue<string>());
+        Assert.True(payload["payload"]!["flags"]!["spaminator"]!.GetValue<bool>());
+        Assert.False(payload.ContainsKey("attempts"));
+        Assert.False(payload.ContainsKey("code"));
+    }
+
+    [Theory]
+    [InlineData("{\"v\":2,\"type\":\"post\",\"id\":\"post:bob/p\",\"payload\":{}}", "unsupported envelope version")]
+    [InlineData("{\"v\":\"1\",\"type\":\"post\",\"id\":\"post:bob/p\",\"payload\":{}}", "unsupported envelope version")]
+    [InlineData("{\"type\":\"post\",\"id\":\"post:bob/p\",\"payload\":{}}", "unsupported envelope version")]
+    [InlineData("{\"v\":1,\"type\":\"like\",\"id\":\"post:bob/p\",\"payload\":{}}", "invalid type")]
+    [InlineData("{\"v\":1,\"id\":\"post:bob/p\",\"payload\":{}}", "invalid type")]
+    [InlineData("{\"v\":1,\"type\":\"post\",\"payload\":{}}", "id required")]
+    [InlineData("{\"v\":1,\"type\":\"post\",\"id\":\"\",\"payload\":{}}", "id required")]
+    [InlineData("{\"v\":1,\"type\":\"post\",\"id\":7,\"payload\":{}}", "id required")]
+    [InlineData("{\"v\":1,\"type\":\"post\",\"id\":\"post:bob/p\",\"ts\":5,\"payload\":{}}", "invalid ts")]
+    [InlineData("{\"v\":1,\"type\":\"post\",\"id\":\"post:bob/p\"}", "payload required")]
+    [InlineData("{\"v\":1,\"type\":\"post\",\"id\":\"post:bob/p\",\"payload\":\"x\"}", "payload required")]
+    [InlineData("{\"v\":1,\"type\":\"post\",\"id\":\"post:bob/p\",\"payload\":[1]}", "payload required")]
+    public void AnEnvelopeTheBackendWouldRefuseIsRefusedHere(string body, string error)
+    {
+        Assert.Equal(error, Rejected(CurationDeskWrites.Ingest, body));
+    }
+
+    [Fact]
+    public void TheEventIdLengthBoundIsTheBackendsColumn()
+    {
+        string With(int length) =>
+            "{\"v\":1,\"type\":\"vote\",\"id\":\"" + new string('a', length) + "\",\"payload\":{}}";
+        Ok(CurationDeskWrites.Ingest, With(CurationDeskWrites.MaxIngestIdLength));
+        Assert.Equal("id required", Rejected(CurationDeskWrites.Ingest, With(CurationDeskWrites.MaxIngestIdLength + 1)));
     }
 
     [Fact]
