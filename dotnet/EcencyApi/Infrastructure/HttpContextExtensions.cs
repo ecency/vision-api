@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -114,6 +115,33 @@ public static class HttpContextExtensions
             if (value != null)
             {
                 ctx.Response.Headers.CacheControl = value;
+            }
+            return Task.CompletedTask;
+        });
+    }
+
+    /// <summary>
+    /// <see cref="CacheWhenOk(HttpContext, string)"/> for a body this service has
+    /// been holding for <paramref name="ageSeconds"/> before sending it.
+    ///
+    /// The age goes out as an `Age` header so a shared cache that computes
+    /// freshness from it reaches the same expiry as one that only reads
+    /// `s-maxage`; without it a body handed out at the end of its in-process
+    /// lifetime would start a full downstream window of its own. Shortening the
+    /// window is the caller's job (<see cref="CachePolicy.Aged"/>,
+    /// <see cref="CachePolicy.Stale"/>): what is left of it differs between a
+    /// memo hit and a body served because the upstream call failed.
+    /// </summary>
+    public static void CacheWhenOk(this HttpContext ctx, string policy, int ageSeconds)
+    {
+        var age = Math.Max(0, ageSeconds).ToString(CultureInfo.InvariantCulture);
+        ctx.Response.OnStarting(() =>
+        {
+            var value = CachePolicy.ForStatus(ctx.Response.StatusCode, policy);
+            if (value != null)
+            {
+                ctx.Response.Headers.CacheControl = value;
+                ctx.Response.Headers.Age = age;
             }
             return Task.CompletedTask;
         });

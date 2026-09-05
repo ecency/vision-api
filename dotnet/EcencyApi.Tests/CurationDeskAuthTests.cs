@@ -255,6 +255,8 @@ public class CurationDeskAuthTests
             await Start(ok);
             Assert.Equal(200, ok.Response.StatusCode);
             Assert.Equal(policy, CacheControl(ok));
+            // Filled by this request, so the whole window and no age spent yet.
+            Assert.Equal("0", Age(ok));
             Assert.StartsWith("application/json", ok.Response.ContentType);
 
             CurationDeskMemo.ResetForTests();
@@ -264,6 +266,7 @@ public class CurationDeskAuthTests
             await Start(missing);
             Assert.Equal(404, missing.Response.StatusCode);
             Assert.Null(CacheControl(missing));
+            Assert.Null(Age(missing));
             Assert.Equal("{\"error\":\"not found\"}", Body(missing));
 
             upstream.Answer = _ => throw new UpstreamTimeoutException("u", new TimeoutException());
@@ -274,6 +277,7 @@ public class CurationDeskAuthTests
             Assert.Equal(504, timeout.Response.StatusCode);
             Assert.Equal("Upstream Timeout", Body(timeout));
             Assert.Null(CacheControl(timeout));
+            Assert.Null(Age(timeout));
 
             upstream.Answer = _ => Task.FromResult(JsonResponse(200, "{}"));
             CurationDeskMemo.ResetForTests();
@@ -292,6 +296,84 @@ public class CurationDeskAuthTests
             Assert.Equal(200, ctx.Response.StatusCode);
             Assert.Equal("no-store", CacheControl(ctx));
         }
+    }
+
+    [Fact]
+    public async Task AMemoHitAdvertisesOnlyWhatIsLeftOfTheSharedWindow()
+    {
+        var upstream = Install();
+        var clock = UseTestClock();
+        const string body = "{\"curators\":[{\"username\":\"alice\"}]}";
+        upstream.Answer = _ => Task.FromResult(JsonResponse(200, body));
+
+        var fill = Get("/private-api/curation-desk/roster");
+        await PrivateApi.CurationDeskRoster(fill);
+        await Start(fill);
+        Assert.Equal(CachePolicy.CurationDeskRoster, CacheControl(fill));
+        Assert.Equal("0", Age(fill));
+
+        // 590 s into the roster's 600 s window. Sending the whole window again
+        // here would let a shared cache hold this body for another 600 s on top
+        // of the 590 it has already lived in the memo.
+        clock.Advance(TimeSpan.FromSeconds(590));
+        var hit = Get("/private-api/curation-desk/roster");
+        await PrivateApi.CurationDeskRoster(hit);
+        await Start(hit);
+        Assert.Equal(200, hit.Response.StatusCode);
+        Assert.Equal(body, Body(hit));
+        Assert.Equal("public, max-age=0, s-maxage=10", CacheControl(hit));
+        Assert.Equal("590", Age(hit));
+
+        // Both readers were answered from one upstream call.
+        Assert.Single(upstream.Calls);
+    }
+
+    [Fact]
+    public async Task AMemoHitAtTheEndOfItsWindowStaysCacheableForOneSecond()
+    {
+        var upstream = Install();
+        var clock = UseTestClock();
+        upstream.Answer = _ => Task.FromResult(JsonResponse(200, "{\"behind_seconds\":3}"));
+        await PrivateApi.CurationDeskStatus(Get("/private-api/curation-desk/status"));
+
+        // Past the 15 s the status policy promises. The memo entry is about to
+        // lapse and refill, so the floor keeps this answer cacheable rather than
+        // sending s-maxage=0 to every reader in the last moment of a window.
+        clock.Advance(TimeSpan.FromSeconds(20));
+        var hit = Get("/private-api/curation-desk/status");
+        await PrivateApi.CurationDeskStatus(hit);
+        await Start(hit);
+        Assert.Equal("public, max-age=0, s-maxage=1", CacheControl(hit));
+        Assert.Equal("20", Age(hit));
+        Assert.Single(upstream.Calls);
+    }
+
+    [Fact]
+    public async Task TheLastGoodBodyCarriesTheShortWindowAndItsRealAge()
+    {
+        var upstream = Install();
+        var clock = UseTestClock();
+        const string body = "{\"curators\":[{\"username\":\"alice\"}]}";
+        upstream.Answer = _ => Task.FromResult(JsonResponse(200, body));
+        await PrivateApi.CurationDeskRoster(Get("/private-api/curation-desk/roster"));
+
+        // The fresh entry lapses (simulated) and the backend stops answering, so
+        // the next read falls back to the last good body, now minutes old.
+        CurationDeskMemo.Fresh = new BytesCache(CurationDeskMemo.BudgetBytes);
+        clock.Advance(TimeSpan.FromSeconds(120));
+        upstream.Answer = _ => throw new UpstreamTimeoutException("u", new TimeoutException());
+
+        var stale = Get("/private-api/curation-desk/roster");
+        await PrivateApi.CurationDeskRoster(stale);
+        await Start(stale);
+        Assert.Equal(200, stale.Response.StatusCode);
+        Assert.Equal(body, Body(stale));
+
+        // Never the route's own window: a backend that recovers has to reach
+        // readers within a poll or two, not ten minutes later.
+        Assert.Equal("public, max-age=0, s-maxage=5", CacheControl(stale));
+        Assert.Equal(CachePolicy.Stale(CachePolicy.CurationDeskRoster), CacheControl(stale));
+        Assert.Equal("120", Age(stale));
     }
 
     [Fact]
@@ -324,10 +406,12 @@ public class CurationDeskAuthTests
         Assert.Equal(body, Body(second));
 
         // Stored as the bytes that were served, keyed by the normalized endpoint.
-        Assert.True(CurationDeskMemo.Fresh.TryGet("curation/desk/feed?limit=10&sort=queue", out var stored, out var tag));
+        Assert.True(CurationDeskMemo.TryGetFresh("curation/desk/feed?limit=10&sort=queue",
+            out var stored, out var storedType, out var storedAge));
         Assert.IsType<byte[]>(stored);
         Assert.Equal(body, System.Text.Encoding.UTF8.GetString(stored));
-        Assert.Equal("application/json; charset=utf-8", tag);
+        Assert.Equal("application/json; charset=utf-8", storedType);
+        Assert.Equal(0, storedAge);
         Assert.False(CurationDeskMemo.Fresh.TryGet("curation/desk/feed", out _));
     }
 
@@ -446,7 +530,7 @@ public class CurationDeskAuthTests
         // Once admitted it finds the answer memoized, so the key was filled once
         // per reader that needed it and never twice at a time.
         Assert.True(await late.Semaphore.WaitAsync(TimeSpan.FromSeconds(3)));
-        Assert.True(CurationDeskMemo.TryGetFresh(key, out var memoized, out _));
+        Assert.True(CurationDeskMemo.TryGetFresh(key, out var memoized, out _, out _));
         Assert.Equal("{\"behind_seconds\":2}", System.Text.Encoding.UTF8.GetString(memoized));
         late.Semaphore.Release();
         CurationDeskMemo.ReleaseGate(key, late);
@@ -532,7 +616,9 @@ public class CurationDeskAuthTests
         Assert.Equal(200, stale.Response.StatusCode);
         Assert.Equal("{\"behind_seconds\":3}", Body(stale));
         Assert.StartsWith("application/json", stale.Response.ContentType);
-        Assert.Equal(CachePolicy.CurationDeskStatus, CacheControl(stale));
+
+        // A last-good body, so the short window rather than the route's own.
+        Assert.Equal(CachePolicy.Stale(CachePolicy.CurationDeskStatus), CacheControl(stale));
     }
 
     [Fact]

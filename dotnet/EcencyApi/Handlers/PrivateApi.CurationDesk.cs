@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -22,7 +23,9 @@ namespace EcencyApi.Handlers;
 ///    every spelling of the same question collapses onto one memo entry and one
 ///    shared-cache key, and the answer is memoized as bytes for exactly the
 ///    s-maxage the response promises (single-flight per key, last-good on an
-///    upstream error);
+///    upstream error). A body served from that memo says how old it is and
+///    offers shared caches only the rest of its window, so the two layers do
+///    not each hold it for a full lifetime in series;
 ///  - writes resolve the caller from the signed code (memoized briefly, see
 ///    <see cref="RequireAuthedUsernameCached"/>) and forward only whitelisted
 ///    body fields under that username; a client-supplied username or code never
@@ -182,9 +185,9 @@ public static partial class PrivateApi
             return;
         }
 
-        if (CurationDeskMemo.TryGetFresh(endpoint, out var hit, out var hitType))
+        if (CurationDeskMemo.TryGetFresh(endpoint, out var hit, out var hitType, out var hitAge))
         {
-            await SendPublicJson(ctx, policy, hitType, hit);
+            await SendPublicJson(ctx, policy, hitType, hit, hitAge);
             return;
         }
 
@@ -192,6 +195,8 @@ public static partial class PrivateApi
         // answer with, or the upstream response to pass through.
         byte[]? bytes = null;
         string? bytesType = null;
+        // How long this service has held those bytes; a fill made here is new.
+        var bytesAge = 0;
         var errorStatus = 0;
         string? errorText = null;
         UpstreamResponse? passthrough = null;
@@ -213,10 +218,11 @@ public static partial class PrivateApi
                 gateTimedOut = true;
             }
             // The fill that held the gate may have landed while this one queued.
-            else if (CurationDeskMemo.TryGetFresh(endpoint, out var fresh, out var freshType))
+            else if (CurationDeskMemo.TryGetFresh(endpoint, out var fresh, out var freshType, out var freshAge))
             {
                 bytes = fresh;
                 bytesType = freshType;
+                bytesAge = freshAge;
             }
             else
             {
@@ -263,7 +269,7 @@ public static partial class PrivateApi
 
         if (bytes != null)
         {
-            await SendPublicJson(ctx, policy, bytesType!, bytes);
+            await SendPublicJson(ctx, policy, bytesType!, bytes, bytesAge);
             return;
         }
 
@@ -280,9 +286,9 @@ public static partial class PrivateApi
         // answering the question this route asks, so a body it did answer with
         // is better than passing that on, and neither is worth memoizing.
         if ((response.Status >= 500 || response.Status == 200)
-            && CurationDeskMemo.TryGetLastGood(endpoint, out var stale, out var staleType))
+            && CurationDeskMemo.TryGetLastGood(endpoint, out var stale, out var staleType, out var staleAge))
         {
-            await SendPublicJson(ctx, policy, staleType, stale);
+            await SendStaleJson(ctx, policy, staleType, stale, staleAge);
             return;
         }
 
@@ -298,23 +304,39 @@ public static partial class PrivateApi
     private const string JsonContentType = "application/json; charset=utf-8";
 
     /// <summary>
-    /// Send a JSON body this service holds (a memo hit, a fresh fill or a
-    /// last-good fallback) with the route's cache policy. Only these bodies are
-    /// publicly cacheable: an upstream passthrough carries whatever the backend
-    /// answered, which may be an error page or a body meant for one caller, so
-    /// it never gets a Cache-Control of ours.
+    /// Send a JSON body this service holds (a fresh fill, or a memo hit that is
+    /// already <paramref name="ageSeconds"/> old) with the route's cache policy.
+    /// Only these bodies are publicly cacheable: an upstream passthrough carries
+    /// whatever the backend answered, which may be an error page or a body meant
+    /// for one caller, so it never gets a Cache-Control of ours.
+    ///
+    /// A hit goes out with the rest of its window rather than a new one, so the
+    /// memo and the caches downstream expire the same body at the same moment
+    /// instead of holding it for one lifetime each in series.
     /// </summary>
-    private static async Task SendPublicJson(HttpContext ctx, string policy, string contentType, byte[] bytes)
+    private static async Task SendPublicJson(HttpContext ctx, string policy, string contentType, byte[] bytes, int ageSeconds)
     {
-        ctx.CacheWhenOk(policy);
+        ctx.CacheWhenOk(CachePolicy.Aged(policy, ageSeconds), ageSeconds);
+        await WriteBytes(ctx, 200, contentType, bytes);
+    }
+
+    /// <summary>
+    /// Send a last-good body: a real answer from the backend, but one kept
+    /// because the call that should have replaced it failed. It carries a short
+    /// window instead of the route's own, so an upstream that comes back is
+    /// picked up within a poll or two rather than at the end of a full one.
+    /// </summary>
+    private static async Task SendStaleJson(HttpContext ctx, string policy, string contentType, byte[] bytes, int ageSeconds)
+    {
+        ctx.CacheWhenOk(CachePolicy.Stale(policy), ageSeconds);
         await WriteBytes(ctx, 200, contentType, bytes);
     }
 
     private static async Task ServeLastGoodOr(HttpContext ctx, string endpoint, string policy, int status, string text)
     {
-        if (CurationDeskMemo.TryGetLastGood(endpoint, out var stale, out var staleType))
+        if (CurationDeskMemo.TryGetLastGood(endpoint, out var stale, out var staleType, out var staleAge))
         {
-            await SendPublicJson(ctx, policy, staleType, stale);
+            await SendStaleJson(ctx, policy, staleType, stale, staleAge);
             return;
         }
         await ctx.SendText(status, text);
@@ -1020,6 +1042,15 @@ public static class CurationDeskMemo
     internal static BytesCache Fresh = new(BudgetBytes);
     internal static BytesCache LastGood = new(BudgetBytes);
 
+    /// <summary>Wall clock in milliseconds behind the fill times below.</summary>
+    internal static readonly Func<long> SystemClock = () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+    /// <summary>
+    /// The clock the fill times are read from. Replaceable so a test can age an
+    /// entry rather than wait for it; production never moves it.
+    /// </summary>
+    internal static Func<long> NowMs = SystemClock;
+
     /// <summary>
     /// One fill of one key at a time. A reader takes the key's gate, waits on
     /// its semaphore, fills and hands the gate back.
@@ -1043,24 +1074,38 @@ public static class CurationDeskMemo
     private static readonly Dictionary<string, Gate> Gates = new(StringComparer.Ordinal);
     private static readonly object GateLock = new();
 
-    public static bool TryGetFresh(string key, out byte[] bytes, out string contentType)
-    {
-        var hit = Fresh.TryGet(key, out bytes, out var tag);
-        contentType = tag ?? "application/json; charset=utf-8";
-        return hit;
-    }
+    /// <summary>
+    /// A stored entry carries when it was filled as well as what it is, so a hit
+    /// can say how much of its shared window is left. Both travel in the one tag
+    /// the byte cache keeps beside the bytes, so they are evicted together and
+    /// no side table can outlive or contradict an entry.
+    /// </summary>
+    private const char TagSeparator = '|';
 
-    public static bool TryGetLastGood(string key, out byte[] bytes, out string contentType)
-    {
-        var hit = LastGood.TryGet(key, out bytes, out var tag);
-        contentType = tag ?? "application/json; charset=utf-8";
-        return hit;
-    }
+    private const string DefaultContentType = "application/json; charset=utf-8";
+
+    public static bool TryGetFresh(string key, out byte[] bytes, out string contentType, out int ageSeconds) =>
+        Read(Fresh, key, out bytes, out contentType, out ageSeconds);
+
+    public static bool TryGetLastGood(string key, out byte[] bytes, out string contentType, out int ageSeconds) =>
+        Read(LastGood, key, out bytes, out contentType, out ageSeconds);
 
     public static void Store(string key, byte[] bytes, string contentType, int ttlSeconds)
     {
-        Fresh.Set(key, bytes, ttlSeconds * 1000, contentType);
-        LastGood.Set(key, bytes, LastGoodTtlMs, contentType);
+        var tag = NowMs().ToString(CultureInfo.InvariantCulture) + TagSeparator + contentType;
+        Fresh.Set(key, bytes, ttlSeconds * 1000, tag);
+        LastGood.Set(key, bytes, LastGoodTtlMs, tag);
+    }
+
+    private static bool Read(BytesCache cache, string key, out byte[] bytes, out string contentType, out int ageSeconds)
+    {
+        var hit = cache.TryGet(key, out bytes, out var tag);
+        var split = tag?.IndexOf(TagSeparator) ?? -1;
+        contentType = split >= 0 ? tag![(split + 1)..] : tag ?? DefaultContentType;
+        ageSeconds = split > 0 && long.TryParse(tag.AsSpan(0, split), NumberStyles.None, CultureInfo.InvariantCulture, out var filledAtMs)
+            ? (int)Math.Clamp((NowMs() - filledAtMs) / 1000, 0, int.MaxValue)
+            : 0;
+        return hit;
     }
 
     /// <summary>
@@ -1113,6 +1158,7 @@ public static class CurationDeskMemo
     {
         Fresh = new BytesCache(BudgetBytes);
         LastGood = new BytesCache(BudgetBytes);
+        NowMs = SystemClock;
         lock (GateLock)
         {
             Gates.Clear();

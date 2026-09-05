@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace EcencyApi.Infrastructure;
 
 /// <summary>
@@ -41,6 +43,9 @@ public static class CachePolicy
     /// poll while `s-maxage` lets shared caches absorb the polling; the in-process
     /// memo of each route uses the same s-maxage as its TTL (see
     /// <see cref="SharedMaxAge"/>), so the two layers never disagree on freshness.
+    /// A body served from that memo goes out through <see cref="Aged"/>, which
+    /// hands the shared cache only what is left of the window rather than a fresh
+    /// one, and a last-good body through <see cref="Stale"/>.
     /// The feed and the recommendations list move with every new post; status is
     /// the poll target and stays short; the roster changes when a curator is added
     /// or promoted, so it can stay put for minutes; a single post's recommenders
@@ -72,6 +77,59 @@ public static class CachePolicy
             }
         }
         throw new ArgumentException("policy carries no max-age", nameof(policy));
+    }
+
+    /// <summary>
+    /// Seconds a shared cache may keep a body that was served after the upstream
+    /// failed. It is still an answer the backend gave, so it stays publicly
+    /// cacheable rather than being refetched by every reader at once, but a
+    /// recovered backend has to reach readers within a poll or two rather than at
+    /// the end of a full window.
+    /// </summary>
+    public const int StaleSharedMaxAge = 5;
+
+    /// <summary>
+    /// The same policy with its shared window reduced to what is left of it after
+    /// <paramref name="ageSeconds"/>.
+    ///
+    /// A memoized body is served for the rest of its TTL, not for a fresh one:
+    /// without this a roster read from the memo a second before it lapses would
+    /// license a shared cache to hold that body for another whole window, so the
+    /// two layers together could serve one answer for nearly twice its TTL. The
+    /// floor of one second keeps the response cacheable at all, since the memo is
+    /// about to refill anyway.
+    /// </summary>
+    public static string Aged(string policy, int ageSeconds) =>
+        ageSeconds <= 0 ? policy : WithSharedMaxAge(policy, Math.Max(1, SharedMaxAge(policy) - ageSeconds));
+
+    /// <summary>
+    /// The same policy cut down to <see cref="StaleSharedMaxAge"/>, for a body
+    /// served because the upstream call failed. Never longer than the policy
+    /// itself, so a route with an even shorter window keeps its own.
+    /// </summary>
+    public static string Stale(string policy) =>
+        WithSharedMaxAge(policy, Math.Min(StaleSharedMaxAge, SharedMaxAge(policy)));
+
+    /// <summary>
+    /// Rewrite the `s-maxage` of a policy, leaving every other directive alone.
+    /// A policy that carries none gains one: its shared window was its `max-age`
+    /// (see <see cref="SharedMaxAge"/>), and this caps that without touching what
+    /// browsers were told.
+    /// </summary>
+    private static string WithSharedMaxAge(string policy, int seconds)
+    {
+        var value = "s-maxage=" + seconds.ToString(CultureInfo.InvariantCulture);
+        var tokens = policy.Split(',', StringSplitOptions.TrimEntries);
+        var replaced = false;
+        for (var i = 0; i < tokens.Length; i++)
+        {
+            if (tokens[i].StartsWith("s-maxage=", StringComparison.Ordinal))
+            {
+                tokens[i] = value;
+                replaced = true;
+            }
+        }
+        return string.Join(", ", replaced ? tokens : tokens.Append(value));
     }
 
     /// <summary>

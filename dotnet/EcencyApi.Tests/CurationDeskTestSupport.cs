@@ -198,6 +198,33 @@ internal static class CurationDeskTestSupport
     public static string? CacheControl(HttpContext ctx) =>
         ctx.Response.Headers.TryGetValue("Cache-Control", out var v) ? v.ToString() : null;
 
+    public static string? Age(HttpContext ctx) =>
+        ctx.Response.Headers.TryGetValue("Age", out var v) ? v.ToString() : null;
+
+    /// <summary>
+    /// A clock the test moves by hand. The memo reads its fill times from this,
+    /// so a test can put an entry near the end of its window without sleeping
+    /// through it (and without a wall-clock bound that turns into a flaky test
+    /// on a loaded machine). Reset by <see cref="Install"/>.
+    /// </summary>
+    public sealed class TestClock
+    {
+        // An arbitrary fixed epoch: only differences matter.
+        private long _ms = 1_700_000_000_000;
+
+        public long NowMs() => _ms;
+
+        public void Advance(TimeSpan by) => _ms += (long)by.TotalMilliseconds;
+    }
+
+    /// <summary>Hand the memo a movable clock and return it.</summary>
+    public static TestClock UseTestClock()
+    {
+        var clock = new TestClock();
+        CurationDeskMemo.NowMs = clock.NowMs;
+        return clock;
+    }
+
     /// <summary>Every public read, as (handler, request factory, policy).</summary>
     public static IEnumerable<(string Name, Func<HttpContext, Task> Handler, Func<DefaultHttpContext> Request, string Policy)> PublicReads()
     {
