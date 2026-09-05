@@ -244,8 +244,9 @@ AI_IMAGES_DIVERGENCE = (
 CURATION_DESK_DIVERGENCE = (
     "Curation desk gateway route added after the port. The reference build has no such "
     "route and answers 404 (POST) or the unmatched-GET template page; this one answers "
-    "503 while its shared secret is unconfigured, 401 for a missing or invalid signed "
-    "code, 400 for a rejected path or body, and otherwise proxies. Deterministic and "
+    "503 while its shared secret is unconfigured (before it validates anything), 401 "
+    "for a missing or invalid signed code, 400 for a rejected path or body, and "
+    "otherwise proxies. Deterministic and "
     "additive -- no behavior the reference ever had is changing."
 )
 

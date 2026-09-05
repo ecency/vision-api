@@ -70,6 +70,11 @@ public static partial class PrivateApi
 
     // ---- public reads --------------------------------------------------------
 
+    // The one-line handlers here and under "signed writes" return the delegate's
+    // Task instead of awaiting it: they do nothing after the call, so an async
+    // state machine per request would be pure overhead and Routes.cs only needs
+    // a Task back. Handlers that do work of their own stay `async`.
+
     // GET /private-api/curation-desk/feed
     public static Task CurationDeskFeed(HttpContext ctx) =>
         ServeDeskRead(ctx,
@@ -105,8 +110,11 @@ public static partial class PrivateApi
         await ServeDeskRead(ctx, path, CachePolicy.CurationDeskPost);
     }
 
-    private static readonly Regex DeskAuthorPattern = new("^[a-z0-9.-]{3,16}$", RegexOptions.Compiled);
-    private static readonly Regex DeskPermlinkPattern = new("^[a-z0-9-]{1,255}$", RegexOptions.Compiled);
+    // \A and \z, not ^ and $: in .NET `$` also matches before a trailing
+    // newline, so "good-karma\n" would pass a `$`-anchored name check and
+    // travel into the upstream path.
+    private static readonly Regex DeskAuthorPattern = new(@"\A[a-z0-9.-]{3,16}\z", RegexOptions.Compiled);
+    private static readonly Regex DeskPermlinkPattern = new(@"\A[a-z0-9-]{1,255}\z", RegexOptions.Compiled);
 
     /// <summary>
     /// Upstream path for a single post, or null when either value is not a plain
@@ -146,7 +154,15 @@ public static partial class PrivateApi
 
     /// <summary>
     /// Serve one public desk read: memo hit, or a single-flight fill of the
-    /// normalized endpoint. Cache-Control is attached for a 200 only.
+    /// normalized endpoint.
+    ///
+    /// Nothing is written to the client while the per-key gate is held. The gate
+    /// exists to collapse concurrent fills of one key onto one upstream call, so
+    /// a fill only computes the public bytes and stores them; what to send is
+    /// kept in locals, the gate is released in the finally, and the response is
+    /// written after it. Writing under the gate would make every reader of a key
+    /// wait for the slowest reader's socket to drain rather than for the upstream
+    /// call, which is the one thing the gate is meant to share.
     /// </summary>
     private static async Task ServeDeskRead(HttpContext ctx, string endpoint, string policy)
     {
@@ -157,86 +173,125 @@ public static partial class PrivateApi
             return;
         }
 
-        ctx.CacheWhenOk(policy);
-
         if (CurationDeskMemo.TryGetFresh(endpoint, out var hit, out var hitType))
         {
-            await WriteBytes(ctx, 200, hitType, hit);
+            await SendPublicJson(ctx, policy, hitType, hit);
             return;
         }
+
+        // Filled under the gate, sent after it: bytes to serve, an error to
+        // answer with, or the upstream response to pass through.
+        byte[]? bytes = null;
+        string? bytesType = null;
+        var errorStatus = 0;
+        string? errorText = null;
+        UpstreamResponse? passthrough = null;
 
         var gate = CurationDeskMemo.GateFor(endpoint);
         if (!await gate.WaitAsync(CurationDeskMemo.FillWait))
         {
             // Someone else's fill is taking longer than a whole upstream timeout.
             // Do not stack another one behind it; answer from what is known.
-            await ServeLastGoodOr(ctx, endpoint, 504, "Upstream Timeout");
+            await ServeLastGoodOr(ctx, endpoint, policy, 504, "Upstream Timeout");
             return;
         }
 
         try
         {
             // The fill that held the gate may have landed while this one queued.
-            if (CurationDeskMemo.TryGetFresh(endpoint, out hit, out hitType))
+            if (CurationDeskMemo.TryGetFresh(endpoint, out var fresh, out var freshType))
             {
-                await WriteBytes(ctx, 200, hitType, hit);
-                return;
+                bytes = fresh;
+                bytesType = freshType;
             }
-
-            UpstreamResponse r;
-            try
+            else
             {
-                r = await DeskUpstream(endpoint, HttpMethod.Get, DeskHeaders(token), null);
-            }
-            catch (UpstreamTimeoutException)
-            {
-                await ServeLastGoodOr(ctx, endpoint, 504, "Upstream Timeout");
-                return;
-            }
-            catch (Exception)
-            {
-                await ServeLastGoodOr(ctx, endpoint, 500, "Server Error");
-                return;
-            }
-
-            if (r.Status == 200 && r.Json is JsonObject or JsonArray)
-            {
-                var bytes = CurationDeskPublicPayload.ToPublicBytes(r);
-                CurationDeskMemo.Store(endpoint, bytes, JsonContentType, CachePolicy.SharedMaxAge(policy));
-                await WriteBytes(ctx, 200, JsonContentType, bytes);
-                return;
-            }
-
-            if (r.Status >= 500)
-            {
-                // The backend is unwell; a body it last answered with is better
-                // than its error page, and the error is not worth memoizing.
-                if (CurationDeskMemo.TryGetLastGood(endpoint, out var stale, out var staleType))
+                UpstreamResponse? r = null;
+                try
                 {
-                    await WriteBytes(ctx, 200, staleType, stale);
-                    return;
+                    r = await DeskUpstream(endpoint, HttpMethod.Get, DeskHeaders(token), null);
+                }
+                catch (UpstreamTimeoutException)
+                {
+                    (errorStatus, errorText) = (504, "Upstream Timeout");
+                }
+                catch (Exception)
+                {
+                    (errorStatus, errorText) = (500, "Server Error");
+                }
+
+                if (r != null && r.Status == 200 && r.Json is JsonObject or JsonArray)
+                {
+                    bytes = CurationDeskPublicPayload.ToPublicBytes(r);
+                    bytesType = JsonContentType;
+                    CurationDeskMemo.Store(endpoint, bytes, JsonContentType, CachePolicy.SharedMaxAge(policy));
+                }
+                else
+                {
+                    passthrough = r;
                 }
             }
-
-            // 4xx (an unknown post, a rejected token), a 200 that is not JSON, or
-            // a 5xx with nothing to fall back on: pass through unmemoized, the
-            // way Pipe would, so the client sees what the backend said.
-            await Upstream.SendLikeExpress(ctx, r.Status, r.Json, r.RawText);
         }
         finally
         {
             gate.Release();
             CurationDeskMemo.ReleaseGate(endpoint, gate);
         }
+
+        if (bytes != null)
+        {
+            await SendPublicJson(ctx, policy, bytesType!, bytes);
+            return;
+        }
+
+        if (errorText != null)
+        {
+            await ServeLastGoodOr(ctx, endpoint, policy, errorStatus, errorText);
+            return;
+        }
+
+        var response = passthrough!;
+
+        // A 5xx, or a 200 whose body is not a JSON object or array (an error
+        // page, a redirect body, a bare string): either way the backend is not
+        // answering the question this route asks, so a body it did answer with
+        // is better than passing that on, and neither is worth memoizing.
+        if ((response.Status >= 500 || response.Status == 200)
+            && CurationDeskMemo.TryGetLastGood(endpoint, out var stale, out var staleType))
+        {
+            await SendPublicJson(ctx, policy, staleType, stale);
+            return;
+        }
+
+        // 4xx (an unknown post, a rejected token), or nothing to fall back on:
+        // pass through the way Pipe would, unmemoized and with no Cache-Control
+        // of ours, so the client sees what the backend said. An error body is
+        // still a public body this service emits, so it goes through the same
+        // fence as a served one.
+        CurationDeskPublicPayload.Strip(response.Json);
+        await Upstream.SendLikeExpress(ctx, response.Status, response.Json, response.RawText);
     }
 
     private const string JsonContentType = "application/json; charset=utf-8";
 
-    private static async Task ServeLastGoodOr(HttpContext ctx, string endpoint, int status, string text)
+    /// <summary>
+    /// Send a JSON body this service holds (a memo hit, a fresh fill or a
+    /// last-good fallback) with the route's cache policy. Only these bodies are
+    /// publicly cacheable: an upstream passthrough carries whatever the backend
+    /// answered, which may be an error page or a body meant for one caller, so
+    /// it never gets a Cache-Control of ours.
+    /// </summary>
+    private static async Task SendPublicJson(HttpContext ctx, string policy, string contentType, byte[] bytes)
+    {
+        ctx.CacheWhenOk(policy);
+        await WriteBytes(ctx, 200, contentType, bytes);
+    }
+
+    private static async Task ServeLastGoodOr(HttpContext ctx, string endpoint, string policy, int status, string text)
     {
         if (CurationDeskMemo.TryGetLastGood(endpoint, out var stale, out var staleType))
         {
-            await WriteBytes(ctx, 200, staleType, stale);
+            await SendPublicJson(ctx, policy, staleType, stale);
             return;
         }
         await ctx.SendText(status, text);
@@ -299,17 +354,21 @@ public static partial class PrivateApi
     /// </summary>
     private static async Task ServeDeskWrite(HttpContext ctx, CurationDeskWrites.Route route)
     {
-        var body = await ctx.ReadBody();
-        var username = await RequireAuthedUsernameCached(ctx, body);
-        if (username == null)
-        {
-            return;
-        }
-
+        // Before anything else: a dark desk answers 503 whoever is asking, so
+        // validating first would spend one chain lookup per request on a route
+        // that cannot do any work. The answer reveals nothing a reader of the
+        // public routes cannot see, which answer 503 unauthenticated too.
         var token = DeskToken;
         if (token == null)
         {
             await ctx.SendText(503, DeskNotConfigured);
+            return;
+        }
+
+        var body = await ctx.ReadBody();
+        var username = await RequireAuthedUsernameCached(ctx, body);
+        if (username == null)
+        {
             return;
         }
 
@@ -380,8 +439,15 @@ public static class CurationDeskQuery
     public const int MaxLimit = 50;
     public const int MaxWords = 50000;
 
-    private static readonly Regex CursorPattern = new("^[A-Za-z0-9_.:-]{1,80}$", RegexOptions.Compiled);
-    private static readonly Regex CommunityPattern = new(@"^hive-\d{5,6}$", RegexOptions.Compiled);
+    // Anchored with \A and \z (a `$` would also match before a trailing
+    // newline) and written with explicit digit classes: .NET's `\d` matches
+    // every Unicode decimal digit, so `hive-\d{5,6}` accepts Arabic-Indic or
+    // Devanagari digits that name no community here.
+    private static readonly Regex CursorPattern = new(@"\A[A-Za-z0-9_.:-]{1,80}\z", RegexOptions.Compiled);
+    private static readonly Regex CommunityPattern = new(@"\Ahive-[0-9]{5,6}\z", RegexOptions.Compiled);
+
+    /// <summary>Random-order seed: one per browser session, roster feed only.</summary>
+    private static readonly Regex SeedPattern = new(@"\A[a-z0-9]{8,16}\z", RegexOptions.Compiled);
 
     public static readonly IReadOnlySet<string> FeedSorts = new HashSet<string> { "queue", "newest", "unique" };
     public static readonly IReadOnlySet<string> RecommendationSorts = new HashSet<string> { "unique", "newest" };
@@ -529,17 +595,42 @@ public static class CurationDeskQuery
         return list;
     }
 
-    /// <summary>Integer within [min, max], clamped; null when absent or not an integer.</summary>
-    private static int? ClampInt(Dictionary<string, string> q, string key, int min, int max)
+    /// <summary>Integer within [min, max], clamped; null when absent or not a number.</summary>
+    private static int? ClampInt(Dictionary<string, string> q, string key, int min, int max) =>
+        q.TryGetValue(key, out var raw) ? ClampValue(raw, min, max) : null;
+
+    /// <summary>
+    /// <see cref="ClampInt"/> for a value that did not come from a query string:
+    /// the roster feed reads the same names out of a JSON body and must clamp
+    /// them the same way, or the two feeds answer different questions.
+    ///
+    /// Parsed as a double rather than an int so that a value outside the int
+    /// range still clamps into the range: `limit=99999999999` asks for as many
+    /// rows as there are, and 50 is the right answer to that, while dropping it
+    /// would silently serve the default page size instead. Only text that is not
+    /// a plain signed integer is refused, so `1e6`, `12.5` and `abc` are dropped
+    /// and fall back to the default the same way they did before.
+    /// </summary>
+    public static int? ClampValue(string? raw, int min, int max)
     {
-        if (!q.TryGetValue(key, out var raw)) return null;
-        if (!int.TryParse(raw, System.Globalization.NumberStyles.AllowLeadingSign,
-                System.Globalization.CultureInfo.InvariantCulture, out var value))
+        if (raw == null
+            || !double.TryParse(raw, System.Globalization.NumberStyles.AllowLeadingSign,
+                System.Globalization.CultureInfo.InvariantCulture, out var value)
+            || double.IsNaN(value))
         {
             return null;
         }
-        return Math.Clamp(value, min, max);
+        return (int)Math.Clamp(value, min, max);
     }
+
+    /// <summary>Opaque paging cursor grammar; shared with the roster feed body.</summary>
+    public static bool IsCursor(string? value) => value != null && CursorPattern.IsMatch(value);
+
+    /// <summary>A `hive-NNNNN` community name; shared with the roster feed body.</summary>
+    public static bool IsCommunity(string? value) => value != null && CommunityPattern.IsMatch(value);
+
+    /// <summary>A random-order seed; the roster feed is the only route that takes one.</summary>
+    public static bool IsSeed(string? value) => value != null && SeedPattern.IsMatch(value);
 
     /// <summary>"1" -> true, "0" -> false, anything else -> null (dropped).</summary>
     private static bool? Flag(Dictionary<string, string> q, string key) =>
@@ -561,7 +652,19 @@ public static class CurationDeskWrites
     public static readonly IReadOnlySet<string> UaClasses = new HashSet<string> { "web", "mobile" };
     public static readonly IReadOnlySet<string> RosterSorts = new HashSet<string> { "queue", "newest", "unique", "random" };
 
-    private static readonly Regex TrxIdPattern = new("^[0-9a-f]{40}$", RegexOptions.Compiled);
+    /// <summary>
+    /// Views the roster feed takes: the public ones plus `excluded`, which is
+    /// the only place an excluded row is ever listed.
+    /// </summary>
+    public static readonly IReadOnlySet<string> RosterViews =
+        new HashSet<string>(CurationDeskQuery.Views, StringComparer.Ordinal) { "excluded" };
+
+    /// <summary>How many post ids one tick may name per list.</summary>
+    public const int MaxTickIds = 100;
+
+    // \A and \z for the same reason as the name patterns above: `$` would let
+    // a trailing newline through.
+    private static readonly Regex TrxIdPattern = new(@"\A[0-9a-f]{40}\z", RegexOptions.Compiled);
 
     public static readonly Route RosterFeed = new("curation/desk/roster-feed", new[]
     {
@@ -613,24 +716,16 @@ public static class CurationDeskWrites
 
         if (ReferenceEquals(route, RosterFeed))
         {
-            // An unknown sort is not an error for a read: drop it and let the
-            // backend apply its default, as the public feed does.
-            var sort = body.Str("sort");
-            if (sort == null || !RosterSorts.Contains(sort))
-            {
-                payload.Remove("sort");
-            }
-            // seed only means something to the random order; for any other sort
-            // it is noise that would make two identical feeds look different.
-            if (sort != "random")
-            {
-                payload.Remove("seed");
-            }
-            if (payload.Remove("limit") && body.Field("limit") is JsonValue limitValue
-                && limitValue.TryGetValue<double>(out var limit))
-            {
-                payload["limit"] = Math.Clamp((int)limit, 1, CurationDeskQuery.MaxLimit);
-            }
+            NormalizeRosterFeed(payload, body);
+        }
+
+        if (ReferenceEquals(route, Tick))
+        {
+            // The backend caps both lists at this many ids; truncating here
+            // keeps a client bug from turning one tick into thousands of
+            // primary-key probes on the way to the same 400.
+            Truncate(payload, "need", MaxTickIds);
+            Truncate(payload, "visible", MaxTickIds);
         }
 
         if (ReferenceEquals(route, RecommendMeta) && payload.ContainsKey("ua_class")
@@ -640,6 +735,102 @@ public static class CurationDeskWrites
         }
 
         return (payload, null);
+    }
+
+    /// <summary>
+    /// The roster feed carries the filter names of the public feed, so it gets
+    /// the public feed's value rules: an out-of-range number is clamped rather
+    /// than forwarded, and a value outside an allowlist or a pattern is dropped
+    /// so the backend applies its default. Both feeds then answer the same
+    /// question for the same request, and a typo cannot ask for a query plan
+    /// nobody sized.
+    /// </summary>
+    private static void NormalizeRosterFeed(JsonObject payload, JsonObject body)
+    {
+        // An unknown sort is not an error for a read: drop it and let the
+        // backend apply its default, as the public feed does.
+        var sort = body.Str("sort");
+        if (sort == null || !RosterSorts.Contains(sort))
+        {
+            payload.Remove("sort");
+        }
+
+        // seed only means something to the random order; for any other sort it
+        // is noise that would make two identical feeds look different, and a
+        // seed outside the grammar is not a seed the backend can hash with.
+        if (sort != "random" || !CurationDeskQuery.IsSeed(body.Str("seed")))
+        {
+            payload.Remove("seed");
+        }
+
+        KeepAllowed(payload, "view", RosterViews);
+        KeepAllowed(payload, "app", CurationDeskQuery.Apps);
+        KeepAllowed(payload, "window", CurationDeskQuery.Windows);
+        KeepMatching(payload, "cursor", CurationDeskQuery.IsCursor);
+        KeepMatching(payload, "community", CurationDeskQuery.IsCommunity);
+
+        Clamp(payload, "limit", 1, CurationDeskQuery.MaxLimit);
+        Clamp(payload, "rep_min", 0, 100);
+        Clamp(payload, "rep_max", 0, 100);
+        Clamp(payload, "min_words", 0, CurationDeskQuery.MaxWords);
+        Clamp(payload, "max_words", 0, CurationDeskQuery.MaxWords);
+    }
+
+    /// <summary>Drop a field whose value is not one of <paramref name="allowed"/>.</summary>
+    private static void KeepAllowed(JsonObject payload, string key, IReadOnlySet<string> allowed)
+    {
+        if (payload.ContainsKey(key) && !(JsVal.AsString(payload[key]) is { } value && allowed.Contains(value)))
+        {
+            payload.Remove(key);
+        }
+    }
+
+    /// <summary>Drop a field whose value does not match <paramref name="matches"/>.</summary>
+    private static void KeepMatching(JsonObject payload, string key, Func<string?, bool> matches)
+    {
+        if (payload.ContainsKey(key) && !matches(JsVal.AsString(payload[key])))
+        {
+            payload.Remove(key);
+        }
+    }
+
+    /// <summary>
+    /// Clamp a numeric field into [min, max], accepting the number or its string
+    /// spelling; a value that is neither is dropped rather than forwarded.
+    /// </summary>
+    private static void Clamp(JsonObject payload, string key, int min, int max)
+    {
+        if (!payload.ContainsKey(key))
+        {
+            return;
+        }
+        var node = payload[key];
+        int? value = JsVal.AsNumber(node) is { } number
+            ? (int)Math.Clamp(number, min, max)
+            : CurationDeskQuery.ClampValue(JsVal.AsString(node), min, max);
+        if (value is { } clamped)
+        {
+            payload[key] = clamped;
+        }
+        else
+        {
+            payload.Remove(key);
+        }
+    }
+
+    /// <summary>Keep at most <paramref name="max"/> elements of an array field.</summary>
+    private static void Truncate(JsonObject payload, string key, int max)
+    {
+        if (payload[key] is not JsonArray array || array.Count <= max)
+        {
+            return;
+        }
+        var kept = new JsonArray();
+        for (var i = 0; i < max; i++)
+        {
+            kept.Add(array[i]?.DeepClone());
+        }
+        payload[key] = kept;
     }
 
     private static string? Validate(Route route, JsonObject body)
@@ -778,8 +969,8 @@ public static class CurationDeskPublicPayload
 /// </summary>
 public static class CurationDeskMemo
 {
-    /// <summary>Budget of each store. A feed page is tens of KB; this is thousands of them.</summary>
-    internal const long BudgetBytes = 64L * 1024 * 1024;
+    /// <summary>Budget of each store (DESK_MEMO_BYTES; 64 MiB by default).</summary>
+    internal static readonly long BudgetBytes = Config.DeskMemoBytes;
 
     /// <summary>
     /// How long a last-good body stays eligible as a fallback. Long enough to
