@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -99,6 +98,16 @@ public static partial class PrivateApi
     // GET /private-api/curation-desk/post/{author}/{permlink}
     public static async Task CurationDeskPost(HttpContext ctx)
     {
+        // The unconfigured answer comes first, before this route looks at
+        // anything the caller sent. A dark desk answers 503 on every route the
+        // same way; answering 400 here instead would make this one route report
+        // on its own path grammar while the other four report nothing.
+        if (DeskToken == null)
+        {
+            await ctx.SendText(503, DeskNotConfigured);
+            return;
+        }
+
         var author = ctx.Request.RouteValues["author"]?.ToString() ?? "";
         var permlink = ctx.Request.RouteValues["permlink"]?.ToString() ?? "";
         var path = CurationDeskPostPath(author, permlink);
@@ -187,19 +196,24 @@ public static partial class PrivateApi
         string? errorText = null;
         UpstreamResponse? passthrough = null;
 
+        // Held for the whole block, so the gate cannot be dropped and replaced
+        // between being handed out and being waited on.
         var gate = CurationDeskMemo.GateFor(endpoint);
-        if (!await gate.WaitAsync(CurationDeskMemo.FillWait))
-        {
-            // Someone else's fill is taking longer than a whole upstream timeout.
-            // Do not stack another one behind it; answer from what is known.
-            await ServeLastGoodOr(ctx, endpoint, policy, 504, "Upstream Timeout");
-            return;
-        }
+        var entered = false;
+        var gateTimedOut = false;
 
         try
         {
+            entered = await gate.Semaphore.WaitAsync(CurationDeskMemo.FillWait);
+            if (!entered)
+            {
+                // Someone else's fill is taking longer than a whole upstream
+                // timeout. Do not stack another one behind it; answer from what
+                // is known, once the gate has been handed back.
+                gateTimedOut = true;
+            }
             // The fill that held the gate may have landed while this one queued.
-            if (CurationDeskMemo.TryGetFresh(endpoint, out var fresh, out var freshType))
+            else if (CurationDeskMemo.TryGetFresh(endpoint, out var fresh, out var freshType))
             {
                 bytes = fresh;
                 bytesType = freshType;
@@ -234,8 +248,17 @@ public static partial class PrivateApi
         }
         finally
         {
-            gate.Release();
+            if (entered)
+            {
+                gate.Semaphore.Release();
+            }
             CurationDeskMemo.ReleaseGate(endpoint, gate);
+        }
+
+        if (gateTimedOut)
+        {
+            await ServeLastGoodOr(ctx, endpoint, policy, 504, "Upstream Timeout");
+            return;
         }
 
         if (bytes != null)
@@ -795,8 +818,16 @@ public static class CurationDeskWrites
     }
 
     /// <summary>
-    /// Clamp a numeric field into [min, max], accepting the number or its string
-    /// spelling; a value that is neither is dropped rather than forwarded.
+    /// Clamp a whole-number field into [min, max], accepting the number or its
+    /// string spelling; a value that is neither is dropped rather than forwarded.
+    ///
+    /// These names count rows, reputations and words, so only an integral value
+    /// is one of them: `1.9` is not "1", it is a client sending something else,
+    /// and truncating it would forward a filter nobody asked for. Strings go
+    /// through the query-string parser, so a body and a query string accept the
+    /// same spellings. A number is judged by its value, not its spelling, since
+    /// JSON parsing keeps no spelling: `1e6` and `1000000` are the same number
+    /// and clamp to the same bound, exactly as `1000000` does in a query string.
     /// </summary>
     private static void Clamp(JsonObject payload, string key, int min, int max)
     {
@@ -806,7 +837,7 @@ public static class CurationDeskWrites
         }
         var node = payload[key];
         int? value = JsVal.AsNumber(node) is { } number
-            ? (int)Math.Clamp(number, min, max)
+            ? (double.IsInteger(number) ? (int?)Math.Clamp(number, min, max) : null)
             : CurationDeskQuery.ClampValue(JsVal.AsString(node), min, max);
         if (value is { } clamped)
         {
@@ -990,13 +1021,27 @@ public static class CurationDeskMemo
     internal static BytesCache LastGood = new(BudgetBytes);
 
     /// <summary>
-    /// One fill per key at a time. Gates are created on demand and dropped once
-    /// released with nobody holding them, so a scan over many distinct keys does
-    /// not leave a semaphore per key behind. A request that read a gate just
-    /// before it was dropped can start a second fill; that costs one duplicate
-    /// upstream call, not correctness.
+    /// One fill of one key at a time. A reader takes the key's gate, waits on
+    /// its semaphore, fills and hands the gate back.
+    ///
+    /// Users are counted rather than inferred from the semaphore: a reader that
+    /// has been handed the gate but has not reached its wait yet is a user, and
+    /// dropping the entry under it (the semaphore looks free, because that
+    /// reader has not taken it) would let the next reader create a replacement
+    /// and fill the same key beside it. Two fills of one key can then finish out
+    /// of order and store the older answer last.
     /// </summary>
-    private static readonly ConcurrentDictionary<string, SemaphoreSlim> Gates = new();
+    internal sealed class Gate
+    {
+        /// <summary>Admission to the fill; one holder at a time.</summary>
+        internal readonly SemaphoreSlim Semaphore = new(1, 1);
+
+        /// <summary>Readers holding this gate. Guarded by <see cref="GateLock"/>.</summary>
+        internal int Users;
+    }
+
+    private static readonly Dictionary<string, Gate> Gates = new(StringComparer.Ordinal);
+    private static readonly object GateLock = new();
 
     public static bool TryGetFresh(string key, out byte[] bytes, out string contentType)
     {
@@ -1018,20 +1063,59 @@ public static class CurationDeskMemo
         LastGood.Set(key, bytes, LastGoodTtlMs, contentType);
     }
 
-    internal static SemaphoreSlim GateFor(string key) => Gates.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
-
-    internal static void ReleaseGate(string key, SemaphoreSlim gate)
+    /// <summary>
+    /// The gate of a key, counting this caller as one of its users. Every call
+    /// must be paired with a <see cref="ReleaseGate"/>, whether or not the
+    /// caller went on to take the semaphore.
+    /// </summary>
+    internal static Gate GateFor(string key)
     {
-        if (gate.CurrentCount == 1)
+        lock (GateLock)
         {
-            Gates.TryRemove(new KeyValuePair<string, SemaphoreSlim>(key, gate));
+            if (!Gates.TryGetValue(key, out var gate))
+            {
+                gate = new Gate();
+                Gates[key] = gate;
+            }
+            gate.Users++;
+            return gate;
         }
+    }
+
+    /// <summary>
+    /// Give a gate back. The entry is dropped only when the last user leaves and
+    /// the key still maps to this same gate, so a scan over many distinct keys
+    /// leaves no semaphore per key behind while no in-flight reader ever loses
+    /// the gate it is about to wait on.
+    /// </summary>
+    internal static void ReleaseGate(string key, Gate gate)
+    {
+        lock (GateLock)
+        {
+            if (--gate.Users > 0)
+            {
+                return;
+            }
+            if (Gates.TryGetValue(key, out var current) && ReferenceEquals(current, gate))
+            {
+                Gates.Remove(key);
+            }
+        }
+    }
+
+    /// <summary>Gates currently held, for the tests that pin the cleanup.</summary>
+    internal static int GateCount
+    {
+        get { lock (GateLock) { return Gates.Count; } }
     }
 
     internal static void ResetForTests()
     {
         Fresh = new BytesCache(BudgetBytes);
         LastGood = new BytesCache(BudgetBytes);
-        Gates.Clear();
+        lock (GateLock)
+        {
+            Gates.Clear();
+        }
     }
 }

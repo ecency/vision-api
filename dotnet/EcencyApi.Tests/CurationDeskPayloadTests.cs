@@ -258,6 +258,36 @@ public class CurationDeskPayloadTests
     }
 
     [Fact]
+    public void RosterFeedNumbersAreWholeNumbersOrNothing()
+    {
+        // These names count rows, reputations and words. A fraction is none of
+        // them: truncating 1.9 to 1 would forward a filter nobody asked for, so
+        // it is dropped and the backend applies its default, exactly as the
+        // query string does with `limit=1.9`.
+        var fractions = Ok(CurationDeskWrites.RosterFeed,
+            "{\"limit\":1.9,\"rep_min\":10.5,\"rep_max\":99.9,\"min_words\":0.5,\"max_words\":300.25}");
+        Assert.Equal(new[] { "username" }, fractions.Select(kv => kv.Key).ToArray());
+
+        // A whole number is kept, as a number or as its plain spelling.
+        Assert.Equal(12, Ok(CurationDeskWrites.RosterFeed, "{\"limit\":12}")["limit"]!.GetValue<int>());
+        Assert.Equal(12, Ok(CurationDeskWrites.RosterFeed, "{\"limit\":\"12\"}")["limit"]!.GetValue<int>());
+        Assert.Equal(40, Ok(CurationDeskWrites.RosterFeed, "{\"rep_min\":40}")["rep_min"]!.GetValue<int>());
+
+        // JSON keeps no spelling of a number, so 1e6 is the number 1000000 and
+        // clamps to the bound the same way that value does in a query string.
+        Assert.Equal(50, Ok(CurationDeskWrites.RosterFeed, "{\"limit\":1e6}")["limit"]!.GetValue<int>());
+        Assert.Equal(50, Ok(CurationDeskWrites.RosterFeed, "{\"limit\":1000000}")["limit"]!.GetValue<int>());
+
+        // A string is read by the query string's rule, so only a plain signed
+        // integer is a number there.
+        foreach (var spelling in new[] { "\"1e6\"", "\"1.9\"", "\"12.0\"", "\" 12\"", "\"0x0c\"" })
+        {
+            Assert.False(
+                Ok(CurationDeskWrites.RosterFeed, "{\"limit\":" + spelling + "}").ContainsKey("limit"), spelling);
+        }
+    }
+
+    [Fact]
     public void TheTickNamesAtMost100IdsPerList()
     {
         var need = string.Join(",", Enumerable.Range(1, 150));

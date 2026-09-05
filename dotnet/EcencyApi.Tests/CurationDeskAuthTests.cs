@@ -367,6 +367,94 @@ public class CurationDeskAuthTests
     }
 
     [Fact]
+    public async Task AKeysGateIsKeptWhileAnyReaderStillHoldsIt()
+    {
+        Install();
+        const string key = "curation/desk/feed?limit=10";
+
+        // Two readers take the key's gate. The second stands for a request that
+        // has been handed the gate and has not reached its wait yet.
+        var first = CurationDeskMemo.GateFor(key);
+        var late = CurationDeskMemo.GateFor(key);
+        Assert.Same(first, late);
+
+        // The first reader fills and hands the gate back.
+        Assert.True(await first.Semaphore.WaitAsync(TimeSpan.Zero));
+        first.Semaphore.Release();
+        CurationDeskMemo.ReleaseGate(key, first);
+
+        // A third reader arrives after that. It must land on the gate the late
+        // reader is about to wait on, or the two of them fill one key at once
+        // and the fill that finishes second stores its answer over the first.
+        var newcomer = CurationDeskMemo.GateFor(key);
+        Assert.Same(late, newcomer);
+        Assert.True(await newcomer.Semaphore.WaitAsync(TimeSpan.Zero));
+        Assert.False(await late.Semaphore.WaitAsync(TimeSpan.Zero));
+
+        newcomer.Semaphore.Release();
+        CurationDeskMemo.ReleaseGate(key, newcomer);
+        Assert.Equal(1, CurationDeskMemo.GateCount);
+
+        // With the last reader gone the entry is dropped, so a scan over many
+        // distinct keys leaves no semaphore per key behind.
+        CurationDeskMemo.ReleaseGate(key, late);
+        Assert.Equal(0, CurationDeskMemo.GateCount);
+        var afterwards = CurationDeskMemo.GateFor(key);
+        Assert.NotSame(late, afterwards);
+        CurationDeskMemo.ReleaseGate(key, afterwards);
+        Assert.Equal(0, CurationDeskMemo.GateCount);
+    }
+
+    [Fact]
+    public async Task ALateWaiterNeverFillsAKeyBesideTheReaderFillingIt()
+    {
+        var upstream = Install();
+        const string key = "curation/desk/status";
+
+        // A reader that has been handed the key's gate and has not waited on it
+        // yet: the fill below must not be able to drop the gate under it.
+        var late = CurationDeskMemo.GateFor(key);
+
+        var firstFill = new TaskCompletionSource<UpstreamResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+        upstream.Answer = _ => firstFill.Task;
+        var first = Get("/private-api/curation-desk/status");
+        var firstRequest = PrivateApi.CurationDeskStatus(first);
+        await Task.Delay(100);
+        Assert.Single(upstream.Calls);
+        firstFill.SetResult(JsonResponse(200, "{\"behind_seconds\":1}"));
+        await firstRequest;
+        Assert.Equal("{\"behind_seconds\":1}", Body(first));
+
+        // That entry lapses (simulated), so the next reader fills again.
+        CurationDeskMemo.Fresh = new BytesCache(CurationDeskMemo.BudgetBytes);
+
+        var secondFill = new TaskCompletionSource<UpstreamResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+        upstream.Answer = _ => secondFill.Task;
+        var second = Get("/private-api/curation-desk/status");
+        var secondRequest = PrivateApi.CurationDeskStatus(second);
+        await Task.Delay(100);
+        Assert.Equal(2, upstream.Calls.Count);
+
+        // The late reader reaches its wait now and must queue behind the fill in
+        // flight instead of being admitted beside it.
+        Assert.False(await late.Semaphore.WaitAsync(TimeSpan.Zero));
+
+        secondFill.SetResult(JsonResponse(200, "{\"behind_seconds\":2}"));
+        await secondRequest;
+        Assert.Equal("{\"behind_seconds\":2}", Body(second));
+
+        // Once admitted it finds the answer memoized, so the key was filled once
+        // per reader that needed it and never twice at a time.
+        Assert.True(await late.Semaphore.WaitAsync(TimeSpan.FromSeconds(3)));
+        Assert.True(CurationDeskMemo.TryGetFresh(key, out var memoized, out _));
+        Assert.Equal("{\"behind_seconds\":2}", System.Text.Encoding.UTF8.GetString(memoized));
+        late.Semaphore.Release();
+        CurationDeskMemo.ReleaseGate(key, late);
+        Assert.Equal(2, upstream.Calls.Count);
+        Assert.Equal(0, CurationDeskMemo.GateCount);
+    }
+
+    [Fact]
     public async Task ASlowReaderDoesNotHoldTheGateOfItsKey()
     {
         var upstream = Install();
@@ -521,7 +609,7 @@ public class CurationDeskAuthTests
     public async Task AnInvalidPostPathIs400BeforeAnyUpstreamCall()
     {
         var upstream = Install();
-        foreach (var (author, permlink) in new[] { ("..", "p"), ("good-karma", "a/b"), ("good-karma", "p?x=1"), ("x", "p") })
+        foreach (var (author, permlink) in MalformedPostPaths)
         {
             var ctx = Get("/private-api/curation-desk/post/x/y", "", new[] { ("author", author), ("permlink", permlink) });
             await PrivateApi.CurationDeskPost(ctx);
@@ -532,4 +620,28 @@ public class CurationDeskAuthTests
         }
         Assert.Empty(upstream.Calls);
     }
+
+    [Fact]
+    public async Task WithoutTheTokenAMalformedPostPathIs503LikeEveryOtherRoute()
+    {
+        var upstream = Install(token: null);
+
+        // While the desk is dark every route answers the same, so this one does
+        // not single itself out by reporting on the path it was given.
+        foreach (var (author, permlink) in MalformedPostPaths)
+        {
+            var ctx = Get("/private-api/curation-desk/post/x/y", "", new[] { ("author", author), ("permlink", permlink) });
+            await PrivateApi.CurationDeskPost(ctx);
+            await Start(ctx);
+            Assert.Equal(503, ctx.Response.StatusCode);
+            Assert.Equal("curation desk not configured", Body(ctx));
+            Assert.Null(CacheControl(ctx));
+        }
+        Assert.Empty(upstream.Calls);
+    }
+
+    private static readonly (string Author, string Permlink)[] MalformedPostPaths =
+    {
+        ("..", "p"), ("good-karma", "a/b"), ("good-karma", "p?x=1"), ("x", "p"),
+    };
 }

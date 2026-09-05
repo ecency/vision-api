@@ -52,9 +52,18 @@ public class CurationDeskQueryTests
     // Beyond int.MaxValue: "as many as you can", not "give me the default".
     [InlineData("99999999999", "limit=50")]
     [InlineData("-99999999999", "limit=1")]
+    // A plain whole number past the range clamps; the body path reads the same
+    // value out of JSON and answers the same.
+    [InlineData("1000000", "limit=50")]
     [InlineData("25", "")]
     [InlineData("abc", "")]
+    // Text is a number only when it spells a plain signed integer, here and for
+    // a string in a roster feed body: a fraction or an exponent is dropped
+    // rather than truncated.
     [InlineData("1e1", "")]
+    [InlineData("1e6", "")]
+    [InlineData("1.9", "")]
+    [InlineData("12.0", "")]
     [InlineData("", "")]
     public void LimitIsClampedToItsRange(string given, string expected)
     {
