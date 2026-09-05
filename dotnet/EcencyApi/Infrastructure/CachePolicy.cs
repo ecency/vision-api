@@ -49,13 +49,16 @@ public static class CachePolicy
     /// The feed and the recommendations list move with every new post; status is
     /// the poll target and stays short; the roster changes when a curator is added
     /// or promoted, so it can stay put for minutes; a single post's recommenders
-    /// are optimistic on the client and confirmed from here.
+    /// are optimistic on the client and confirmed from here; a recommender's
+    /// scorecard is a rolling 90-day count recomputed in the background, so a
+    /// minute-old copy of it is still the same answer.
     /// </summary>
     public const string CurationDeskFeed = "public, max-age=0, s-maxage=30";
     public const string CurationDeskStatus = "public, max-age=0, s-maxage=15";
     public const string CurationDeskRoster = "public, max-age=0, s-maxage=600";
     public const string CurationDeskRecommendations = "public, max-age=0, s-maxage=30";
     public const string CurationDeskPost = "public, max-age=0, s-maxage=15";
+    public const string CurationDeskRecommender = "public, max-age=0, s-maxage=60";
 
     /// <summary>
     /// The `s-maxage` of a policy in seconds, or its `max-age` when it has no

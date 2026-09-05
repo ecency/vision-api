@@ -181,6 +181,7 @@ public static partial class Routes
         app.MapGet("/private-api/curation-desk/roster", PrivateApi.CurationDeskRoster);
         app.MapGet("/private-api/curation-desk/recommendations", PrivateApi.CurationDeskRecommendations);
         app.MapGet("/private-api/curation-desk/post/{author}/{permlink}", PrivateApi.CurationDeskPost);
+        app.MapGet("/private-api/curation-desk/recommender/{username}", PrivateApi.CurationDeskRecommender);
         app.MapPost("/private-api/curation-desk/roster-feed", PrivateApi.CurationDeskRosterFeed);
         app.MapPost("/private-api/curation-desk/tick", PrivateApi.CurationDeskTick);
         app.MapPost("/private-api/curation-desk/mark", PrivateApi.CurationDeskMark);
