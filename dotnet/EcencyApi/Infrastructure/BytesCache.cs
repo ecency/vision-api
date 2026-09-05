@@ -20,6 +20,9 @@ public sealed class BytesCache
         public required byte[] Bytes;
         public required long ExpiresAtMs;
         public required LinkedListNode<string> Node;
+        // Small caller-defined label stored beside the bytes (a content type,
+        // say), so a value that is not self-describing can be served as it came.
+        public string? Tag;
     }
 
     private readonly Dictionary<string, Entry> _map = new();
@@ -55,7 +58,13 @@ public sealed class BytesCache
     private static long NowMs => Environment.TickCount64;
 
     /// <summary>Fresh entry or nothing; an expired entry is dropped on the way.</summary>
-    public bool TryGet(string key, out byte[] bytes)
+    public bool TryGet(string key, out byte[] bytes) => TryGet(key, out bytes, out _);
+
+    /// <summary>
+    /// <see cref="TryGet(string, out byte[])"/> that also returns the tag the
+    /// entry was stored with (null when it had none).
+    /// </summary>
+    public bool TryGet(string key, out byte[] bytes, out string? tag)
     {
         lock (_lock)
         {
@@ -66,20 +75,24 @@ public sealed class BytesCache
                     _lru.Remove(entry.Node);
                     _lru.AddLast(entry.Node);
                     bytes = entry.Bytes;
+                    tag = entry.Tag;
                     return true;
                 }
                 RemoveLocked(key, entry);
             }
         }
         bytes = Array.Empty<byte>();
+        tag = null;
         return false;
     }
 
     /// <summary>
     /// Store a value for <paramref name="ttlMs"/>. A value larger than the whole
-    /// budget is not stored (it would evict everything for one reader).
+    /// budget is not stored (it would evict everything for one reader). The
+    /// optional <paramref name="tag"/> travels with the bytes and comes back from
+    /// <see cref="TryGet(string, out byte[], out string?)"/>.
     /// </summary>
-    public void Set(string key, byte[] bytes, int ttlMs)
+    public void Set(string key, byte[] bytes, int ttlMs, string? tag = null)
     {
         if (ttlMs <= 0 || bytes.Length > Budget) return;
         lock (_lock)
@@ -89,7 +102,7 @@ public sealed class BytesCache
                 RemoveLocked(key, existing);
             }
             var node = _lru.AddLast(key);
-            var entry = new Entry { Bytes = bytes, ExpiresAtMs = NowMs + ttlMs, Node = node };
+            var entry = new Entry { Bytes = bytes, ExpiresAtMs = NowMs + ttlMs, Node = node, Tag = tag };
             _map[key] = entry;
             _byExpiry.Add((entry.ExpiresAtMs, key));
             _bytes += bytes.Length;

@@ -21,6 +21,14 @@ public sealed class UpstreamResponse
     /// <summary>Set when the body wasn't parseable JSON (axios keeps the raw string).</summary>
     public string? RawText { get; init; }
 
+    /// <summary>
+    /// The body exactly as received, before parsing. Handlers that memoize a
+    /// response keep these bytes rather than the parsed tree, so a hit is a
+    /// dictionary lookup and a write instead of a clone and a re-serialization.
+    /// Empty when a caller built the response without a body.
+    /// </summary>
+    public byte[] Bytes { get; init; } = Array.Empty<byte>();
+
     public required HttpResponseHeaders2 Headers { get; init; }
 
     public bool BodyIsJson => RawText == null;
@@ -204,11 +212,11 @@ public static class Upstream
             {
                 AllowTrailingCommas = false,
             });
-            return new UpstreamResponse { Status = status, Json = node, Headers = respHeaders };
+            return new UpstreamResponse { Status = status, Json = node, Headers = respHeaders, Bytes = bytes };
         }
         catch (JsonException)
         {
-            return new UpstreamResponse { Status = status, RawText = text, Headers = respHeaders };
+            return new UpstreamResponse { Status = status, RawText = text, Headers = respHeaders, Bytes = bytes };
         }
     }
 

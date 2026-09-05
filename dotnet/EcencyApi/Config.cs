@@ -21,6 +21,27 @@ public static class Config
     public static string EnotifyInternalToken { get; } =
         Env("ENOTIFY_INTERNAL_TOKEN") ?? "";
 
+    /// <summary>
+    /// Shared secret presented to the curation desk backend on every desk call,
+    /// public reads included: the desk answers only requests that carry it, so
+    /// the memo and rate limits in front of it cannot be bypassed by going
+    /// around this service. No default: when unset the desk routes fail closed
+    /// (503) rather than forward an empty secret.
+    /// </summary>
+    public static string DeskInternalToken { get; } =
+        Env("DESK_INTERNAL_TOKEN") ?? "";
+
+    /// <summary>
+    /// Byte budget of each curation desk memo store (the fresh one and the
+    /// last-good one), LRU beyond it. A feed page is tens of KB, so the default
+    /// holds thousands of distinct questions; it is exposed so a deployment can
+    /// shrink it without a rebuild if the process is short of memory.
+    /// </summary>
+    public static long DeskMemoBytes { get; } =
+        long.TryParse(Env("DESK_MEMO_BYTES"), out var deskBytes) && deskBytes >= 0
+            ? deskBytes
+            : 64L * 1024 * 1024;
+
     public static string HsClientSecret { get; } =
         Env("HIVESIGNER_SECRET") ?? "hivesignerclientsecret";
 
