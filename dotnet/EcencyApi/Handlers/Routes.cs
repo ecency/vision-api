@@ -190,6 +190,7 @@ public static partial class Routes
         app.MapPost("/private-api/curation-desk/cursor", PrivateApi.CurationDeskCursor);
         app.MapPost("/private-api/curation-desk/recommend-meta", PrivateApi.CurationDeskRecommendMeta);
         app.MapPost("/private-api/curation-desk/recommendation-dismiss", PrivateApi.CurationDeskRecommendationDismiss);
+        app.MapPost("/private-api/curation-desk/ingest", PrivateApi.CurationDeskIngest);
 
         // ---- SSR RPC cache (internal, header-gated; see SsrRpc.cs) ----
         app.MapPost("/private-api/ssr/rpc", SsrRpc.Rpc);
