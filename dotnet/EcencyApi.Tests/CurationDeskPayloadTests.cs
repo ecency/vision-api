@@ -128,6 +128,67 @@ public class CurationDeskPayloadTests
         Assert.Equal(new[] { "username", "since", "need", "visible" }, tick.Select(kv => kv.Key).ToArray());
     }
 
+    /// <summary>
+    /// A mark carries the lane the desk was showing. It is rebuilt from the allow
+    /// list and cleaned like a roster-feed body, so a key the feed does not know,
+    /// a value it would refuse, and the paging fields never reach the backend.
+    /// </summary>
+    [Fact]
+    public void MarkLaneIsRebuiltFromTheAllowListAndNormalized()
+    {
+        var payload = Ok(CurationDeskWrites.Mark,
+            "{\"author\":\"bob\",\"permlink\":\"p\",\"state\":\"reviewed\",\"lane\":{" +
+            "\"app\":\"peakd\",\"sort\":\"unique\",\"new_authors\":\"1\",\"rep_min\":250," +
+            "\"window\":\"bogus\",\"community\":\"../etc\",\"cursor\":\"c1\",\"limit\":5,\"seed\":\"abcd1234\"," +
+            "\"admin\":true,\"username\":\"mallory\"}}");
+        var lane = Assert.IsType<JsonObject>(payload["lane"]);
+        Assert.Equal(new[] { "app", "sort", "rep_min", "new_authors" }, lane.Select(kv => kv.Key).ToArray());
+        Assert.Equal("peakd", lane["app"]!.GetValue<string>());
+        Assert.Equal("unique", lane["sort"]!.GetValue<string>());
+        Assert.Equal(100, lane["rep_min"]!.GetValue<int>());
+        Assert.Equal(new[] { "username", "author", "permlink", "state", "lane" }, payload.Select(kv => kv.Key).ToArray());
+    }
+
+    /// <summary>
+    /// The order travels, because it decides whether a position is a watermark: a mark
+    /// on newest-first says nothing about the older posts. The seed never travels, and
+    /// the backend reads the sort without its feed parser's seed rule.
+    /// </summary>
+    [Theory]
+    [InlineData("random", true)]
+    [InlineData("newest", true)]
+    [InlineData("queue", true)]
+    [InlineData("unique", true)]
+    [InlineData("payout", false)]
+    public void MarkLaneCarriesAKnownSortAndNeverTheSeed(string sort, bool travels)
+    {
+        var payload = Ok(CurationDeskWrites.Mark,
+            $"{{\"author\":\"bob\",\"permlink\":\"p\",\"state\":\"reviewed\",\"lane\":{{\"sort\":\"{sort}\",\"seed\":\"abcd1234\",\"app\":\"peakd\"}}}}");
+        var lane = Assert.IsType<JsonObject>(payload["lane"]);
+        Assert.Equal(travels, lane.ContainsKey("sort"));
+        Assert.False(lane.ContainsKey("seed"));
+        Assert.Equal("peakd", lane["app"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void MarkWithoutALaneStaysWithoutOne()
+    {
+        var payload = Ok(CurationDeskWrites.Mark, "{\"author\":\"bob\",\"permlink\":\"p\",\"state\":\"reviewed\"}");
+        Assert.False(payload.ContainsKey("lane"));
+        // and an empty object is a real answer: the whole queue
+        var whole = Ok(CurationDeskWrites.Mark, "{\"author\":\"bob\",\"permlink\":\"p\",\"state\":\"reviewed\",\"lane\":{}}");
+        Assert.Empty(Assert.IsType<JsonObject>(whole["lane"]));
+    }
+
+    [Theory]
+    [InlineData("{\"author\":\"bob\",\"permlink\":\"p\",\"state\":\"reviewed\",\"lane\":\"peakd\"}")]
+    [InlineData("{\"author\":\"bob\",\"permlink\":\"p\",\"state\":\"reviewed\",\"lane\":[\"peakd\"]}")]
+    [InlineData("{\"author\":\"bob\",\"permlink\":\"p\",\"state\":\"reviewed\",\"lane\":7}")]
+    public void MarkLaneMustBeAnObject(string body)
+    {
+        Assert.Equal("lane must be an object", Rejected(CurationDeskWrites.Mark, body));
+    }
+
     [Theory]
     [InlineData("{\"permlink\":\"p\",\"state\":\"reviewed\"}", "author required")]
     [InlineData("{\"author\":\"\",\"permlink\":\"p\",\"state\":\"reviewed\"}", "author required")]

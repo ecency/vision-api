@@ -777,8 +777,24 @@ public static class CurationDeskWrites
 
     public static readonly Route Tick = new("curation/desk/tick", new[] { "since", "need", "visible" });
 
+    /// <summary>
+    /// A mark carries the feed params the desk that made it was showing, as one
+    /// `lane` object, so the hand-off can say which queue a position was earned in.
+    /// It travels on the mark rather than living per curator on purpose: two desks
+    /// on different filters then stamp each mark with their own, with nothing to
+    /// race over. The object is rebuilt from an allow list and normalized exactly
+    /// like a roster-feed body, minus paging, before it goes upstream.
+    /// </summary>
     public static readonly Route Mark = new("curation/desk/marks",
-        new[] { "author", "permlink", "state", "reason", "note", "snooze_until" });
+        new[] { "author", "permlink", "state", "reason", "note", "snooze_until", "lane" });
+
+    /// <summary>The roster-feed keys that describe WHICH posts, not how they are paged.</summary>
+    public static readonly string[] LaneKeys =
+    {
+        "view", "app", "community", "min_words", "sort", "window", "rep_min", "rep_max", "max_words",
+        "has_images", "new_authors", "recommended", "flagged", "hide_curated", "hide_reviewed",
+        "hide_snoozed",
+    };
 
     public static readonly Route MarkClear = new("curation/desk/marks/clear", new[] { "author", "permlink" });
 
@@ -826,6 +842,11 @@ public static class CurationDeskWrites
         if (ReferenceEquals(route, RosterFeed))
         {
             NormalizeRosterFeed(payload, body);
+        }
+
+        if (ReferenceEquals(route, Mark) && body.Field("lane") is JsonObject lane)
+        {
+            payload["lane"] = NormalizeLane(lane);
         }
 
         if (ReferenceEquals(route, Tick))
@@ -883,6 +904,38 @@ public static class CurationDeskWrites
         Clamp(payload, "rep_max", 0, 100);
         Clamp(payload, "min_words", 0, CurationDeskQuery.MaxWords);
         Clamp(payload, "max_words", 0, CurationDeskQuery.MaxWords);
+    }
+
+    /// <summary>
+    /// The lane a mark was made in, rebuilt from the allow list and cleaned with the
+    /// same rules as a roster-feed body. Nothing the feed would refuse reaches the
+    /// backend, and nothing outside <see cref="LaneKeys"/> is copied at all.
+    /// </summary>
+    private static JsonObject NormalizeLane(JsonObject lane)
+    {
+        var clean = new JsonObject();
+        foreach (var key in LaneKeys)
+        {
+            CopyIfPresent(clean, lane, key);
+        }
+        // The order travels, because it decides whether a position is a watermark
+        // at all: a mark on newest-first says nothing about the older posts. The seed
+        // does not travel, and the backend reads the sort off the lane on its own
+        // rather than through its feed parser, so random without a seed is fine here.
+        var sort = lane.Str("sort");
+        if (sort == null || !RosterSorts.Contains(sort))
+        {
+            clean.Remove("sort");
+        }
+        KeepAllowed(clean, "view", RosterViews);
+        KeepAllowed(clean, "app", CurationDeskQuery.Apps);
+        KeepAllowed(clean, "window", CurationDeskQuery.Windows);
+        KeepMatching(clean, "community", CurationDeskQuery.IsCommunity);
+        Clamp(clean, "rep_min", 0, 100);
+        Clamp(clean, "rep_max", 0, 100);
+        Clamp(clean, "min_words", 0, CurationDeskQuery.MaxWords);
+        Clamp(clean, "max_words", 0, CurationDeskQuery.MaxWords);
+        return clean;
     }
 
     /// <summary>Drop a field whose value is not one of <paramref name="allowed"/>.</summary>
@@ -954,6 +1007,13 @@ public static class CurationDeskWrites
     {
         if (ReferenceEquals(route, Mark))
         {
+            // The lane is optional, and absent is the honest answer for a desk that
+            // predates it; but a lane that is not an object is a client bug, not a
+            // lane, and the backend would only store NULL for it anyway.
+            if (body.TryGetPropertyValue("lane", out var lane) && lane is not JsonObject)
+            {
+                return "lane must be an object";
+            }
             return RequireAuthorPermlink(body) ?? RequireOneOf(body, "state", MarkStates);
         }
         if (ReferenceEquals(route, MarkClear))
