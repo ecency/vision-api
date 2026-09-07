@@ -150,16 +150,17 @@ public class CurationDeskPayloadTests
     }
 
     /// <summary>
-    /// The Random order arrives with a seed the lane never carries, and the backend's
-    /// feed parser refuses that pairing. An order is not a lane, so only the one sort
-    /// that narrows travels.
+    /// The order travels, because it decides whether a position is a watermark: a mark
+    /// on newest-first says nothing about the older posts. The seed never travels, and
+    /// the backend reads the sort without its feed parser's seed rule.
     /// </summary>
     [Theory]
-    [InlineData("random", false)]
-    [InlineData("newest", false)]
-    [InlineData("queue", false)]
+    [InlineData("random", true)]
+    [InlineData("newest", true)]
+    [InlineData("queue", true)]
     [InlineData("unique", true)]
-    public void MarkLaneCarriesASortOnlyWhenItNarrows(string sort, bool travels)
+    [InlineData("payout", false)]
+    public void MarkLaneCarriesAKnownSortAndNeverTheSeed(string sort, bool travels)
     {
         var payload = Ok(CurationDeskWrites.Mark,
             $"{{\"author\":\"bob\",\"permlink\":\"p\",\"state\":\"reviewed\",\"lane\":{{\"sort\":\"{sort}\",\"seed\":\"abcd1234\",\"app\":\"peakd\"}}}}");
