@@ -918,8 +918,11 @@ public static class CurationDeskWrites
         {
             CopyIfPresent(clean, lane, key);
         }
-        var sort = lane.Str("sort");
-        if (sort == null || !RosterSorts.Contains(sort))
+        // An order is not a lane. The one sort that narrows is `unique`, which the
+        // backend folds into `recommended`; every other value is dropped, and with
+        // it the only way a lane could carry `sort=random` without the seed the
+        // backend's feed parser would demand for it.
+        if (lane.Str("sort") != "unique")
         {
             clean.Remove("sort");
         }

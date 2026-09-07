@@ -149,6 +149,26 @@ public class CurationDeskPayloadTests
         Assert.Equal(new[] { "username", "author", "permlink", "state", "lane" }, payload.Select(kv => kv.Key).ToArray());
     }
 
+    /// <summary>
+    /// The Random order arrives with a seed the lane never carries, and the backend's
+    /// feed parser refuses that pairing. An order is not a lane, so only the one sort
+    /// that narrows travels.
+    /// </summary>
+    [Theory]
+    [InlineData("random", false)]
+    [InlineData("newest", false)]
+    [InlineData("queue", false)]
+    [InlineData("unique", true)]
+    public void MarkLaneCarriesASortOnlyWhenItNarrows(string sort, bool travels)
+    {
+        var payload = Ok(CurationDeskWrites.Mark,
+            $"{{\"author\":\"bob\",\"permlink\":\"p\",\"state\":\"reviewed\",\"lane\":{{\"sort\":\"{sort}\",\"seed\":\"abcd1234\",\"app\":\"peakd\"}}}}");
+        var lane = Assert.IsType<JsonObject>(payload["lane"]);
+        Assert.Equal(travels, lane.ContainsKey("sort"));
+        Assert.False(lane.ContainsKey("seed"));
+        Assert.Equal("peakd", lane["app"]!.GetValue<string>());
+    }
+
     [Fact]
     public void MarkWithoutALaneStaysWithoutOne()
     {
