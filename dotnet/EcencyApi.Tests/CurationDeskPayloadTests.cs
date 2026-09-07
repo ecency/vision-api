@@ -349,6 +349,9 @@ public class CurationDeskPayloadTests
         Assert.Equal("full", kept["window"]!.GetValue<string>());
         Assert.Equal("hive-125125", kept["community"]!.GetValue<string>());
         Assert.Equal("s:abc.1:25", kept["cursor"]!.GetValue<string>());
+        // The 12 h band is the newest window; a gateway behind the desk would drop it silently.
+        var shift = Ok(CurationDeskWrites.RosterFeed, "{\"window\":\"12h\"}");
+        Assert.Equal("12h", shift["window"]!.GetValue<string>());
 
         // Trailing newlines and non-ASCII digits are not the value either.
         var newline = Ok(CurationDeskWrites.RosterFeed, "{\"community\":\"hive-125125\\n\",\"cursor\":\"abc\\n\",\"view\":\"queue\\n\"}");
