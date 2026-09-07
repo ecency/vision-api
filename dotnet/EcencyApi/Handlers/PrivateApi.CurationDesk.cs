@@ -552,7 +552,7 @@ public static class CurationDeskQuery
     public static readonly IReadOnlySet<string> Views =
         new HashSet<string> { "queue", "latest", "new-authors", "recommended", "curated", "all" };
     public static readonly IReadOnlySet<string> Apps = new HashSet<string> { "all", "ecency", "peakd", "other" };
-    public static readonly IReadOnlySet<string> Windows = new HashSet<string> { "full", "half", "eighth", "locked", "all" };
+    public static readonly IReadOnlySet<string> Windows = new HashSet<string> { "12h", "full", "half", "eighth", "locked", "all" };
 
     /// <summary>
     /// Emission order of the feed parameters. Fixed so that the memo key and

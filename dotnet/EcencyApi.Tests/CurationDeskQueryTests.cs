@@ -105,6 +105,7 @@ public class CurationDeskQueryTests
         Assert.Equal("curation/desk/feed?app=peakd", Feed(("app", "peakd")));
         Assert.Equal("curation/desk/feed", Feed(("app", "hive")));
         Assert.Equal("curation/desk/feed?window=locked", Feed(("window", "locked")));
+        Assert.Equal("curation/desk/feed?window=12h", Feed(("window", "12h")));
         Assert.Equal("curation/desk/feed", Feed(("window", "week")));
         Assert.Equal("curation/desk/feed", Feed(("sort", "Queue")));
     }
