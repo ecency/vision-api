@@ -16,6 +16,7 @@ public class CurationDeskPayloadTests
         CurationDeskWrites.RosterFeed, CurationDeskWrites.Tick, CurationDeskWrites.Mark,
         CurationDeskWrites.MarkClear, CurationDeskWrites.Marks, CurationDeskWrites.Cursor,
         CurationDeskWrites.RecommendMeta, CurationDeskWrites.RecommendationDismiss, CurationDeskWrites.Ingest,
+        CurationDeskWrites.RosterList, CurationDeskWrites.RosterSet, CurationDeskWrites.RosterRetire,
     };
 
     private const string IngestBody =
@@ -54,6 +55,10 @@ public class CurationDeskPayloadTests
             return "{" + forged + "\"author\":\"bob\",\"permlink\":\"p\",\"action\":\"restore\"}";
         if (ReferenceEquals(route, CurationDeskWrites.Ingest))
             return "{" + forged + IngestBody + "}";
+        if (ReferenceEquals(route, CurationDeskWrites.RosterSet))
+            return "{" + forged + "\"curator\":\"bob\",\"role\":\"curator\"}";
+        if (ReferenceEquals(route, CurationDeskWrites.RosterRetire))
+            return "{" + forged + "\"curator\":\"bob\"}";
         return "{" + forged + "\"limit\":5}";
     }
 
@@ -536,6 +541,75 @@ public class CurationDeskPayloadTests
     public void ANameOutsideTheGrammarHasNoRecommenderPath(string username)
     {
         Assert.Null(PrivateApi.CurationDeskRecommenderPath(username));
+    }
+
+    // ---- roster writes -------------------------------------------------------
+
+    [Fact]
+    public void ARosterSetForwardsOnlyTheCuratorFieldsAndNeverTheCallersIdentity()
+    {
+        var payload = Ok(CurationDeskWrites.RosterSet,
+            "{\"curator\":\"bob\",\"role\":\"mod\",\"rules\":{\"trail\":false,\"min_weight\":1090},"
+            + "\"note\":\"mod only\",\"active\":true,\"added_by\":\"someone\",\"removed_at\":null}");
+        Assert.Equal(new[] { "username", "curator", "role", "rules", "note" }, payload.Select(kv => kv.Key).ToArray());
+        Assert.Equal("alice", payload["username"]!.GetValue<string>());
+        Assert.Equal("bob", payload["curator"]!.GetValue<string>());
+        // The rules object travels as sent: the backend stores it whole, and a key
+        // dropped here would silently change what the admin asked for.
+        var rules = (JsonObject)payload["rules"]!;
+        Assert.False(rules["trail"]!.GetValue<bool>());
+        Assert.Equal(1090, rules["min_weight"]!.GetValue<int>());
+    }
+
+    [Theory]
+    [InlineData("{\"role\":\"curator\"}", "curator required")]
+    [InlineData("{\"curator\":\"Bob\",\"role\":\"curator\"}", "curator required")]
+    [InlineData("{\"curator\":\"bob\\n\",\"role\":\"curator\"}", "curator required")]
+    [InlineData("{\"curator\":\"bob\"}", "invalid role")]
+    [InlineData("{\"curator\":\"bob\",\"role\":\"owner\"}", "invalid role")]
+    [InlineData("{\"curator\":\"bob\",\"role\":\"curator\",\"rules\":\"trail\"}", "rules must be an object")]
+    [InlineData("{\"curator\":\"bob\",\"role\":\"curator\",\"rules\":{\"weight\":1}}", "unknown rule: weight")]
+    [InlineData("{\"curator\":\"bob\",\"role\":\"curator\",\"rules\":{\"trail\":\"yes\"}}", "trail must be true or false")]
+    public void AMalformedRosterSetIsRefusedRatherThanTrimmed(string json, string expected)
+    {
+        Assert.Equal(expected, Rejected(CurationDeskWrites.RosterSet, json));
+    }
+
+    [Theory]
+    [InlineData("{\"curator\":\"bob\",\"role\":\"curator\",\"rules\":{\"min_weight\":10001}}")]
+    [InlineData("{\"curator\":\"bob\",\"role\":\"curator\",\"rules\":{\"min_weight\":-1}}")]
+    [InlineData("{\"curator\":\"bob\",\"role\":\"curator\",\"rules\":{\"min_weight\":true}}")]
+    [InlineData("{\"curator\":\"bob\",\"role\":\"curator\",\"rules\":{\"max_weight\":\"2000\"}}")]
+    [InlineData("{\"curator\":\"bob\",\"role\":\"curator\",\"rules\":{\"waves_only_below\":1.5}}")]
+    public void AWeightRuleOutsideTheVoteRangeIsRefused(string json)
+    {
+        Assert.Contains("vote weight between 0 and 10000", Rejected(CurationDeskWrites.RosterSet, json));
+    }
+
+    [Fact]
+    public void ACuratorNoteLongerThanTheColumnIsRefused()
+    {
+        var note = new string('x', 201);
+        Assert.Equal("invalid note", Rejected(CurationDeskWrites.RosterSet,
+            "{\"curator\":\"bob\",\"role\":\"curator\",\"note\":\"" + note + "\"}"));
+        Assert.True(Ok(CurationDeskWrites.RosterSet,
+            "{\"curator\":\"bob\",\"role\":\"curator\",\"note\":\"" + note[..200] + "\"}").ContainsKey("note"));
+    }
+
+    [Fact]
+    public void ARetireCarriesNothingButTheCurator()
+    {
+        var payload = Ok(CurationDeskWrites.RosterRetire, "{\"curator\":\"bob\",\"role\":\"admin\",\"force\":true}");
+        Assert.Equal(new[] { "username", "curator" }, payload.Select(kv => kv.Key).ToArray());
+        Assert.Equal("curator required", Rejected(CurationDeskWrites.RosterRetire, "{}"));
+        Assert.Equal("curator required", Rejected(CurationDeskWrites.RosterRetire, "{\"curator\":\"..\"}"));
+    }
+
+    [Fact]
+    public void TheRosterListCarriesNothingTheCallerSent()
+    {
+        var payload = Ok(CurationDeskWrites.RosterList, "{\"limit\":5,\"role\":\"admin\",\"include_retired\":true}");
+        Assert.Equal(new[] { "username" }, payload.Select(kv => kv.Key).ToArray());
     }
 
     [Fact]

@@ -430,6 +430,18 @@ public static partial class PrivateApi
     public static Task CurationDeskCursor(HttpContext ctx) =>
         ServeDeskWrite(ctx, CurationDeskWrites.Cursor);
 
+    // POST /private-api/curation-desk/roster-list
+    public static Task CurationDeskRosterList(HttpContext ctx) =>
+        ServeDeskWrite(ctx, CurationDeskWrites.RosterList);
+
+    // POST /private-api/curation-desk/roster-set
+    public static Task CurationDeskRosterSet(HttpContext ctx) =>
+        ServeDeskWrite(ctx, CurationDeskWrites.RosterSet);
+
+    // POST /private-api/curation-desk/roster-retire
+    public static Task CurationDeskRosterRetire(HttpContext ctx) =>
+        ServeDeskWrite(ctx, CurationDeskWrites.RosterRetire);
+
     // POST /private-api/curation-desk/recommend-meta
     public static Task CurationDeskRecommendMeta(HttpContext ctx) =>
         ServeDeskWrite(ctx, CurationDeskWrites.RecommendMeta);
@@ -749,6 +761,13 @@ public static class CurationDeskWrites
     public static readonly IReadOnlySet<string> DismissActions = new HashSet<string> { "dismiss", "restore" };
     public static readonly IReadOnlySet<string> UaClasses = new HashSet<string> { "web", "mobile" };
     public static readonly IReadOnlySet<string> RosterSorts = new HashSet<string> { "queue", "newest", "unique", "random" };
+    /// <summary>The roles the backend's CHECK constraint accepts (spec 5.7).</summary>
+    public static readonly IReadOnlySet<string> Roles = new HashSet<string> { "admin", "mod", "curator", "trial" };
+    /// <summary>The per-curator trailing rules, as Hive vote weights (100 = 1%).</summary>
+    public static readonly string[] RuleWeightKeys = { "min_weight", "max_weight", "waves_only_below" };
+    public const int MaxVoteWeight = 10000;
+    /// <summary>The backend keeps a curator note in a varchar(200).</summary>
+    public const int MaxCuratorNoteLength = 200;
     /// <summary>The four event types erobot pushes (spec 7.2).</summary>
     public static readonly IReadOnlySet<string> IngestTypes = new HashSet<string> { "post", "vote", "curator_vote", "flag" };
     /// <summary>The backend keeps the event id in a varchar(200).</summary>
@@ -799,6 +818,20 @@ public static class CurationDeskWrites
     public static readonly Route MarkClear = new("curation/desk/marks/clear", new[] { "author", "permlink" });
 
     public static readonly Route Marks = new("curation/desk/marks/list", new[] { "state", "cursor", "limit" });
+
+    /// <summary>
+    /// The roster write routes, all three admin-only upstream. They are POSTs rather
+    /// than an extension of the cached GET because the private view carries notes and
+    /// retired rows, and because a write must never be edge-cacheable. `rules` is the
+    /// one object here: unlike a read filter, an unknown key in it is refused rather
+    /// than dropped, so an admin is never told a rule was saved when it was discarded.
+    /// </summary>
+    public static readonly Route RosterList = new("curation/desk/roster/list", Array.Empty<string>());
+
+    public static readonly Route RosterSet = new("curation/desk/roster/set",
+        new[] { "curator", "role", "rules", "note" });
+
+    public static readonly Route RosterRetire = new("curation/desk/roster/retire", new[] { "curator" });
 
     public static readonly Route Cursor = new("curation/desk/cursors", new[] { "post_id", "action", "reason" });
 
@@ -1051,6 +1084,56 @@ public static class CurationDeskWrites
         if (ReferenceEquals(route, RecommendationDismiss))
         {
             return RequireAuthorPermlink(body) ?? RequireOneOf(body, "action", DismissActions);
+        }
+        if (ReferenceEquals(route, RosterSet))
+        {
+            if (body.Str("curator") is not { } curator || !HiveNames.IsAccountName(curator))
+            {
+                return "curator required";
+            }
+            var roleError = RequireOneOf(body, "role", Roles);
+            if (roleError != null) return roleError;
+            if (body.TryGetPropertyValue("note", out var note) && note is not null
+                && body.Str("note") is not { Length: <= MaxCuratorNoteLength })
+            {
+                return "invalid note";
+            }
+            if (body.TryGetPropertyValue("rules", out var rules) && rules is not null)
+            {
+                if (rules is not JsonObject ruleObject)
+                {
+                    return "rules must be an object";
+                }
+                foreach (var rule in ruleObject)
+                {
+                    if (rule.Key == "trail")
+                    {
+                        if (rule.Value?.GetValueKind() is not (JsonValueKind.True or JsonValueKind.False))
+                        {
+                            return "trail must be true or false";
+                        }
+                        continue;
+                    }
+                    if (Array.IndexOf(RuleWeightKeys, rule.Key) < 0)
+                    {
+                        return $"unknown rule: {rule.Key}";
+                    }
+                    if (rule.Value is not JsonValue weightValue
+                        || weightValue.GetValueKind() is not JsonValueKind.Number
+                        || !weightValue.TryGetValue<int>(out var weight)
+                        || weight < 0 || weight > MaxVoteWeight)
+                    {
+                        return $"{rule.Key} must be a vote weight between 0 and {MaxVoteWeight}";
+                    }
+                }
+            }
+            return null;
+        }
+        if (ReferenceEquals(route, RosterRetire))
+        {
+            return body.Str("curator") is { } name && HiveNames.IsAccountName(name)
+                ? null
+                : "curator required";
         }
         if (ReferenceEquals(route, Ingest))
         {
