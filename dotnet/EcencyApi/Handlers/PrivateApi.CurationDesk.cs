@@ -1093,12 +1093,18 @@ public static class CurationDeskWrites
             }
             var roleError = RequireOneOf(body, "role", Roles);
             if (roleError != null) return roleError;
+            // varchar(200) counts CHARACTERS and Python's len() counts code points, but
+            // string.Length counts UTF-16 code units: 200 emoji measure 400 here and would
+            // be refused by the fence though the column accepts them. Count runes instead.
             if (body.TryGetPropertyValue("note", out var note) && note is not null
-                && body.Str("note") is not { Length: <= MaxCuratorNoteLength })
+                && (body.Str("note") is not { } text
+                    || text.EnumerateRunes().Count() > MaxCuratorNoteLength))
             {
                 return "invalid note";
             }
-            if (body.TryGetPropertyValue("rules", out var rules) && rules is not null)
+            // A PRESENT `rules` must be an object, null included. `CopyIfPresent` forwards
+            // a null through the allowlist, and the fence should say what the contract says.
+            if (body.TryGetPropertyValue("rules", out var rules))
             {
                 if (rules is not JsonObject ruleObject)
                 {

@@ -597,6 +597,32 @@ public class CurationDeskPayloadTests
     }
 
     [Fact]
+    public void ANoteIsMeasuredTheWayTheColumnMeasuresIt()
+    {
+        // varchar(200) counts characters and Python's len() counts code points, but
+        // string.Length counts UTF-16 code units, so 200 emoji measure 400 and a note the
+        // column would have accepted was refused here.
+        var emoji = string.Concat(Enumerable.Repeat("\U0001F600", 200));
+        Assert.Equal(400, emoji.Length);
+        Assert.True(Ok(CurationDeskWrites.RosterSet,
+            "{\"curator\":\"bob\",\"role\":\"curator\",\"note\":\"" + emoji + "\"}").ContainsKey("note"));
+        Assert.Equal("invalid note", Rejected(CurationDeskWrites.RosterSet,
+            "{\"curator\":\"bob\",\"role\":\"curator\",\"note\":\"" + emoji + "\U0001F600\"}"));
+    }
+
+    [Fact]
+    public void APresentButNullRulesIsRefusedRatherThanForwarded()
+    {
+        // CopyIfPresent forwards a null through the allowlist, so "rules": null would
+        // travel upstream while the fence claimed every rules value is an object.
+        Assert.Equal("rules must be an object", Rejected(CurationDeskWrites.RosterSet,
+            "{\"curator\":\"bob\",\"role\":\"curator\",\"rules\":null}"));
+        // absent is still absent: that is how an admin clears every rule
+        Assert.False(Ok(CurationDeskWrites.RosterSet,
+            "{\"curator\":\"bob\",\"role\":\"curator\"}").ContainsKey("rules"));
+    }
+
+    [Fact]
     public void ARetireCarriesNothingButTheCurator()
     {
         var payload = Ok(CurationDeskWrites.RosterRetire, "{\"curator\":\"bob\",\"role\":\"admin\",\"force\":true}");
