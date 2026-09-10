@@ -188,6 +188,9 @@ public static partial class Routes
         app.MapPost("/private-api/curation-desk/mark-clear", PrivateApi.CurationDeskMarkClear);
         app.MapPost("/private-api/curation-desk/marks", PrivateApi.CurationDeskMarks);
         app.MapPost("/private-api/curation-desk/cursor", PrivateApi.CurationDeskCursor);
+        app.MapPost("/private-api/curation-desk/roster-list", PrivateApi.CurationDeskRosterList);
+        app.MapPost("/private-api/curation-desk/roster-set", PrivateApi.CurationDeskRosterSet);
+        app.MapPost("/private-api/curation-desk/roster-retire", PrivateApi.CurationDeskRosterRetire);
         app.MapPost("/private-api/curation-desk/recommend-meta", PrivateApi.CurationDeskRecommendMeta);
         app.MapPost("/private-api/curation-desk/recommendation-dismiss", PrivateApi.CurationDeskRecommendationDismiss);
         app.MapPost("/private-api/curation-desk/ingest", PrivateApi.CurationDeskIngest);

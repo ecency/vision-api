@@ -258,5 +258,9 @@ internal static class CurationDeskTestSupport
         yield return ("recommendation-dismiss", PrivateApi.CurationDeskRecommendationDismiss, "{" + code + ",\"author\":\"bob\",\"permlink\":\"p\",\"action\":\"dismiss\"}");
         yield return ("ingest", PrivateApi.CurationDeskIngest,
             "{" + code + ",\"v\":1,\"type\":\"flag\",\"id\":\"flag:bob/p:hivewatchers\",\"ts\":\"2026-09-05T10:00:00Z\",\"attempts\":0,\"payload\":{\"author\":\"bob\",\"permlink\":\"p\",\"weight\":-10000}}");
+        yield return ("roster-list", PrivateApi.CurationDeskRosterList, "{" + code + "}");
+        yield return ("roster-set", PrivateApi.CurationDeskRosterSet,
+            "{" + code + ",\"curator\":\"bob\",\"role\":\"curator\"}");
+        yield return ("roster-retire", PrivateApi.CurationDeskRosterRetire, "{" + code + ",\"curator\":\"bob\"}");
     }
 }
