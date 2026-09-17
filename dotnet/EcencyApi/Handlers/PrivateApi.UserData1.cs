@@ -41,6 +41,22 @@ public static partial class PrivateApi
             string.Equals(requestedUser, validatedUsername, StringComparison.OrdinalIgnoreCase));
     }
 
+    /// <summary>
+    /// Whether a device request may act on `requestedUsername`. A push registration
+    /// belongs to the account the code was issued for, so the device endpoints only
+    /// accept that account. Same case rule as ResolveNotificationsTarget.
+    /// </summary>
+    public static bool IsOwnDeviceRequest(string? validatedUsername, string? requestedUsername) =>
+        !string.IsNullOrEmpty(validatedUsername)
+        && string.Equals(requestedUsername, validatedUsername, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Signed-code validation for the device routes, replaceable for tests (no chain RPC).</summary>
+    internal static Func<JsonObject, Task<string?>> DeviceValidateCode = ValidateCode;
+
+    /// <summary>The device routes' upstream call, replaceable so tests can observe it.</summary>
+    internal static Func<string, HttpMethod, JsonNode?, Task<UpstreamResponse>> DeviceUpstream =
+        (endpoint, method, payload) => ApiClient.ApiRequest(endpoint, method, null, payload);
+
     /// <summary>Header enotify reads the shared secret from.</summary>
     public const string EnotifyInternalTokenHeader = "X-Ecency-Internal-Token";
 
@@ -193,37 +209,49 @@ public static partial class PrivateApi
     public static async Task RegisterDevice(HttpContext ctx)
     {
         var body = await ctx.ReadBody();
-        var authedUsername = await ValidateCode(body);
+        var authedUsername = await DeviceValidateCode(body);
         if (string.IsNullOrEmpty(authedUsername))
         {
             await ctx.SendText(401, "Unauthorized");
             return;
         }
 
-        // Payload takes the fields from the request body, not the authed user.
+        if (!IsOwnDeviceRequest(authedUsername, body.Str("username")))
+        {
+            await ctx.SendText(403, "Forbidden");
+            return;
+        }
+
+        // Payload takes the fields from the request body; username matches the authed user.
         var data = new JsonObject();
         UserData1Helpers.CopyIfPresent(data, body, "username");
         UserData1Helpers.CopyIfPresent(data, body, "token");
         UserData1Helpers.CopyIfPresent(data, body, "system");
         UserData1Helpers.CopyIfPresent(data, body, "allows_notify");
         UserData1Helpers.CopyIfPresent(data, body, "notify_types");
-        await Upstream.Pipe(ApiClient.ApiRequest("rgstrmbldvc/", HttpMethod.Post, null, data), ctx);
+        await Upstream.Pipe(DeviceUpstream("rgstrmbldvc/", HttpMethod.Post, data), ctx);
     }
 
     // POST ^/private-api/detail-device$
     public static async Task DetailDevice(HttpContext ctx)
     {
         var body = await ctx.ReadBody();
-        var authedUsername = await ValidateCode(body);
+        var authedUsername = await DeviceValidateCode(body);
         if (string.IsNullOrEmpty(authedUsername))
         {
             await ctx.SendText(401, "Unauthorized");
             return;
         }
 
+        if (!IsOwnDeviceRequest(authedUsername, body.Str("username")))
+        {
+            await ctx.SendText(403, "Forbidden");
+            return;
+        }
+
         var username = UserData1Helpers.TemplateOf(body, "username");
         var token = UserData1Helpers.TemplateOf(body, "token");
-        await Upstream.Pipe(ApiClient.ApiRequest($"mbldvcdtl/{username}/{token}", HttpMethod.Get), ctx);
+        await Upstream.Pipe(DeviceUpstream($"mbldvcdtl/{username}/{token}", HttpMethod.Get, null), ctx);
     }
 
     // POST ^/private-api/images$
