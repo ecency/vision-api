@@ -5,38 +5,48 @@ using Xunit;
 namespace EcencyApi.Tests;
 
 /// <summary>
-/// A HiveSigner-style message typed "login" proves who signed it and nothing
-/// more: HiveSigner answers /api/me for one and refuses it everywhere else, and
-/// the Ecency clients never send one (wallet logins send "code", HiveSigner
-/// issues "posting" for the scopes they request). Token validation refuses it
-/// before any key lookup, and leaves every other shape to the signature checks.
+/// A private-API session is a token issued to the Ecency app: a "code" the
+/// apps sign with a key they hold, or the "posting" token HiveSigner gives for
+/// one. Anything else signed by the same keys is refused before any key
+/// lookup: another app's token, a sign-in proof typed "login", a signed
+/// message with no type at all.
 /// </summary>
 public class TokenTypeTests
 {
     private static JsonNode? Parse(string json) => JsonNode.Parse(json);
 
-    [Fact]
-    public void LoginTypedMessageIsRefused()
+    [Theory]
+    [InlineData("""{"type":"posting","app":"ecency.app"}""")]
+    [InlineData("""{"type":"code","app":"ecency.app"}""")]
+    [InlineData("""{"app":"ecency.app","type":"code"}""")]
+    [InlineData("""{"type":"code","app":"ecency.app","extra":1}""")]
+    public void EcencyCodesAndPostingTokensAreSessions(string signedMessage)
     {
-        Assert.True(PrivateApi.IsLoginOnlyMessage(Parse("""{"type":"login","app":"ecency.app"}""")));
-        Assert.True(PrivateApi.IsLoginOnlyMessage(
-            Parse("""{"type":"login","app":"ecency.app","audience":"honeyback://hive"}""")));
+        Assert.True(PrivateApi.IsEcencySession(Parse(signedMessage)));
     }
 
     [Theory]
-    [InlineData("""{"type":"code","app":"ecency.app"}""")]
-    [InlineData("""{"type":"posting","app":"ecency.app"}""")]
+    [InlineData("""{"type":"login","app":"ecency.app"}""")]
+    [InlineData("""{"type":"login","app":"ecency.app","audience":"someapp://callback"}""")]
     [InlineData("""{"type":"offline","app":"ecency.app"}""")]
     [InlineData("""{"type":"refresh","app":"ecency.app"}""")]
-    [InlineData("""{"type":"Login","app":"ecency.app"}""")]
+    [InlineData("""{"type":"Posting","app":"ecency.app"}""")]
+    [InlineData("""{"type":"posting","app":"another.app"}""")]
+    [InlineData("""{"type":"code","app":"another.app"}""")]
+    [InlineData("""{"type":"posting","app":"Ecency.app"}""")]
+    [InlineData("""{"type":"posting"}""")]
     [InlineData("""{"app":"ecency.app"}""")]
-    [InlineData("""{"type":null}""")]
-    [InlineData("""{"type":1}""")]
-    [InlineData("""{"type":["login"]}""")]
-    [InlineData("""["login"]""")]
+    [InlineData("""{"message":"hello"}""")]
+    [InlineData("""{"type":"posting","app":null}""")]
+    [InlineData("""{"type":null,"app":"ecency.app"}""")]
+    [InlineData("""{"type":1,"app":"ecency.app"}""")]
+    [InlineData("""{"type":["posting"],"app":"ecency.app"}""")]
+    [InlineData("""{"type":"posting","app":["ecency.app"]}""")]
+    [InlineData("""["posting","ecency.app"]""")]
+    [InlineData("\"posting\"")]
     [InlineData("null")]
-    public void EverythingElseIsLeftToTheSignatureChecks(string signedMessage)
+    public void EverythingElseIsRefused(string signedMessage)
     {
-        Assert.False(PrivateApi.IsLoginOnlyMessage(Parse(signedMessage)));
+        Assert.False(PrivateApi.IsEcencySession(Parse(signedMessage)));
     }
 }

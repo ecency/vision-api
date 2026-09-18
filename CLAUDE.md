@@ -118,6 +118,12 @@ Two cheap checks before assuming a token problem:
   100% 401 while its siblings are at 100% success is not an authentication bug
   in the usual sense.
 
+`ValidateCode` accepts only a token issued to the Ecency app
+(`signed_message.app` is `ecency.app`) and typed `code` or `posting`. Anything
+else is refused before the account is read, however valid its signature: a
+client signed in as another HiveSigner app, a `login` proof, a signed message
+without a type.
+
 Handlers using `RequireAuthedUsername` differ from those calling `ValidateCode`
 directly only in that the former sends the 401 for you - the validation is the
 same, so it is never the explanation for one route failing while another passes.

@@ -116,16 +116,23 @@ public static partial class PrivateApi
 
             if (!signedMessageTypeofObject || author is null || !timestampIsNumber || signature is null)
             {
-                Console.WriteLine($"Invalid token structure {JsJson.Stringify(decoded)}");
+                // names what is missing, never the token: a real one carries a signature
+                Console.WriteLine(
+                    $"Invalid token structure: signed_message={signedMessageTypeofObject} author={author is not null} timestamp={timestampIsNumber} signature={signature is not null}");
                 return null;
             }
 
-            // A message typed "login" only says who signed it. HiveSigner answers
-            // /api/me for one and refuses everything else, and no Ecency client
-            // ever sends one here, so it is not a session here either. Decided
-            // before any node lookup: the shape alone settles it.
-            if (IsLoginOnlyMessage(signedMessage))
+            // A session is a token Ecency's own clients hold: one issued to the
+            // Ecency app, as a code or as the posting token HiveSigner exchanges
+            // it for. Nothing else signed by the same keys is one: another app's
+            // token, a sign-in proof ("login"), a signed message. Decided before
+            // any node lookup: the shape alone settles it.
+            if (!IsEcencySession(signedMessage))
             {
+                // so a client locked out by this shows up in the logs; the labels only
+                var obj = signedMessage as JsonObject;
+                Console.WriteLine(
+                    $"Token refused as a session: app={LogLabel(obj, "app")} type={LogLabel(obj, "type")}");
                 return null;
             }
 
@@ -144,7 +151,7 @@ public static partial class PrivateApi
             var digest = HiveCrypto.Sha256Utf8(rawMessage);
             var recoveredPubKey = HiveCrypto.RecoverPublicKey(signature, digest);
 
-            var accounts = await HiveClients.Default.GetAccounts(new[] { author })
+            var accounts = await ValidationAccounts(new[] { author })
                 ?? throw new InvalidOperationException("getAccounts result is not iterable");
             var account = accounts.Count > 0 ? accounts[0] : null;
             if (account is null)
@@ -167,7 +174,7 @@ public static partial class PrivateApi
             {
                 try
                 {
-                    var hsAccounts = await HiveClients.Default.GetAccounts(new[] { "hivesigner" })
+                    var hsAccounts = await ValidationAccounts(new[] { "hivesigner" })
                         ?? throw new InvalidOperationException("getAccounts result is not iterable");
                     // TS caches whatever destructures out — undefined included —
                     // and stamps the time either way.
@@ -201,17 +208,47 @@ public static partial class PrivateApi
         }
     }
 
+    /// <summary>Forgets the cached @hivesigner account (tests).</summary>
+    internal static void ResetHivesignerCache()
+    {
+        _hivesignerAccountCache = null;
+        _hivesignerCacheTime = 0;
+    }
+
+    /// <summary>The chain read behind token validation (tests answer it).</summary>
+    internal static Func<IEnumerable<string?>, Task<JsonArray?>> ValidationAccounts =
+        names => HiveClients.Default.GetAccounts(names);
+
+    /// <summary>The HiveSigner app id Ecency's clients sign in as.</summary>
+    internal const string EcencyApp = "ecency.app";
+
     /// <summary>
-    /// True for a signed_message whose type is the string "login": a proof of
-    /// identity for another app, never a session. Anything else, including a
-    /// missing or non-string type, is left to the signature checks as before.
+    /// True for a signed_message issued to the Ecency app as a "code" (what
+    /// the apps sign with a key they hold) or a "posting" token (what
+    /// HiveSigner gives for one): the two things Ecency's clients send as their
+    /// session. Everything else is refused, including a missing or non-string
+    /// type or app.
     /// </summary>
-    internal static bool IsLoginOnlyMessage(JsonNode? signedMessage) =>
+    internal static bool IsEcencySession(JsonNode? signedMessage) =>
         signedMessage is JsonObject obj
-        && obj.TryGetPropertyValue("type", out var typeNode)
-        && typeNode is JsonValue typeValue
-        && JsVal.TryGetStringLenient(typeValue, out var type)
-        && type == "login";
+        && StringField(obj, "app") == EcencyApp
+        && StringField(obj, "type") is "posting" or "code";
+
+    /// <summary>A signed_message label for a log line: short, printable, never the value of anything else.</summary>
+    private static string LogLabel(JsonObject? obj, string name)
+    {
+        var text = obj is null ? null : StringField(obj, name);
+        if (text is null) return "-";
+        var clean = new string(text.Where(c => c is >= ' ' and <= '~').Take(40).ToArray());
+        return clean.Length == 0 ? "?" : clean;
+    }
+
+    private static string? StringField(JsonObject obj, string name) =>
+        obj.TryGetPropertyValue(name, out var node)
+        && node is JsonValue value
+        && JsVal.TryGetStringLenient(value, out var text)
+            ? text
+            : null;
 
     /// <summary>key_auths.map(([key]) => key) — throws on non-array input like .map on a non-array.</summary>
     private static List<string?> MapKeyAuths(JsonNode? keyAuths)
