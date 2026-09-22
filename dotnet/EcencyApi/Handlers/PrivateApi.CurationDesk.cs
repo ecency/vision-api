@@ -1283,9 +1283,20 @@ public static class CurationDeskWrites
         }
         if (ReferenceEquals(route, ApplicationWindow))
         {
-            if (body.Field("open")?.GetValueKind() is not (JsonValueKind.True or JsonValueKind.False))
+            // Every field here is optional and absent means "leave it" upstream. One
+            // screen carries four controls that all land on one settings row, so a save
+            // about the quorum that also sent `open` could undo another admin's close and
+            // reopen applications to readers who act on it.
+            if (body.ContainsKey("open")
+                && body.Field("open")?.GetValueKind() is not (JsonValueKind.True or JsonValueKind.False))
             {
                 return "open must be true or false";
+            }
+            // A call that sets nothing is a client bug, and upstream refuses it too.
+            if (!body.ContainsKey("open") && !body.ContainsKey("message")
+                && !body.ContainsKey("quorum") && !body.ContainsKey("term_days"))
+            {
+                return "nothing to set";
             }
             if (body.TryGetPropertyValue("message", out var message) && message is not null
                 && (body.Str("message") is not { } messageText
