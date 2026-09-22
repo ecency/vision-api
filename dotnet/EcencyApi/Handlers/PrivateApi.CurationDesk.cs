@@ -824,9 +824,11 @@ public static class CurationDeskWrites
     public static readonly IReadOnlySet<string> ApplicationRoles =
         new HashSet<string> { "curator", "mod" };
     /// <summary>How a reviewer may answer an application. An objection is a stop, not a
-    /// veto: upstream it keeps the automatic grant shut and leaves the case to an admin.</summary>
+    /// veto: upstream it keeps the automatic grant shut and leaves the case to an admin.
+    /// `abstain` is how a stop is lifted, so that stopping objecting does not force
+    /// somebody to endorse instead.</summary>
     public static readonly IReadOnlySet<string> ApplicationVotes =
-        new HashSet<string> { "endorse", "object" };
+        new HashSet<string> { "endorse", "object", "abstain" };
     public const int MaxApplicationNoteLength = 500;
     public const int MaxApplicationMessageLength = 200;
     public const int MaxApplicationListLimit = 200;

@@ -767,12 +767,24 @@ public class CurationDeskPayloadTests
     [InlineData("{\"applicant\":\"Bob\",\"vote\":\"endorse\"}", "applicant required")]
     [InlineData("{\"applicant\":\"bob\"}", "invalid vote")]
     [InlineData("{\"applicant\":\"bob\",\"vote\":\"yes\"}", "invalid vote")]
+    [InlineData("{\"applicant\":\"bob\",\"vote\":\"withdraw\"}", "invalid vote")]
     [InlineData("{\"applicant\":\"bob\",\"vote\":\"ENDORSE\"}", "invalid vote")]
     [InlineData("{\"applicant\":\"bob\",\"vote\":null}", "invalid vote")]
     [InlineData("{\"applicant\":\"bob\",\"vote\":true}", "invalid vote")]
     public void AMalformedVoteIsRefusedRatherThanTrimmed(string json, string expected)
     {
         Assert.Equal(expected, Rejected(CurationDeskWrites.ApplicationVote, json));
+    }
+
+    [Fact]
+    public void AStopCanBeLiftedWithoutBecomingAnEndorsement()
+    {
+        // Without a third value the only way out of an objection is to endorse, which
+        // makes somebody who merely stopped objecting add a vote toward the quorum.
+        Assert.Contains("abstain", CurationDeskWrites.ApplicationVotes);
+        Assert.Equal(new[] { "username", "applicant", "vote" },
+            Ok(CurationDeskWrites.ApplicationVote, "{\"applicant\":\"bob\",\"vote\":\"abstain\"}")
+                .Select(kv => kv.Key).ToArray());
     }
 
     [Fact]
