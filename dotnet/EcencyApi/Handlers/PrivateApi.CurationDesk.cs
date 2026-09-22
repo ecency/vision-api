@@ -454,6 +454,33 @@ public static partial class PrivateApi
     public static Task CurationDeskIngest(HttpContext ctx) =>
         ServeDeskWrite(ctx, CurationDeskWrites.Ingest);
 
+    // POST /private-api/curation-desk/application-apply
+    // Guest curator applications. Apply, mine and withdraw carry no role: the
+    // applicant is by definition not on the roster yet, and the backend decides
+    // what each account may do with its own application.
+    public static Task CurationDeskApplicationApply(HttpContext ctx) =>
+        ServeDeskWrite(ctx, CurationDeskWrites.ApplicationApply);
+
+    // POST /private-api/curation-desk/application-mine
+    public static Task CurationDeskApplicationMine(HttpContext ctx) =>
+        ServeDeskWrite(ctx, CurationDeskWrites.ApplicationMine);
+
+    // POST /private-api/curation-desk/application-withdraw
+    public static Task CurationDeskApplicationWithdraw(HttpContext ctx) =>
+        ServeDeskWrite(ctx, CurationDeskWrites.ApplicationWithdraw);
+
+    // POST /private-api/curation-desk/application-list
+    public static Task CurationDeskApplicationList(HttpContext ctx) =>
+        ServeDeskWrite(ctx, CurationDeskWrites.ApplicationList);
+
+    // POST /private-api/curation-desk/application-decide
+    public static Task CurationDeskApplicationDecide(HttpContext ctx) =>
+        ServeDeskWrite(ctx, CurationDeskWrites.ApplicationDecide);
+
+    // POST /private-api/curation-desk/application-window
+    public static Task CurationDeskApplicationWindow(HttpContext ctx) =>
+        ServeDeskWrite(ctx, CurationDeskWrites.ApplicationWindow);
+
     // POST /private-api/curation-desk/recommendation-dismiss
     public static Task CurationDeskRecommendationDismiss(HttpContext ctx) =>
         ServeDeskWrite(ctx, CurationDeskWrites.RecommendationDismiss);
@@ -774,6 +801,28 @@ public static class CurationDeskWrites
     public const int MaxIngestIdLength = 200;
 
     /// <summary>
+    /// Guest curator applications (spec 6.6). The three questions the apply form asks, each
+    /// with the length the backend caps it at. Counted in RUNES, not UTF-16 units, for the
+    /// reason the curator note is: the column counts characters and so does Python's len().
+    /// </summary>
+    public static readonly (string Key, int Max)[] ApplicationAnswers =
+    {
+        ("motivation", 500), ("availability", 200), ("pick", 500),
+    };
+    public static readonly IReadOnlySet<string> ApplicationStates =
+        new HashSet<string> { "open", "shortlisted", "accepted", "declined", "withdrawn" };
+    /// <summary>What an admin may set. `open` is not a decision and `withdrawn` is the applicant's.</summary>
+    public static readonly IReadOnlySet<string> ApplicationDecisions =
+        new HashSet<string> { "shortlisted", "accepted", "declined" };
+    /// <summary>Roles an acceptance may grant. `admin` is deliberately absent: desk keys are
+    /// not handed out by a form, and the backend refuses it too.</summary>
+    public static readonly IReadOnlySet<string> ApplicationRoles =
+        new HashSet<string> { "trial", "curator", "mod" };
+    public const int MaxApplicationNoteLength = 500;
+    public const int MaxApplicationMessageLength = 200;
+    public const int MaxApplicationListLimit = 200;
+
+    /// <summary>
     /// Views the roster feed takes: the public ones plus `excluded`, which is
     /// the only place an excluded row is ever listed.
     /// </summary>
@@ -847,6 +896,34 @@ public static class CurationDeskWrites
     /// every field of it before storing anything.
     /// </summary>
     public static readonly Route Ingest = new("curation/desk/ingest", new[] { "v", "type", "id", "ts", "payload" });
+
+    /// <summary>
+    /// Guest curator applications (spec 6.6). Apply, mine and withdraw are open to any
+    /// signed-in account; list, decide and window are admin-only upstream, like the roster
+    /// writes above, and for the same reason they are POSTs: the fields are private.
+    /// </summary>
+    public static readonly Route ApplicationApply = new("curation/desk/applications/apply",
+        new[] { "motivation", "availability", "pick" });
+
+    public static readonly Route ApplicationMine = new("curation/desk/applications/mine",
+        Array.Empty<string>());
+
+    public static readonly Route ApplicationWithdraw = new("curation/desk/applications/withdraw",
+        Array.Empty<string>());
+
+    public static readonly Route ApplicationList = new("curation/desk/applications/list",
+        new[] { "state", "limit" });
+
+    /// <summary>
+    /// The account being decided on is `applicant`. It can never be `username`: that key
+    /// carries the validated caller and Build() refuses to copy a client's version of it,
+    /// so an admin reusing it would only ever decide on themselves.
+    /// </summary>
+    public static readonly Route ApplicationDecide = new("curation/desk/applications/decide",
+        new[] { "applicant", "state", "role", "note" });
+
+    public static readonly Route ApplicationWindow = new("curation/desk/applications/window",
+        new[] { "open", "message" });
 
     /// <summary>
     /// The upstream body: the validated username plus the route's whitelisted
@@ -1084,6 +1161,73 @@ public static class CurationDeskWrites
         if (ReferenceEquals(route, RecommendationDismiss))
         {
             return RequireAuthorPermlink(body) ?? RequireOneOf(body, "action", DismissActions);
+        }
+        if (ReferenceEquals(route, ApplicationApply))
+        {
+            foreach (var (key, max) in ApplicationAnswers)
+            {
+                if (body.Str(key) is not { } answer || answer.AsSpan().Trim().Length == 0)
+                {
+                    return $"{key} required";
+                }
+                if (answer.EnumerateRunes().Count() > max)
+                {
+                    return $"{key} is at most {max} characters";
+                }
+            }
+            return null;
+        }
+        if (ReferenceEquals(route, ApplicationList))
+        {
+            if (body.ContainsKey("state"))
+            {
+                var stateError = RequireOneOf(body, "state", ApplicationStates);
+                if (stateError != null) return stateError;
+            }
+            if (body.TryGetPropertyValue("limit", out var limit) && limit is not null)
+            {
+                if (limit is not JsonValue take || take.GetValueKind() is not JsonValueKind.Number
+                    || !take.TryGetValue<int>(out var rows) || rows < 1 || rows > MaxApplicationListLimit)
+                {
+                    return $"limit must be a whole number from 1 to {MaxApplicationListLimit}";
+                }
+            }
+            return null;
+        }
+        if (ReferenceEquals(route, ApplicationDecide))
+        {
+            if (body.Str("applicant") is not { } applicant || !HiveNames.IsAccountName(applicant))
+            {
+                return "applicant required";
+            }
+            var decision = RequireOneOf(body, "state", ApplicationDecisions);
+            if (decision != null) return decision;
+            if (body.ContainsKey("role"))
+            {
+                var roleError = RequireOneOf(body, "role", ApplicationRoles);
+                if (roleError != null) return roleError;
+            }
+            if (body.TryGetPropertyValue("note", out var decisionNote) && decisionNote is not null
+                && (body.Str("note") is not { } noteText
+                    || noteText.EnumerateRunes().Count() > MaxApplicationNoteLength))
+            {
+                return "invalid note";
+            }
+            return null;
+        }
+        if (ReferenceEquals(route, ApplicationWindow))
+        {
+            if (body.Field("open")?.GetValueKind() is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                return "open must be true or false";
+            }
+            if (body.TryGetPropertyValue("message", out var message) && message is not null
+                && (body.Str("message") is not { } messageText
+                    || messageText.EnumerateRunes().Count() > MaxApplicationMessageLength))
+            {
+                return "invalid message";
+            }
+            return null;
         }
         if (ReferenceEquals(route, RosterSet))
         {

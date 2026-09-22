@@ -262,5 +262,14 @@ internal static class CurationDeskTestSupport
         yield return ("roster-set", PrivateApi.CurationDeskRosterSet,
             "{" + code + ",\"curator\":\"bob\",\"role\":\"curator\"}");
         yield return ("roster-retire", PrivateApi.CurationDeskRosterRetire, "{" + code + ",\"curator\":\"bob\"}");
+        yield return ("application-apply", PrivateApi.CurationDeskApplicationApply,
+            "{" + code + ",\"motivation\":\"why\",\"availability\":\"evenings\",\"pick\":\"a post\"}");
+        yield return ("application-mine", PrivateApi.CurationDeskApplicationMine, "{" + code + "}");
+        yield return ("application-withdraw", PrivateApi.CurationDeskApplicationWithdraw, "{" + code + "}");
+        yield return ("application-list", PrivateApi.CurationDeskApplicationList, "{" + code + ",\"state\":\"open\"}");
+        yield return ("application-decide", PrivateApi.CurationDeskApplicationDecide,
+            "{" + code + ",\"applicant\":\"bob\",\"state\":\"accepted\",\"role\":\"trial\"}");
+        yield return ("application-window", PrivateApi.CurationDeskApplicationWindow,
+            "{" + code + ",\"open\":false,\"message\":\"back soon\"}");
     }
 }
