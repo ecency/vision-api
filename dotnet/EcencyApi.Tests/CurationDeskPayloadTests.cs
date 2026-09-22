@@ -887,14 +887,27 @@ public class CurationDeskPayloadTests
     }
 
     [Theory]
-    [InlineData("{}", "open must be true or false")]
-    [InlineData("{\"message\":\"back soon\"}", "open must be true or false")]
     [InlineData("{\"open\":\"false\"}", "open must be true or false")]
     [InlineData("{\"open\":0}", "open must be true or false")]
     [InlineData("{\"open\":null}", "open must be true or false")]
+    // Nothing at all is a client bug rather than a no-op, and upstream refuses it too.
+    [InlineData("{}", "nothing to set")]
     public void AWindowWithoutABooleanIsRefused(string json, string expected)
     {
         Assert.Equal(expected, Rejected(CurationDeskWrites.ApplicationWindow, json));
+    }
+
+    [Fact]
+    public void ASaveAboutOneFieldDoesNotHaveToCarryTheWindow()
+    {
+        // `open` decides whether readers can apply. A save about the wording or the
+        // numbers that carried it too could undo another admin's close, so absent has to
+        // be allowed here and read upstream as "leave it".
+        Assert.Equal(new[] { "username", "message" },
+            Ok(CurationDeskWrites.ApplicationWindow, "{\"message\":\"back soon\"}")
+                .Select(kv => kv.Key).ToArray());
+        Assert.Equal(new[] { "username", "quorum" },
+            Ok(CurationDeskWrites.ApplicationWindow, "{\"quorum\":4}").Select(kv => kv.Key).ToArray());
     }
 
     [Fact]
