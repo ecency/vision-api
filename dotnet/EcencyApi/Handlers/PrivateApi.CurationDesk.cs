@@ -1164,6 +1164,17 @@ public static class CurationDeskWrites
         }
         if (ReferenceEquals(route, ApplicationApply))
         {
+            // The desk refuses an answer key it does not know rather than storing the
+            // rest, so dropping one here would turn its 400 into a silent half-application:
+            // the applicant would be told their answers were sent, minus one.
+            foreach (var field in body)
+            {
+                if (field.Key is "code" or "username") continue;
+                if (Array.FindIndex(ApplicationAnswers, answer => answer.Key == field.Key) < 0)
+                {
+                    return $"unknown field: {field.Key}";
+                }
+            }
             foreach (var (key, max) in ApplicationAnswers)
             {
                 if (body.Str(key) is not { } answer || answer.AsSpan().Trim().Length == 0)
@@ -1184,7 +1195,11 @@ public static class CurationDeskWrites
                 var stateError = RequireOneOf(body, "state", ApplicationStates);
                 if (stateError != null) return stateError;
             }
-            if (body.TryGetPropertyValue("limit", out var limit) && limit is not null)
+            // A PRESENT limit is checked, null included: CopyIfPresent forwards a null
+            // through the allowlist, so `"limit": null` would travel upstream while the
+            // fence claimed every limit is a whole number in range (the same hole the
+            // roster's `rules` had).
+            if (body.TryGetPropertyValue("limit", out var limit))
             {
                 if (limit is not JsonValue take || take.GetValueKind() is not JsonValueKind.Number
                     || !take.TryGetValue<int>(out var rows) || rows < 1 || rows > MaxApplicationListLimit)

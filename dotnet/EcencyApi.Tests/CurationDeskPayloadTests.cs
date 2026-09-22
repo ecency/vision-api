@@ -647,11 +647,33 @@ public class CurationDeskPayloadTests
     {
         var payload = Ok(CurationDeskWrites.ApplicationApply,
             "{\"motivation\":\"why\",\"availability\":\"evenings\",\"pick\":\"a post\","
-            + "\"discord\":\"someone#1\",\"state\":\"accepted\",\"username\":\"boss\"}");
+            + "\"code\":\"as:alice\",\"username\":\"boss\"}");
         Assert.Equal(new[] { "username", "motivation", "availability", "pick" },
             payload.Select(kv => kv.Key).ToArray());
         // The caller is the validated account, never the one the body asked for.
         Assert.Equal("alice", payload["username"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("discord")]
+    [InlineData("state")]
+    [InlineData("role")]
+    public void AnUnknownApplicationFieldIsRefusedRatherThanDropped(string field)
+    {
+        // The desk answers 400 for a field it does not know, so dropping one here would
+        // turn that refusal into a silent half-application.
+        Assert.Equal($"unknown field: {field}", Rejected(CurationDeskWrites.ApplicationApply,
+            "{\"motivation\":\"why\",\"availability\":\"evenings\",\"pick\":\"a post\","
+            + $"\"{field}\":\"x\"}}"));
+    }
+
+    [Fact]
+    public void APresentButNullQueueLimitIsRefusedRatherThanForwarded()
+    {
+        Assert.Equal("limit must be a whole number from 1 to 200",
+            Rejected(CurationDeskWrites.ApplicationList, "{\"limit\":null}"));
+        // absent is still absent: that is how the backend's own default answers
+        Assert.False(Ok(CurationDeskWrites.ApplicationList, "{}").ContainsKey("limit"));
     }
 
     [Theory]

@@ -260,7 +260,10 @@ CURATION_DESK_ROUTES = [
 ] + [
     f"/private-api/curation-desk/{route}::{case}"
     for route in ("roster-feed", "tick", "mark", "mark-clear", "marks", "cursor",
-                  "recommend-meta", "recommendation-dismiss", "ingest")
+                  "recommend-meta", "recommendation-dismiss", "ingest",
+                  # Guest curator applications, added with the desk's apply page.
+                  "application-apply", "application-mine", "application-withdraw",
+                  "application-list", "application-decide", "application-window")
     for case in ("min", "pop", "badcode")
 ]
 
