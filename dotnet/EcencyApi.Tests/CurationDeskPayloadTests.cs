@@ -17,6 +17,9 @@ public class CurationDeskPayloadTests
         CurationDeskWrites.MarkClear, CurationDeskWrites.Marks, CurationDeskWrites.Cursor,
         CurationDeskWrites.RecommendMeta, CurationDeskWrites.RecommendationDismiss, CurationDeskWrites.Ingest,
         CurationDeskWrites.RosterList, CurationDeskWrites.RosterSet, CurationDeskWrites.RosterRetire,
+        CurationDeskWrites.ApplicationApply, CurationDeskWrites.ApplicationMine,
+        CurationDeskWrites.ApplicationWithdraw, CurationDeskWrites.ApplicationList,
+        CurationDeskWrites.ApplicationDecide, CurationDeskWrites.ApplicationWindow,
     };
 
     private const string IngestBody =
@@ -59,6 +62,12 @@ public class CurationDeskPayloadTests
             return "{" + forged + "\"curator\":\"bob\",\"role\":\"curator\"}";
         if (ReferenceEquals(route, CurationDeskWrites.RosterRetire))
             return "{" + forged + "\"curator\":\"bob\"}";
+        if (ReferenceEquals(route, CurationDeskWrites.ApplicationApply))
+            return "{" + forged + "\"motivation\":\"why\",\"availability\":\"evenings\",\"pick\":\"a post\"}";
+        if (ReferenceEquals(route, CurationDeskWrites.ApplicationDecide))
+            return "{" + forged + "\"applicant\":\"bob\",\"state\":\"declined\"}";
+        if (ReferenceEquals(route, CurationDeskWrites.ApplicationWindow))
+            return "{" + forged + "\"open\":true}";
         return "{" + forged + "\"limit\":5}";
     }
 
@@ -629,6 +638,156 @@ public class CurationDeskPayloadTests
         Assert.Equal(new[] { "username", "curator" }, payload.Select(kv => kv.Key).ToArray());
         Assert.Equal("curator required", Rejected(CurationDeskWrites.RosterRetire, "{}"));
         Assert.Equal("curator required", Rejected(CurationDeskWrites.RosterRetire, "{\"curator\":\"..\"}"));
+    }
+
+    // ---- guest curator applications ------------------------------------------
+
+    [Fact]
+    public void AnApplicationForwardsTheThreeAnswersAndNothingElse()
+    {
+        var payload = Ok(CurationDeskWrites.ApplicationApply,
+            "{\"motivation\":\"why\",\"availability\":\"evenings\",\"pick\":\"a post\","
+            + "\"code\":\"as:alice\",\"username\":\"boss\"}");
+        Assert.Equal(new[] { "username", "motivation", "availability", "pick" },
+            payload.Select(kv => kv.Key).ToArray());
+        // The caller is the validated account, never the one the body asked for.
+        Assert.Equal("alice", payload["username"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("discord")]
+    [InlineData("state")]
+    [InlineData("role")]
+    public void AnUnknownApplicationFieldIsRefusedRatherThanDropped(string field)
+    {
+        // The desk answers 400 for a field it does not know, so dropping one here would
+        // turn that refusal into a silent half-application.
+        Assert.Equal($"unknown field: {field}", Rejected(CurationDeskWrites.ApplicationApply,
+            "{\"motivation\":\"why\",\"availability\":\"evenings\",\"pick\":\"a post\","
+            + $"\"{field}\":\"x\"}}"));
+    }
+
+    [Fact]
+    public void APresentButNullQueueLimitIsRefusedRatherThanForwarded()
+    {
+        Assert.Equal("limit must be a whole number from 1 to 200",
+            Rejected(CurationDeskWrites.ApplicationList, "{\"limit\":null}"));
+        // absent is still absent: that is how the backend's own default answers
+        Assert.False(Ok(CurationDeskWrites.ApplicationList, "{}").ContainsKey("limit"));
+    }
+
+    [Theory]
+    [InlineData("{\"availability\":\"evenings\",\"pick\":\"a post\"}", "motivation required")]
+    [InlineData("{\"motivation\":\"   \",\"availability\":\"evenings\",\"pick\":\"a post\"}", "motivation required")]
+    [InlineData("{\"motivation\":\"why\",\"availability\":null,\"pick\":\"a post\"}", "availability required")]
+    [InlineData("{\"motivation\":\"why\",\"availability\":5,\"pick\":\"a post\"}", "availability required")]
+    [InlineData("{\"motivation\":\"why\",\"availability\":\"evenings\"}", "pick required")]
+    public void AnIncompleteApplicationIsRefused(string json, string expected)
+    {
+        Assert.Equal(expected, Rejected(CurationDeskWrites.ApplicationApply, json));
+    }
+
+    [Fact]
+    public void AnAnswerIsMeasuredTheWayTheColumnMeasuresIt()
+    {
+        var emoji = string.Concat(Enumerable.Repeat("\U0001F600", 200));
+        Assert.Equal(400, emoji.Length);
+        Assert.True(Ok(CurationDeskWrites.ApplicationApply,
+            "{\"motivation\":\"why\",\"availability\":\"" + emoji + "\",\"pick\":\"a post\"}")
+            .ContainsKey("availability"));
+        Assert.Equal("availability is at most 200 characters", Rejected(CurationDeskWrites.ApplicationApply,
+            "{\"motivation\":\"why\",\"availability\":\"" + emoji + "\U0001F600\",\"pick\":\"a post\"}"));
+    }
+
+    [Fact]
+    public void TheApplicantsOwnRoutesCarryNothingTheCallerSent()
+    {
+        foreach (var route in new[] { CurationDeskWrites.ApplicationMine, CurationDeskWrites.ApplicationWithdraw })
+        {
+            var payload = Ok(route, "{\"username\":\"boss\",\"id\":7,\"state\":\"accepted\"}");
+            Assert.Equal(new[] { "username" }, payload.Select(kv => kv.Key).ToArray());
+            Assert.Equal("alice", payload["username"]!.GetValue<string>());
+        }
+    }
+
+    [Fact]
+    public void ADecisionNamesTheApplicantInItsOwnField()
+    {
+        var payload = Ok(CurationDeskWrites.ApplicationDecide,
+            "{\"applicant\":\"bob\",\"state\":\"accepted\",\"role\":\"trial\",\"note\":\"guest curator\"}");
+        Assert.Equal(new[] { "username", "applicant", "state", "role", "note" },
+            payload.Select(kv => kv.Key).ToArray());
+        Assert.Equal("alice", payload["username"]!.GetValue<string>());
+        Assert.Equal("bob", payload["applicant"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("{\"state\":\"accepted\"}", "applicant required")]
+    [InlineData("{\"applicant\":\"Bob\",\"state\":\"accepted\"}", "applicant required")]
+    [InlineData("{\"applicant\":\"bob\\n\",\"state\":\"accepted\"}", "applicant required")]
+    [InlineData("{\"applicant\":\"bob\"}", "invalid state")]
+    [InlineData("{\"applicant\":\"bob\",\"state\":\"open\"}", "invalid state")]
+    [InlineData("{\"applicant\":\"bob\",\"state\":\"withdrawn\"}", "invalid state")]
+    [InlineData("{\"applicant\":\"bob\",\"state\":\"accepted\",\"role\":\"admin\"}", "invalid role")]
+    [InlineData("{\"applicant\":\"bob\",\"state\":\"accepted\",\"role\":null}", "invalid role")]
+    public void AMalformedDecisionIsRefusedRatherThanTrimmed(string json, string expected)
+    {
+        Assert.Equal(expected, Rejected(CurationDeskWrites.ApplicationDecide, json));
+    }
+
+    [Fact]
+    public void ANeverGrantedRoleCannotArriveThroughAnAcceptance()
+    {
+        // The seat an acceptance grants is a trial by default and a curator or mod at most.
+        // Admin runs the desk, so it is not something a form hands out.
+        Assert.DoesNotContain("admin", CurationDeskWrites.ApplicationRoles);
+    }
+
+    [Theory]
+    [InlineData("{\"state\":\"nonsense\"}", "invalid state")]
+    [InlineData("{\"limit\":0}", "limit must be a whole number from 1 to 200")]
+    [InlineData("{\"limit\":201}", "limit must be a whole number from 1 to 200")]
+    [InlineData("{\"limit\":\"50\"}", "limit must be a whole number from 1 to 200")]
+    [InlineData("{\"limit\":1.5}", "limit must be a whole number from 1 to 200")]
+    public void AMalformedQueueRequestIsRefused(string json, string expected)
+    {
+        Assert.Equal(expected, Rejected(CurationDeskWrites.ApplicationList, json));
+    }
+
+    [Fact]
+    public void TheQueueTakesAStateAndALimitAndNothingElse()
+    {
+        var payload = Ok(CurationDeskWrites.ApplicationList,
+            "{\"state\":\"open\",\"limit\":10,\"username\":\"boss\",\"cursor\":\"x\"}");
+        Assert.Equal(new[] { "username", "state", "limit" }, payload.Select(kv => kv.Key).ToArray());
+        // Neither is required: the backend's own defaults answer the common case.
+        Assert.Equal(new[] { "username" },
+            Ok(CurationDeskWrites.ApplicationList, "{}").Select(kv => kv.Key).ToArray());
+    }
+
+    [Theory]
+    [InlineData("{}", "open must be true or false")]
+    [InlineData("{\"message\":\"back soon\"}", "open must be true or false")]
+    [InlineData("{\"open\":\"false\"}", "open must be true or false")]
+    [InlineData("{\"open\":0}", "open must be true or false")]
+    [InlineData("{\"open\":null}", "open must be true or false")]
+    public void AWindowWithoutABooleanIsRefused(string json, string expected)
+    {
+        Assert.Equal(expected, Rejected(CurationDeskWrites.ApplicationWindow, json));
+    }
+
+    [Fact]
+    public void AClosedWindowMessageIsCappedAtTheColumn()
+    {
+        var message = new string('x', 201);
+        Assert.Equal("invalid message", Rejected(CurationDeskWrites.ApplicationWindow,
+            "{\"open\":false,\"message\":\"" + message + "\"}"));
+        var payload = Ok(CurationDeskWrites.ApplicationWindow,
+            "{\"open\":false,\"message\":\"" + message[..200] + "\"}");
+        Assert.Equal(new[] { "username", "open", "message" }, payload.Select(kv => kv.Key).ToArray());
+        // A present null clears the message, and the fence lets that through.
+        Assert.True(Ok(CurationDeskWrites.ApplicationWindow, "{\"open\":true,\"message\":null}")
+            .ContainsKey("message"));
     }
 
     [Fact]

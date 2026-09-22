@@ -194,6 +194,12 @@ public static partial class Routes
         app.MapPost("/private-api/curation-desk/recommend-meta", PrivateApi.CurationDeskRecommendMeta);
         app.MapPost("/private-api/curation-desk/recommendation-dismiss", PrivateApi.CurationDeskRecommendationDismiss);
         app.MapPost("/private-api/curation-desk/ingest", PrivateApi.CurationDeskIngest);
+        app.MapPost("/private-api/curation-desk/application-apply", PrivateApi.CurationDeskApplicationApply);
+        app.MapPost("/private-api/curation-desk/application-mine", PrivateApi.CurationDeskApplicationMine);
+        app.MapPost("/private-api/curation-desk/application-withdraw", PrivateApi.CurationDeskApplicationWithdraw);
+        app.MapPost("/private-api/curation-desk/application-list", PrivateApi.CurationDeskApplicationList);
+        app.MapPost("/private-api/curation-desk/application-decide", PrivateApi.CurationDeskApplicationDecide);
+        app.MapPost("/private-api/curation-desk/application-window", PrivateApi.CurationDeskApplicationWindow);
 
         // ---- SSR RPC cache (internal, header-gated; see SsrRpc.cs) ----
         app.MapPost("/private-api/ssr/rpc", SsrRpc.Rpc);
