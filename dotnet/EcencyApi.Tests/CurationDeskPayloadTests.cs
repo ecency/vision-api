@@ -838,6 +838,21 @@ public class CurationDeskPayloadTests
     }
 
     [Fact]
+    public void ATermCannotBeAskedForOnASeatThatDoesNotExpire()
+    {
+        // The backend refuses this too. The fence exists so the round trip never leaves.
+        Assert.Equal("a mod seat does not expire", Rejected(CurationDeskWrites.RosterSet,
+            "{\"curator\":\"bob\",\"role\":\"mod\",\"term_days\":30}"));
+        Assert.Equal("a admin seat does not expire", Rejected(CurationDeskWrites.RosterSet,
+            "{\"curator\":\"bob\",\"role\":\"admin\",\"term_days\":1}"));
+        // 0 says "no term", which is what a permanent role already is, so it stays legal.
+        Assert.True(Ok(CurationDeskWrites.RosterSet,
+            "{\"curator\":\"bob\",\"role\":\"mod\",\"term_days\":0}").ContainsKey("term_days"));
+        Assert.True(Ok(CurationDeskWrites.RosterSet,
+            "{\"curator\":\"bob\",\"role\":\"trial\",\"term_days\":30}").ContainsKey("term_days"));
+    }
+
+    [Fact]
     public void AZeroTermIsHowASeatIsMadePermanent()
     {
         // 0 is not "no term given": absent means keep the term the seat has, and 0 is the

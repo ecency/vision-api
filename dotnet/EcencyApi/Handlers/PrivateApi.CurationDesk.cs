@@ -477,10 +477,11 @@ public static partial class PrivateApi
     public static Task CurationDeskApplicationDecide(HttpContext ctx) =>
         ServeDeskWrite(ctx, CurationDeskWrites.ApplicationDecide);
 
-    // POST /private-api/curation-desk/application-window
+    // POST /private-api/curation-desk/application-vote
     public static Task CurationDeskApplicationVote(HttpContext ctx) =>
         ServeDeskWrite(ctx, CurationDeskWrites.ApplicationVote);
 
+    // POST /private-api/curation-desk/application-window
     public static Task CurationDeskApplicationWindow(HttpContext ctx) =>
         ServeDeskWrite(ctx, CurationDeskWrites.ApplicationWindow);
 
@@ -834,6 +835,10 @@ public static class CurationDeskWrites
     public const int MaxApplicationListLimit = 200;
     public const int MaxApplicationQuorum = 50;
     public const int MaxApplicationTermDays = 365;
+    /// <summary>Roles a seat term may expire. A term on an admin or a mod means nothing,
+    /// and the backend's expiry reads the role as well as the clock for the same reason.</summary>
+    public static readonly IReadOnlySet<string> TermRoles =
+        new HashSet<string> { "curator", "trial" };
 
     /// <summary>
     /// Views the roster feed takes: the public ones plus `excluded`, which is
@@ -1316,6 +1321,15 @@ public static class CurationDeskWrites
             // permanent. The backend reads absent as "keep the term it has".
             var termError = RequireWholeNumber(body, "term_days", 0, MaxApplicationTermDays);
             if (termError != null) return termError;
+            // A term only expires a seat that may carry one, so asking for a term on a
+            // permanent role is a value the backend would only reject. 0 stays legal on
+            // any role: it says "no term", which is what a permanent role already is.
+            if (body.Field("term_days")?.GetValueKind() is JsonValueKind.Number
+                && body.Field("term_days")!.GetValue<int>() > 0
+                && body.Str("role") is { } seat && !TermRoles.Contains(seat))
+            {
+                return $"a {seat} seat does not expire";
+            }
             // A PRESENT `rules` must be an object, null included. `CopyIfPresent` forwards
             // a null through the allowlist, and the fence should say what the contract says.
             if (body.TryGetPropertyValue("rules", out var rules))
