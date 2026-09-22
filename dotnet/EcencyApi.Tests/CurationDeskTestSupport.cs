@@ -268,7 +268,9 @@ internal static class CurationDeskTestSupport
         yield return ("application-withdraw", PrivateApi.CurationDeskApplicationWithdraw, "{" + code + "}");
         yield return ("application-list", PrivateApi.CurationDeskApplicationList, "{" + code + ",\"state\":\"open\"}");
         yield return ("application-decide", PrivateApi.CurationDeskApplicationDecide,
-            "{" + code + ",\"applicant\":\"bob\",\"state\":\"accepted\",\"role\":\"trial\"}");
+            "{" + code + ",\"applicant\":\"bob\",\"state\":\"accepted\",\"role\":\"curator\"}");
+        yield return ("application-vote", PrivateApi.CurationDeskApplicationVote,
+            "{" + code + ",\"applicant\":\"bob\",\"vote\":\"endorse\"}");
         yield return ("application-window", PrivateApi.CurationDeskApplicationWindow,
             "{" + code + ",\"open\":false,\"message\":\"back soon\"}");
     }

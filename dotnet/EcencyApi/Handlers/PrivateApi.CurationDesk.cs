@@ -477,6 +477,10 @@ public static partial class PrivateApi
     public static Task CurationDeskApplicationDecide(HttpContext ctx) =>
         ServeDeskWrite(ctx, CurationDeskWrites.ApplicationDecide);
 
+    // POST /private-api/curation-desk/application-vote
+    public static Task CurationDeskApplicationVote(HttpContext ctx) =>
+        ServeDeskWrite(ctx, CurationDeskWrites.ApplicationVote);
+
     // POST /private-api/curation-desk/application-window
     public static Task CurationDeskApplicationWindow(HttpContext ctx) =>
         ServeDeskWrite(ctx, CurationDeskWrites.ApplicationWindow);
@@ -815,12 +819,26 @@ public static class CurationDeskWrites
     public static readonly IReadOnlySet<string> ApplicationDecisions =
         new HashSet<string> { "shortlisted", "accepted", "declined" };
     /// <summary>Roles an acceptance may grant. `admin` is deliberately absent: desk keys are
-    /// not handed out by a form, and the backend refuses it too.</summary>
+    /// not handed out by a form, and the backend refuses it too. `trial` is absent as well:
+    /// a guest seat is trailed and bounded by its TERM, not by an untrailed role, and the
+    /// backend's APPLICATION_ROLES no longer carries it either.</summary>
     public static readonly IReadOnlySet<string> ApplicationRoles =
-        new HashSet<string> { "trial", "curator", "mod" };
+        new HashSet<string> { "curator", "mod" };
+    /// <summary>How a reviewer may answer an application. An objection is a stop, not a
+    /// veto: upstream it keeps the automatic grant shut and leaves the case to an admin.
+    /// `abstain` is how a stop is lifted, so that stopping objecting does not force
+    /// somebody to endorse instead.</summary>
+    public static readonly IReadOnlySet<string> ApplicationVotes =
+        new HashSet<string> { "endorse", "object", "abstain" };
     public const int MaxApplicationNoteLength = 500;
     public const int MaxApplicationMessageLength = 200;
     public const int MaxApplicationListLimit = 200;
+    public const int MaxApplicationQuorum = 50;
+    public const int MaxApplicationTermDays = 365;
+    /// <summary>Roles a seat term may expire. A term on an admin or a mod means nothing,
+    /// and the backend's expiry reads the role as well as the clock for the same reason.</summary>
+    public static readonly IReadOnlySet<string> TermRoles =
+        new HashSet<string> { "curator", "trial" };
 
     /// <summary>
     /// Views the roster feed takes: the public ones plus `excluded`, which is
@@ -877,8 +895,13 @@ public static class CurationDeskWrites
     /// </summary>
     public static readonly Route RosterList = new("curation/desk/roster/list", Array.Empty<string>());
 
+    /// <summary>
+    /// `term_days` is tri-state upstream: absent keeps the seat's term, 0 makes it
+    /// permanent, n restarts the clock. Absent is not "make permanent", so a note being
+    /// corrected here cannot quietly turn a guest seat into a standing one.
+    /// </summary>
     public static readonly Route RosterSet = new("curation/desk/roster/set",
-        new[] { "curator", "role", "rules", "note" });
+        new[] { "curator", "role", "rules", "note", "term_days" });
 
     public static readonly Route RosterRetire = new("curation/desk/roster/retire", new[] { "curator" });
 
@@ -922,8 +945,20 @@ public static class CurationDeskWrites
     public static readonly Route ApplicationDecide = new("curation/desk/applications/decide",
         new[] { "applicant", "state", "role", "note" });
 
+    /// <summary>
+    /// One reviewer's line on one application. `applicant` names the account being voted
+    /// on for the same reason `decide` does: `username` carries the validated caller and
+    /// Build() refuses a client's version of it.
+    /// </summary>
+    public static readonly Route ApplicationVote = new("curation/desk/applications/vote",
+        new[] { "applicant", "vote", "note" });
+
+    /// <summary>
+    /// `quorum` and `term_days` are optional here and absent means "leave as they are"
+    /// upstream, not "reset": this route is called every time the message is reworded.
+    /// </summary>
     public static readonly Route ApplicationWindow = new("curation/desk/applications/window",
-        new[] { "open", "message" });
+        new[] { "open", "message", "quorum", "term_days" });
 
     /// <summary>
     /// The upstream body: the validated username plus the route's whitelisted
@@ -1230,6 +1265,22 @@ public static class CurationDeskWrites
             }
             return null;
         }
+        if (ReferenceEquals(route, ApplicationVote))
+        {
+            if (body.Str("applicant") is not { } voted || !HiveNames.IsAccountName(voted))
+            {
+                return "applicant required";
+            }
+            var ballot = RequireOneOf(body, "vote", ApplicationVotes);
+            if (ballot != null) return ballot;
+            if (body.TryGetPropertyValue("note", out var voteNote) && voteNote is not null
+                && (body.Str("note") is not { } voteText
+                    || voteText.EnumerateRunes().Count() > MaxApplicationNoteLength))
+            {
+                return "invalid note";
+            }
+            return null;
+        }
         if (ReferenceEquals(route, ApplicationWindow))
         {
             if (body.Field("open")?.GetValueKind() is not (JsonValueKind.True or JsonValueKind.False))
@@ -1242,7 +1293,12 @@ public static class CurationDeskWrites
             {
                 return "invalid message";
             }
-            return null;
+            // Both knobs are checked when PRESENT, null included: CopyIfPresent forwards a
+            // null through the allowlist, and a `"quorum": null` reaching the desk would
+            // read as absent there, silently doing nothing while this fence claimed every
+            // quorum it passes is a number in range.
+            return RequireWholeNumber(body, "quorum", 1, MaxApplicationQuorum)
+                   ?? RequireWholeNumber(body, "term_days", 1, MaxApplicationTermDays);
         }
         if (ReferenceEquals(route, RosterSet))
         {
@@ -1260,6 +1316,19 @@ public static class CurationDeskWrites
                     || text.EnumerateRunes().Count() > MaxCuratorNoteLength))
             {
                 return "invalid note";
+            }
+            // 0 is allowed and MEANS something here: it is how a guest seat is made
+            // permanent. The backend reads absent as "keep the term it has".
+            var termError = RequireWholeNumber(body, "term_days", 0, MaxApplicationTermDays);
+            if (termError != null) return termError;
+            // A term only expires a seat that may carry one, so asking for a term on a
+            // permanent role is a value the backend would only reject. 0 stays legal on
+            // any role: it says "no term", which is what a permanent role already is.
+            if (body.Field("term_days")?.GetValueKind() is JsonValueKind.Number
+                && body.Field("term_days")!.GetValue<int>() > 0
+                && body.Str("role") is { } seat && !TermRoles.Contains(seat))
+            {
+                return $"a {seat} seat does not expire";
             }
             // A PRESENT `rules` must be an object, null included. `CopyIfPresent` forwards
             // a null through the allowlist, and the fence should say what the contract says.
@@ -1347,6 +1416,23 @@ public static class CurationDeskWrites
 
     private static string? RequireOneOf(JsonObject body, string key, IReadOnlySet<string> allowed) =>
         body.Str(key) is { } value && allowed.Contains(value) ? null : $"invalid {key}";
+
+    /// <summary>
+    /// A PRESENT whole number in range, null included. Absent is fine and means the caller
+    /// is not setting it. A fractional number fails here because TryGetValue&lt;int&gt;
+    /// refuses one, and `true` fails because it is not JsonValueKind.Number, which matters:
+    /// every one of these knobs decides how a roster seat is granted or how long it lasts.
+    /// </summary>
+    private static string? RequireWholeNumber(JsonObject body, string key, int min, int max)
+    {
+        if (!body.TryGetPropertyValue(key, out var node)) return null;
+        if (node is not JsonValue value || value.GetValueKind() is not JsonValueKind.Number
+            || !value.TryGetValue<int>(out var number) || number < min || number > max)
+        {
+            return $"{key} must be a whole number from {min} to {max}";
+        }
+        return null;
+    }
 }
 
 /// <summary>
