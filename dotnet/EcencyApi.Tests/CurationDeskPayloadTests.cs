@@ -19,7 +19,8 @@ public class CurationDeskPayloadTests
         CurationDeskWrites.RosterList, CurationDeskWrites.RosterSet, CurationDeskWrites.RosterRetire,
         CurationDeskWrites.ApplicationApply, CurationDeskWrites.ApplicationMine,
         CurationDeskWrites.ApplicationWithdraw, CurationDeskWrites.ApplicationList,
-        CurationDeskWrites.ApplicationDecide, CurationDeskWrites.ApplicationWindow,
+        CurationDeskWrites.ApplicationDecide, CurationDeskWrites.ApplicationVote,
+        CurationDeskWrites.ApplicationWindow,
     };
 
     private const string IngestBody =
@@ -66,6 +67,8 @@ public class CurationDeskPayloadTests
             return "{" + forged + "\"motivation\":\"why\",\"availability\":\"evenings\",\"pick\":\"a post\"}";
         if (ReferenceEquals(route, CurationDeskWrites.ApplicationDecide))
             return "{" + forged + "\"applicant\":\"bob\",\"state\":\"declined\"}";
+        if (ReferenceEquals(route, CurationDeskWrites.ApplicationVote))
+            return "{" + forged + "\"applicant\":\"bob\",\"vote\":\"endorse\"}";
         if (ReferenceEquals(route, CurationDeskWrites.ApplicationWindow))
             return "{" + forged + "\"open\":true}";
         return "{" + forged + "\"limit\":5}";
@@ -714,7 +717,7 @@ public class CurationDeskPayloadTests
     public void ADecisionNamesTheApplicantInItsOwnField()
     {
         var payload = Ok(CurationDeskWrites.ApplicationDecide,
-            "{\"applicant\":\"bob\",\"state\":\"accepted\",\"role\":\"trial\",\"note\":\"guest curator\"}");
+            "{\"applicant\":\"bob\",\"state\":\"accepted\",\"role\":\"curator\",\"note\":\"guest curator\"}");
         Assert.Equal(new[] { "username", "applicant", "state", "role", "note" },
             payload.Select(kv => kv.Key).ToArray());
         Assert.Equal("alice", payload["username"]!.GetValue<string>());
@@ -738,9 +741,100 @@ public class CurationDeskPayloadTests
     [Fact]
     public void ANeverGrantedRoleCannotArriveThroughAnAcceptance()
     {
-        // The seat an acceptance grants is a trial by default and a curator or mod at most.
-        // Admin runs the desk, so it is not something a form hands out.
+        // The seat an acceptance grants is a curator, or a mod when an admin says so.
+        // Admin runs the desk, so it is not something a form hands out. `trial` is gone
+        // for a different reason: a guest seat is TRAILED and bounded by its term, and an
+        // untrailed month would be a month of work nothing follows.
         Assert.DoesNotContain("admin", CurationDeskWrites.ApplicationRoles);
+        Assert.DoesNotContain("trial", CurationDeskWrites.ApplicationRoles);
+    }
+
+    // ---- electing a guest curator ------------------------------------------
+
+    [Fact]
+    public void AVoteNamesTheApplicantInItsOwnField()
+    {
+        var payload = Ok(CurationDeskWrites.ApplicationVote,
+            "{\"applicant\":\"bob\",\"vote\":\"object\",\"note\":\"farms comments\"}");
+        Assert.Equal(new[] { "username", "applicant", "vote", "note" },
+            payload.Select(kv => kv.Key).ToArray());
+        Assert.Equal("alice", payload["username"]!.GetValue<string>());
+        Assert.Equal("bob", payload["applicant"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("{\"vote\":\"endorse\"}", "applicant required")]
+    [InlineData("{\"applicant\":\"Bob\",\"vote\":\"endorse\"}", "applicant required")]
+    [InlineData("{\"applicant\":\"bob\"}", "invalid vote")]
+    [InlineData("{\"applicant\":\"bob\",\"vote\":\"yes\"}", "invalid vote")]
+    [InlineData("{\"applicant\":\"bob\",\"vote\":\"ENDORSE\"}", "invalid vote")]
+    [InlineData("{\"applicant\":\"bob\",\"vote\":null}", "invalid vote")]
+    [InlineData("{\"applicant\":\"bob\",\"vote\":true}", "invalid vote")]
+    public void AMalformedVoteIsRefusedRatherThanTrimmed(string json, string expected)
+    {
+        Assert.Equal(expected, Rejected(CurationDeskWrites.ApplicationVote, json));
+    }
+
+    [Fact]
+    public void AVoteNoteIsCappedInRunesNotUtf16Units()
+    {
+        // The column counts characters and so does Python's len(). An emoji is two UTF-16
+        // units and one rune, so counting the wrong one refuses 250 valid characters.
+        var emoji = string.Concat(Enumerable.Repeat("\U0001F600", 500));
+        Assert.True(Ok(CurationDeskWrites.ApplicationVote,
+            "{\"applicant\":\"bob\",\"vote\":\"endorse\",\"note\":\"" + emoji + "\"}")
+            .ContainsKey("note"));
+        Assert.Equal("invalid note", Rejected(CurationDeskWrites.ApplicationVote,
+            "{\"applicant\":\"bob\",\"vote\":\"endorse\",\"note\":\"" + emoji + "\U0001F600\"}"));
+    }
+
+    [Theory]
+    [InlineData("{\"open\":true,\"quorum\":0}", "quorum must be a whole number from 1 to 50")]
+    [InlineData("{\"open\":true,\"quorum\":51}", "quorum must be a whole number from 1 to 50")]
+    [InlineData("{\"open\":true,\"quorum\":true}", "quorum must be a whole number from 1 to 50")]
+    [InlineData("{\"open\":true,\"quorum\":1.5}", "quorum must be a whole number from 1 to 50")]
+    [InlineData("{\"open\":true,\"quorum\":\"3\"}", "quorum must be a whole number from 1 to 50")]
+    // A present null would be copied through the allowlist and read as absent upstream,
+    // quietly doing nothing while this fence claimed it had checked the number.
+    [InlineData("{\"open\":true,\"quorum\":null}", "quorum must be a whole number from 1 to 50")]
+    [InlineData("{\"open\":true,\"term_days\":0}", "term_days must be a whole number from 1 to 365")]
+    [InlineData("{\"open\":true,\"term_days\":366}", "term_days must be a whole number from 1 to 365")]
+    public void AMalformedElectionKnobIsRefused(string json, string expected)
+    {
+        Assert.Equal(expected, Rejected(CurationDeskWrites.ApplicationWindow, json));
+    }
+
+    [Fact]
+    public void TheKnobsAreOptionalAndTravelWhenTheyAreSent()
+    {
+        Assert.Equal(new[] { "username", "open" },
+            Ok(CurationDeskWrites.ApplicationWindow, "{\"open\":true}").Select(kv => kv.Key).ToArray());
+        Assert.Equal(new[] { "username", "open", "quorum", "term_days" },
+            Ok(CurationDeskWrites.ApplicationWindow, "{\"open\":true,\"quorum\":4,\"term_days\":14}")
+                .Select(kv => kv.Key).ToArray());
+    }
+
+    [Theory]
+    [InlineData("{\"curator\":\"bob\",\"role\":\"curator\",\"term_days\":-1}")]
+    [InlineData("{\"curator\":\"bob\",\"role\":\"curator\",\"term_days\":366}")]
+    [InlineData("{\"curator\":\"bob\",\"role\":\"curator\",\"term_days\":true}")]
+    [InlineData("{\"curator\":\"bob\",\"role\":\"curator\",\"term_days\":null}")]
+    public void AMalformedSeatTermIsRefused(string json)
+    {
+        Assert.Equal("term_days must be a whole number from 0 to 365",
+            Rejected(CurationDeskWrites.RosterSet, json));
+    }
+
+    [Fact]
+    public void AZeroTermIsHowASeatIsMadePermanent()
+    {
+        // 0 is not "no term given": absent means keep the term the seat has, and 0 is the
+        // one way to say the seat should stop expiring. So it has to reach the backend.
+        var payload = Ok(CurationDeskWrites.RosterSet,
+            "{\"curator\":\"bob\",\"role\":\"curator\",\"term_days\":0}");
+        Assert.Equal(new[] { "username", "curator", "role", "term_days" },
+            payload.Select(kv => kv.Key).ToArray());
+        Assert.Equal(0, payload["term_days"]!.GetValue<int>());
     }
 
     [Theory]

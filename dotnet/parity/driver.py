@@ -263,7 +263,9 @@ CURATION_DESK_ROUTES = [
                   "recommend-meta", "recommendation-dismiss", "ingest",
                   # Guest curator applications, added with the desk's apply page.
                   "application-apply", "application-mine", "application-withdraw",
-                  "application-list", "application-decide", "application-window")
+                  "application-list", "application-decide", "application-window",
+                  # Electing them: the roster votes, a quorum grants the seat.
+                  "application-vote")
     for case in ("min", "pop", "badcode")
 ]
 
