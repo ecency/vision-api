@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -117,7 +118,7 @@ public static partial class PrivateApi
             if (!signedMessageTypeofObject || author is null || !timestampIsNumber || signature is null)
             {
                 // names what is missing, never the token: a real one carries a signature
-                Console.WriteLine(
+                LogOnce(
                     $"Invalid token structure: signed_message={signedMessageTypeofObject} author={author is not null} timestamp={timestampIsNumber} signature={signature is not null}");
                 return null;
             }
@@ -129,10 +130,7 @@ public static partial class PrivateApi
             // any node lookup: the shape alone settles it.
             if (!IsEcencySession(signedMessage))
             {
-                // so a client locked out by this shows up in the logs; the labels only
-                var obj = signedMessage as JsonObject;
-                Console.WriteLine(
-                    $"Token refused as a session: app={LogLabel(obj, "app")} type={LogLabel(obj, "type")}");
+                NoteRefusal(signedMessage as JsonObject);
                 return null;
             }
 
@@ -233,6 +231,26 @@ public static partial class PrivateApi
         signedMessage is JsonObject obj
         && StringField(obj, "app") == EcencyApp
         && StringField(obj, "type") is "posting" or "code";
+
+    // Token diagnostics on the request path, written once per distinct line and
+    // at most MaxTokenLogLines lines per process: the service stays quiet on
+    // request paths however many bad tokens arrive. The first sighting of a
+    // first-party client refused by the session rule still reaches the logs,
+    // unless junk tokens have used up the lines since the last restart.
+    private const int MaxTokenLogLines = 32;
+    private static int _tokenLogLines;
+    private static readonly ConcurrentDictionary<string, byte> TokenLogSeen = new();
+
+    private static void LogOnce(string line)
+    {
+        if (Volatile.Read(ref _tokenLogLines) >= MaxTokenLogLines || TokenLogSeen.ContainsKey(line)) return;
+        if (!TokenLogSeen.TryAdd(line, 0)) return;
+        if (Interlocked.Increment(ref _tokenLogLines) > MaxTokenLogLines) return;
+        Console.WriteLine(line);
+    }
+
+    private static void NoteRefusal(JsonObject? obj) =>
+        LogOnce($"Token refused as a session: app={LogLabel(obj, "app")} type={LogLabel(obj, "type")}");
 
     /// <summary>A signed_message label for a log line: short, printable, never the value of anything else.</summary>
     private static string LogLabel(JsonObject? obj, string name)
