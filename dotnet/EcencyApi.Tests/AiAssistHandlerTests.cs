@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using EcencyApi.Handlers;
+using EcencyApi.Infrastructure;
 using Xunit;
 
 namespace EcencyApi.Tests;
@@ -18,9 +19,13 @@ public class AiAssistHandlerTests : IDisposable
     public AiAssistHandlerTests()
     {
         // `code` "as:alice" validates as alice; anything else is invalid.
+        // Same extraction as production ValidateCode: a lone-surrogate escape is a
+        // real string, and GetValue<string>() throws on it.
         PrivateApi.AiAssistValidateCode = body =>
         {
-            var code = body["code"]?.GetValue<string>();
+            string? code = null;
+            if (body["code"] is JsonValue codeValue && JsVal.TryGetStringLenient(codeValue, out var codeStr))
+                code = codeStr;
             return Task.FromResult(code != null && code.StartsWith("as:", StringComparison.Ordinal) ? code[3..] : null);
         };
         PrivateApi.AiAssistUpstream = (endpoint, method, payload, _) =>

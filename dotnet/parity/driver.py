@@ -349,6 +349,17 @@ KNOWN_DIVERGENCES = {
 # better reason: balances and APR move every block, so the run-vs-run comparison puts
 # it in `loose`, which still checks status and content-type. Add an entry here only
 # for a divergence that is deterministic and not already loose.
+#
+# Also not listed: /private-api/ai-assist::{min,pop,badcode}. Those catalog bodies
+# carry an empty or invalid `code`, so both this build and the reference image
+# answer 401 before any upstream call and the responses still match. A keyed retry
+# is different only after a valid code: this build copies `idempotency_key` onto
+# the upstream body when the client sent one (so a repeat recovers the same paid
+# assist instead of being charged again) and omits it when the client did not. The
+# reference image dropped the field either way. The catalog never sends a valid
+# code, so that difference is covered by AiAssistHandlerTests rather than an entry
+# here — an entry would skip status, content-type, and body and hide unrelated
+# regressions on the route.
 
 
 def diff(a_name, b_name, loose_name=None):
