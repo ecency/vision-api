@@ -13,15 +13,17 @@ public static partial class PrivateApi
     /// <summary>
     /// Who a notifications request is for, and whether it may see the complete feed.
     ///
-    /// A null Username means unauthorized. `requestedUser` is the body's `user` field
-    /// after JS-truthiness, or null when it was absent or falsy.
+    /// A null Username means unauthorized. The account is only the one
+    /// <c>ValidateCode</c> resolved — the same rule as <see cref="UnreadNotifications"/>.
+    /// <paramref name="requestedUser"/> is the body's <c>user</c> field after
+    /// JS-truthiness, or null when it was absent or falsy. It does not select the
+    /// account. It used to: an unauthenticated caller could pass the guard by naming
+    /// any account, and a valid code was then overwritten by that field with no
+    /// comparison (ecency/vision-api#90).
     ///
-    /// Two rules, both of which were wrong before:
-    ///   - a validated code is REQUIRED. `requestedUser` used to satisfy the guard on its
-    ///     own, so an unauthenticated caller could name any account.
-    ///   - only a SELF view sees the complete feed. Naming another account is still
-    ///     supported, because Decks builds notification columns for arbitrary accounts and
-    ///     notifications are largely public, but it is served enotify's restricted feed.
+    /// An authorized request is therefore always a self-view, so it may see the
+    /// complete feed. A body that names another account still reads the code's
+    /// account; it is not a way to ask for someone else's activity.
     /// </summary>
     public static (string? Username, bool FullScope) ResolveNotificationsTarget(
         string? validatedUsername, string? requestedUser)
@@ -31,20 +33,24 @@ public static partial class PrivateApi
             return (null, false);
         }
 
-        if (requestedUser == null)
-        {
-            return (validatedUsername, true);
-        }
-
-        return (
-            requestedUser,
-            string.Equals(requestedUser, validatedUsername, StringComparison.OrdinalIgnoreCase));
+        // Kept on the signature so a caller can show a body name was supplied, and so
+        // a test can fail if that name starts being returned.
+        _ = requestedUser;
+        return (validatedUsername, true);
     }
+
+    /// <summary>Signed-code validation for the notifications feed, replaceable for tests (no chain RPC).</summary>
+    internal static Func<JsonObject, Task<string?>> NotificationsValidateCode = ValidateCode;
+
+    /// <summary>The notifications feed's upstream call, replaceable so tests can observe the path.</summary>
+    internal static Func<string, HttpMethod, IEnumerable<KeyValuePair<string, string>>?, Task<UpstreamResponse>>
+        NotificationsUpstream =
+            (endpoint, method, extraHeaders) => ApiClient.ApiRequest(endpoint, method, extraHeaders);
 
     /// <summary>
     /// Whether a device request may act on `requestedUsername`. A push registration
     /// belongs to the account the code was issued for, so the device endpoints only
-    /// accept that account. Same case rule as ResolveNotificationsTarget.
+    /// accept that account. Comparison is case-insensitive, matching Hive names.
     /// </summary>
     public static bool IsOwnDeviceRequest(string? validatedUsername, string? requestedUsername) =>
         !string.IsNullOrEmpty(validatedUsername)
@@ -98,8 +104,9 @@ public static partial class PrivateApi
         }
 
         // Opts in to the complete feed. enotify defaults to chain-derived activity only,
-        // so omitting this is the safe direction: a cross-account view, or any request
-        // that never reaches this handler, gets the restricted feed.
+        // so omitting this is the safe direction: any request that does not ask,
+        // including one that never reaches this handler, gets the restricted feed.
+        // This handler asks only after a code has validated, and only for that account.
         if (fullScope)
         {
             query.Add("scope=full");
@@ -116,8 +123,10 @@ public static partial class PrivateApi
 
         // IsTruthy here rather than in the resolver, to keep the JS truthiness parity
         // this port is built on while the decision itself stays pure and testable.
+        // The body's user is passed in so the resolver can ignore it on purpose:
+        // it must not become the account that is queried.
         var (username, fullScope) = ResolveNotificationsTarget(
-            await ValidateCode(body),
+            await NotificationsValidateCode(body),
             JsJson.IsTruthy(user) ? UserData1Helpers.Template(user) : null);
 
         if (username == null)
@@ -150,7 +159,7 @@ public static partial class PrivateApi
             ? new[] { new KeyValuePair<string, string>(EnotifyInternalTokenHeader, Config.EnotifyInternalToken) }
             : null;
 
-        await Upstream.Pipe(ApiClient.ApiRequest(u, HttpMethod.Get, extraHeaders), ctx);
+        await Upstream.Pipe(NotificationsUpstream(u, HttpMethod.Get, extraHeaders), ctx);
     }
 
     // GET ^/private-api/pub-notifications/:username
