@@ -110,6 +110,22 @@ public class CurationDeskPayloadTests
         Assert.Equal(error, Rejected(CurationDeskWrites.Ingest, body));
     }
 
+    [Theory]
+    [InlineData("post")]
+    [InlineData("vote")]
+    [InlineData("curator_vote")]
+    [InlineData("flag")]
+    [InlineData("wave_nsfw")]
+    public void EveryEventTypeTheBackendStoresIsForwarded(string type)
+    {
+        // The list here must match the backend's: a type missing from it is a 400 at
+        // the gateway, which the sender treats as permanent and dead-letters.
+        var payload = Ok(CurationDeskWrites.Ingest,
+            "{\"v\":1,\"type\":\"" + type + "\",\"id\":\"" + type + ":bob/p\",\"payload\":{\"author\":\"bob\",\"permlink\":\"p\",\"over\":true}}");
+        Assert.Equal(type, payload["type"]!.GetValue<string>());
+        Assert.True(payload["payload"]!["over"]!.GetValue<bool>());
+    }
+
     [Fact]
     public void TheEventIdLengthBoundIsTheBackendsColumn()
     {

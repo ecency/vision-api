@@ -799,8 +799,9 @@ public static class CurationDeskWrites
     public const int MaxVoteWeight = 10000;
     /// <summary>The backend keeps a curator note in a varchar(200).</summary>
     public const int MaxCuratorNoteLength = 200;
-    /// <summary>The four event types erobot pushes (spec 7.2).</summary>
-    public static readonly IReadOnlySet<string> IngestTypes = new HashSet<string> { "post", "vote", "curator_vote", "flag" };
+    /// <summary>The event types erobot pushes (spec 7.2). `wave_nsfw` carries the image
+    /// check's verdict for a wave; the backend range-checks its payload like the others.</summary>
+    public static readonly IReadOnlySet<string> IngestTypes = new HashSet<string> { "post", "vote", "curator_vote", "flag", "wave_nsfw" };
     /// <summary>The backend keeps the event id in a varchar(200).</summary>
     public const int MaxIngestIdLength = 200;
 
