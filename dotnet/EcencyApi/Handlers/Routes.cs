@@ -66,6 +66,7 @@ public static partial class Routes
         app.MapGet("/private-api/pub-notifications/{username}", PrivateApi.PublicUnreadNotifications);
         app.MapGet("/private-api/waves/feed", PrivateApi.WavesFeed);
         app.MapGet("/private-api/waves/shorts", PrivateApi.WavesShorts);
+        app.MapGet("/private-api/waves/nsfw", PrivateApi.WavesNsfw);
         app.MapGet("/private-api/waves/tags", PrivateApi.WavesTags);
         app.MapGet("/private-api/waves/account", PrivateApi.WavesAccount);
         app.MapGet("/private-api/waves/following", PrivateApi.WavesFollowing);

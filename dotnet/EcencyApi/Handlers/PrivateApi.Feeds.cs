@@ -77,6 +77,12 @@ public static partial class PrivateApi
         // refresh instead of waiting out the promoted cache.
         posts = ModerationMutes.FilterMutedAuthors(posts, await ModerationMutes.Get());
 
+        // Same reasoning for the image check: the waves indexer leaves a wave with
+        // a detected explicit picture out of every feed it serves, and a promoted
+        // slot must not be the way back in. Clients cannot do this themselves, a
+        // promoted entry comes from the chain and carries no verdict.
+        posts = WaveNsfw.FilterFlagged(posts, await WaveNsfw.GetFlagged(posts));
+
         await ctx.SendJson(200, posts);
     }
 
@@ -160,6 +166,28 @@ public static partial class PrivateApi
         FeedsAppendRepeatable(parts, "container", q["container"]);
 
         var u = $"waves/feed?{string.Join("&", parts)}";
+        await Upstream.Pipe(ApiClient.ApiRequest(u, HttpMethod.Get), ctx);
+    }
+
+    /// <summary>
+    /// GET /private-api/waves/nsfw?author=&amp;permlink= : did the image check find
+    /// this wave explicit? For the wave page opened by a link, which loads the
+    /// wave from the chain and so has no feed row to read the verdict from.
+    /// Answers the indexer's `{"flagged": [...]}`, empty when it is not flagged.
+    /// </summary>
+    public static async Task WavesNsfw(HttpContext ctx)
+    {
+        var q = ctx.Request.Query;
+        var author = q["author"];
+        var permlink = q["permlink"];
+        if (author.Count != 1 || permlink.Count != 1
+            || string.IsNullOrEmpty(author[0]) || string.IsNullOrEmpty(permlink[0]))
+        {
+            await ctx.SendJson(400, new JsonObject { ["error"] = "author and permlink required" });
+            return;
+        }
+
+        var u = WaveNsfw.Endpoint(new[] { author[0]!.TrimStart('@') + "/" + permlink[0] });
         await Upstream.Pipe(ApiClient.ApiRequest(u, HttpMethod.Get), ctx);
     }
 
