@@ -70,6 +70,28 @@ public class WaveNsfwTests : IDisposable
     }
 
     [Fact]
+    public void FilteringNeverReachesTheCachedPromotedList()
+    {
+        // The filter detaches the entries it keeps from the array it is given. That
+        // is only safe because the promoted list never hands out its cached array:
+        // MemCache clones on write and again on every read. If either clone went
+        // away, one filtered request would empty the cache for everyone after it.
+        var key = "wave-nsfw-test-" + Tag();
+        var original = new JsonArray(Post("alice", "clean"), Post("bob", "explicit"), Post("carol", "other"));
+        MemCache.Set(key, original, 60);
+
+        // the instance a cache-miss request keeps using after it stored the list
+        var missCopy = WaveNsfw.FilterFlagged(original, WaveNsfw.ToSet(new[] { "bob/explicit" }));
+        // the instance a cache-hit request is handed
+        var hitCopy = WaveNsfw.FilterFlagged(MemCache.Get<JsonArray>(key)!, WaveNsfw.ToSet(new[] { "bob/explicit" }));
+
+        Assert.Equal(new[] { "clean", "other" }, PermlinksOf(missCopy));
+        Assert.Equal(new[] { "clean", "other" }, PermlinksOf(hitCopy));
+        Assert.Equal(new[] { "clean", "explicit", "other" }, PermlinksOf(MemCache.Get<JsonArray>(key)!));
+        MemCache.Del(key);
+    }
+
+    [Fact]
     public void NothingFlaggedLeavesTheListUntouched()
     {
         var entries = new JsonArray(Post("alice", "clean"));
