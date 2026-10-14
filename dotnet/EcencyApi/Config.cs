@@ -55,6 +55,10 @@ public static class Config
     // forward an empty secret (matches config.ts).
     public static string? StripeInternalSecret { get; } = Env("STRIPE_INTERNAL_SECRET");
 
+    // Sent to the upstream on the listen routes, which only trust a reader named by
+    // this proxy. No default: unset, unlocks and reader status fail closed (503).
+    public static string? ListenProxySecret { get; } = Env("LISTEN_PROXY_SECRET");
+
     public static string? TurnstileSecret { get; } = Env("TURNSTILE_SECRET");
 
     public static string CaptchaMode { get; } =

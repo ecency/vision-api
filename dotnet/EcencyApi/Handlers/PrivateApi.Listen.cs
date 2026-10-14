@@ -12,10 +12,26 @@ public static partial class PrivateApi
 {
     internal static Func<JsonObject, Task<string?>> ListenValidateCode = ValidateCode;
 
+    internal static Func<string?> ListenSecret = () => Config.ListenProxySecret;
+
     /// <summary>The upstream call, replaceable so tests can observe it without a network.</summary>
-    internal static Func<string, HttpMethod, JsonNode?, IEnumerable<KeyValuePair<string, string?>>?, Task<UpstreamResponse>>
-        ListenUpstream = (endpoint, method, payload, query) =>
-            ApiClient.ApiRequest(endpoint, method, null, payload, query);
+    internal static Func<string, HttpMethod, IEnumerable<KeyValuePair<string, string>>?, JsonNode?,
+            IEnumerable<KeyValuePair<string, string?>>?, Task<UpstreamResponse>>
+        ListenUpstream = (endpoint, method, headers, payload, query) =>
+            ApiClient.ApiRequest(endpoint, method, headers, payload, query);
+
+    /// <summary>
+    /// The secret that lets the upstream trust the reader this proxy names. Without it
+    /// configured, nothing that names a reader is sent (503), rather than letting the
+    /// upstream refuse it as forged.
+    /// </summary>
+    private static KeyValuePair<string, string>[]? ListenSecretHeaders()
+    {
+        var secret = ListenSecret();
+        return string.IsNullOrEmpty(secret)
+            ? null
+            : new[] { new KeyValuePair<string, string>("X-Internal-Secret", secret) };
+    }
 
     private static string? ListenString(JsonObject body, string key) =>
         body[key] is JsonValue v && JsVal.TryGetStringLenient(v, out var s) && s.Length > 0 ? s : null;
@@ -31,7 +47,9 @@ public static partial class PrivateApi
     {
         var body = await ctx.ReadBody();
         string? username = null;
-        if (ListenString(body, "code") != null)
+        // Any `code` property, even empty or not a string, is an attempt to be a reader:
+        // only its absence means anonymous.
+        if (body.TryGetPropertyValue("code", out var codeNode) && codeNode != null)
         {
             username = await ListenValidateCode(body);
             if (username == null)
@@ -58,13 +76,27 @@ public static partial class PrivateApi
         var updated = ListenString(body, "updated");
         if (updated != null) query.Add(new("updated", updated));
 
-        await Upstream.Pipe(ListenUpstream("listen-status", HttpMethod.Get, null, query), ctx);
+        KeyValuePair<string, string>[]? headers = null;
+        if (username != null)
+        {
+            headers = ListenSecretHeaders();
+            if (headers == null)
+            {
+                Console.Error.WriteLine("listenStatus(): LISTEN_PROXY_SECRET not configured");
+                await ctx.SendText(503, "Service Unavailable");
+                return;
+            }
+        }
+
+        await Upstream.Pipe(ListenUpstream("listen-status", HttpMethod.Get, headers, null, query), ctx);
     }
 
     /// <summary>
     /// Unlock a post's audio. `us` comes only from the validated code: upstream charges
-    /// whoever `us` names. idempotency_key is forwarded as sent, so a retried unlock is
-    /// answered as a replay instead of charging twice.
+    /// whoever `us` names. idempotency_key is required and forwarded as sent, so a
+    /// retried unlock is answered as a replay instead of charging twice. Only the known
+    /// fields are forwarded: this request spends Points, and nothing else a client puts
+    /// in the body should reach the upstream.
     /// </summary>
     public static async Task Listen(HttpContext ctx)
     {
@@ -75,11 +107,24 @@ public static partial class PrivateApi
             await ctx.SendText(401, "Unauthorized");
             return;
         }
+        if (ListenString(body, "author") == null || ListenString(body, "permlink") == null
+            || string.IsNullOrWhiteSpace(ListenString(body, "idempotency_key")))
+        {
+            await ctx.SendText(400, "Bad Request");
+            return;
+        }
+        var headers = ListenSecretHeaders();
+        if (headers == null)
+        {
+            Console.Error.WriteLine("listen(): LISTEN_PROXY_SECRET not configured");
+            await ctx.SendText(503, "Service Unavailable");
+            return;
+        }
         var data = new JsonObject
         {
             ["us"] = username,
         };
         MiscCopyIfPresent(data, body, "author", "permlink", "idempotency_key", "updated");
-        await Upstream.Pipe(ListenUpstream("listen", HttpMethod.Post, data, null), ctx);
+        await Upstream.Pipe(ListenUpstream("listen", HttpMethod.Post, headers, data, null), ctx);
     }
 }

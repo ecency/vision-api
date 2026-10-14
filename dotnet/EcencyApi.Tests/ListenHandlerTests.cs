@@ -14,8 +14,11 @@ namespace EcencyApi.Tests;
 [Collection("listen")]
 public class ListenHandlerTests : IDisposable
 {
-    private sealed record ListenCall(string Endpoint, HttpMethod Method, JsonNode? Payload,
-        List<KeyValuePair<string, string?>> Query);
+    private sealed record ListenCall(string Endpoint, HttpMethod Method, List<KeyValuePair<string, string>> Headers,
+        JsonNode? Payload, List<KeyValuePair<string, string?>> Query)
+    {
+        public string? Secret => Headers.FirstOrDefault(h => h.Key == "X-Internal-Secret").Value;
+    }
 
     private readonly List<ListenCall> _calls = new();
 
@@ -29,9 +32,11 @@ public class ListenHandlerTests : IDisposable
                 code = codeStr;
             return Task.FromResult(code != null && code.StartsWith("as:", StringComparison.Ordinal) ? code[3..] : null);
         };
-        PrivateApi.ListenUpstream = (endpoint, method, payload, query) =>
+        PrivateApi.ListenSecret = () => "proxy-secret";
+        PrivateApi.ListenUpstream = (endpoint, method, headers, payload, query) =>
         {
-            _calls.Add(new ListenCall(endpoint, method, payload?.DeepClone(), query?.ToList() ?? new()));
+            _calls.Add(new ListenCall(endpoint, method, headers?.ToList() ?? new(), payload?.DeepClone(),
+                query?.ToList() ?? new()));
             return Task.FromResult(CurationDeskTestSupport.JsonResponse(200, "{}"));
         };
     }
@@ -39,8 +44,9 @@ public class ListenHandlerTests : IDisposable
     public void Dispose()
     {
         PrivateApi.ListenValidateCode = PrivateApi.ValidateCode;
-        PrivateApi.ListenUpstream = (endpoint, method, payload, query) =>
-            ApiClient.ApiRequest(endpoint, method, null, payload, query);
+        PrivateApi.ListenSecret = () => Config.ListenProxySecret;
+        PrivateApi.ListenUpstream = (endpoint, method, headers, payload, query) =>
+            ApiClient.ApiRequest(endpoint, method, headers, payload, query);
     }
 
     private static string? Q(ListenCall call, string key) =>
@@ -65,6 +71,40 @@ public class ListenHandlerTests : IDisposable
         Assert.Equal("abcd1234efgh", payload["idempotency_key"]?.GetValue<string>());
         Assert.Equal("2026-10-13T01:04:12", payload["updated"]?.GetValue<string>());
         Assert.False(payload.ContainsKey("code"));
+        Assert.Equal("proxy-secret", call.Secret);
+    }
+
+    [Theory]
+    [InlineData("""{"code":"as:alice","permlink":"plaza","idempotency_key":"abcd1234efgh"}""")]
+    [InlineData("""{"code":"as:alice","author":"noelyss","idempotency_key":"abcd1234efgh"}""")]
+    [InlineData("""{"code":"as:alice","author":"noelyss","permlink":"plaza"}""")]
+    [InlineData("""{"code":"as:alice","author":"noelyss","permlink":"plaza","idempotency_key":"  "}""")]
+    [InlineData("""{"code":"as:alice","author":"noelyss","permlink":"plaza","idempotency_key":null}""")]
+    public async Task UnlockNeedsThePostAndAKey(string json)
+    {
+        var ctx = CurationDeskTestSupport.Post("/private-api/listen", json);
+        await PrivateApi.Listen(ctx);
+
+        Assert.Equal(400, ctx.Response.StatusCode);
+        Assert.Empty(_calls);
+    }
+
+    [Fact]
+    public async Task NothingNamingAReaderIsSentWithoutTheSecret()
+    {
+        PrivateApi.ListenSecret = () => null;
+        var unlock = CurationDeskTestSupport.Post("/private-api/listen", """
+            {"code":"as:alice","author":"noelyss","permlink":"plaza","idempotency_key":"abcd1234efgh"}
+            """);
+        await PrivateApi.Listen(unlock);
+        var status = CurationDeskTestSupport.Post("/private-api/listen-status", """
+            {"code":"as:alice","author":"noelyss","permlink":"plaza"}
+            """);
+        await PrivateApi.ListenStatus(status);
+
+        Assert.Equal(503, unlock.Response.StatusCode);
+        Assert.Equal(503, status.Response.StatusCode);
+        Assert.Empty(_calls);
     }
 
     [Fact]
@@ -94,6 +134,7 @@ public class ListenHandlerTests : IDisposable
         Assert.Equal("noelyss", Q(call, "author"));
         Assert.Equal("plaza", Q(call, "permlink"));
         Assert.DoesNotContain(call.Query, kv => kv.Key == "us");
+        Assert.Null(call.Secret);
     }
 
     [Fact]
@@ -107,14 +148,16 @@ public class ListenHandlerTests : IDisposable
         var call = Assert.Single(_calls);
         Assert.Equal("alice", Q(call, "us"));
         Assert.Equal("2026-10-13T01:04:12", Q(call, "updated"));
+        Assert.Equal("proxy-secret", call.Secret);
     }
 
-    [Fact]
-    public async Task StatusWithAnInvalidCodeIsRefusedNotAnonymous()
+    [Theory]
+    [InlineData("""{"code":"bogus","author":"noelyss","permlink":"plaza"}""")]
+    [InlineData("""{"code":"","author":"noelyss","permlink":"plaza"}""")]
+    [InlineData("""{"code":42,"author":"noelyss","permlink":"plaza"}""")]
+    public async Task StatusWithAnInvalidCodeIsRefusedNotAnonymous(string json)
     {
-        var ctx = CurationDeskTestSupport.Post("/private-api/listen-status", """
-            {"code":"bogus","author":"noelyss","permlink":"plaza"}
-            """);
+        var ctx = CurationDeskTestSupport.Post("/private-api/listen-status", json);
         await PrivateApi.ListenStatus(ctx);
 
         Assert.Equal(401, ctx.Response.StatusCode);
