@@ -227,6 +227,13 @@ AI_TRANSCRIBE_DIVERGENCE = (
     "::pop and ::badcode for every POST route, which is why all three appear here."
 )
 
+LISTEN_DIVERGENCE = (
+    "Listen routes added after the port (ePoints listen-status / listen: post audio "
+    "unlocked with Points). The reference build has no such route and answers 404; this "
+    "one validates the request and answers 400/401 or proxies. Deterministic and "
+    "additive -- no behavior the reference ever had is changing."
+)
+
 FAVORITE_TAGS_DIVERGENCE = (
     "Followed-hashtag routes added after the port (the favorites passthroughs, keyed by "
     "tag instead of account). The reference build has no such route and answers 404; "
@@ -310,6 +317,19 @@ KNOWN_DIVERGENCES = {
         AI_IMAGES_DIVERGENCE,
     "/private-api/ai-images::badcode":
         AI_IMAGES_DIVERGENCE,
+    # Listen routes, added after the port. Additive, same shape as the entries above.
+    "/private-api/listen-status::min":
+        LISTEN_DIVERGENCE,
+    "/private-api/listen-status::pop":
+        LISTEN_DIVERGENCE,
+    "/private-api/listen-status::badcode":
+        LISTEN_DIVERGENCE,
+    "/private-api/listen::min":
+        LISTEN_DIVERGENCE,
+    "/private-api/listen::pop":
+        LISTEN_DIVERGENCE,
+    "/private-api/listen::badcode":
+        LISTEN_DIVERGENCE,
     # Followed-hashtag passthroughs, added after the port. Same shape as the entries
     # above: additive routes the reference build never had.
     "/private-api/favorite-tags::min":
