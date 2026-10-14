@@ -33,7 +33,7 @@ cd dotnet
 docker build -t ecency/api -f Dockerfile .
 docker run -it --rm -p 4000:4000 \
   -e PRIVATE_API_ADDR=https://api.example.com \
-  -e PRIVATE_API_AUTH=$(printf '{"Authorization":"<token>"}' | base64 -w0) \
+  -e PRIVATE_API_AUTH=$(printf '{"User-Agent":"<ua>","X-Vapi-Auth":"<identity>"}' | base64 -w0) \
   ecency/api
 ```
 
@@ -43,7 +43,7 @@ docker run -it --rm -p 4000:4000 \
 |---|---|
 | `API_PORT` | listen port (default `4000`) |
 | `PRIVATE_API_ADDR` | private api endpoint |
-| `PRIVATE_API_AUTH` | private api auth (base64-encoded JSON header object) |
+| `PRIVATE_API_AUTH` | private api auth (base64-encoded JSON header object). Must include `X-Vapi-Auth`: the backends identify this service by it (ePoints compares it to its `VAPI_UPSTREAM_AUTH`, so both hold the same value) and refuse reader-bound calls such as Listen without it. A startup error is logged when it is missing |
 | `HIVESIGNER_SECRET` | hivesigner client secret |
 | `SEARCH_API_ADDR` | hivesearcher api endpoint |
 | `SEARCH_API_SECRET` | hivesearcher api auth token |

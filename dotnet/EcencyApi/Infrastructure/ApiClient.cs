@@ -16,9 +16,32 @@ public static class ApiClient
         public ApiAuthException() : base("Api auth couldn't be create!") { }
     }
 
+    /// <summary>
+    /// The header that identifies this service to the backends behind the private API.
+    /// PRIVATE_API_AUTH must carry it: ePoints refuses reader-bound calls (Listen status
+    /// and unlock) without it, comparing it to its own VAPI_UPSTREAM_AUTH, so both sides
+    /// hold the same value.
+    /// </summary>
+    public const string IdentityHeader = "X-Vapi-Auth";
+
+    /// <summary>Where the auth bundle and the private API address come from; tests swap them.</summary>
+    internal static Func<string> AuthSource = () => Config.PrivateApiAuth;
+    internal static Func<string> AddrSource = () => Config.PrivateApiAddr;
+
+    /// <summary>
+    /// True when PRIVATE_API_AUTH decodes and carries a non-empty identity header.
+    /// Checked at startup, so a deployment that would be refused upstream says so loudly.
+    /// </summary>
+    public static bool HasIdentity()
+    {
+        var auth = MakeApiAuth();
+        return auth != null && auth.Any(kv =>
+            kv.Key.Equals(IdentityHeader, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(kv.Value));
+    }
+
     private static Dictionary<string, string>? MakeApiAuth()
     {
-        var encoded = Config.PrivateApiAuth.Trim();
+        var encoded = AuthSource().Trim();
         if (encoded.Length == 0)
         {
             return null;
@@ -76,7 +99,7 @@ public static class ApiClient
         }
 
         return Upstream.BaseApiRequest(
-            $"{Config.PrivateApiAddr}/{endpoint}", method, headers, payload, query, timeoutMs);
+            $"{AddrSource()}/{endpoint}", method, headers, payload, query, timeoutMs);
     }
 
     /// <summary>
@@ -112,7 +135,7 @@ public static class ApiClient
         int timeoutMs = Upstream.DefaultTimeoutMs)
     {
         return Upstream.BaseMultipartRequest(
-            $"{Config.PrivateApiAddr}/{endpoint}", content, RequiredAuthHeaders(), timeoutMs);
+            $"{AddrSource()}/{endpoint}", content, RequiredAuthHeaders(), timeoutMs);
     }
 
     /// <summary>fetchPromotedEntries + getPromotedEntries (5-minute cached, shuffled).</summary>
