@@ -32,7 +32,6 @@ public class ListenHandlerTests : IDisposable
                 code = codeStr;
             return Task.FromResult(code != null && code.StartsWith("as:", StringComparison.Ordinal) ? code[3..] : null);
         };
-        PrivateApi.ListenSecret = () => "proxy-secret";
         PrivateApi.ListenUpstream = (endpoint, method, headers, payload, query) =>
         {
             _calls.Add(new ListenCall(endpoint, method, headers?.ToList() ?? new(), payload?.DeepClone(),
@@ -44,7 +43,6 @@ public class ListenHandlerTests : IDisposable
     public void Dispose()
     {
         PrivateApi.ListenValidateCode = PrivateApi.ValidateCode;
-        PrivateApi.ListenSecret = () => Config.ListenProxySecret;
         PrivateApi.ListenUpstream = (endpoint, method, headers, payload, query) =>
             ApiClient.ApiRequest(endpoint, method, headers, payload, query);
     }
@@ -71,7 +69,8 @@ public class ListenHandlerTests : IDisposable
         Assert.Equal("abcd1234efgh", payload["idempotency_key"]?.GetValue<string>());
         Assert.Equal("2026-10-13T01:04:12", payload["updated"]?.GetValue<string>());
         Assert.False(payload.ContainsKey("code"));
-        Assert.Equal("proxy-secret", call.Secret);
+        // identity rides on PRIVATE_API_AUTH (ApiClient), not a per-route secret
+        Assert.Null(call.Secret);
     }
 
     [Theory]
@@ -86,24 +85,6 @@ public class ListenHandlerTests : IDisposable
         await PrivateApi.Listen(ctx);
 
         Assert.Equal(400, ctx.Response.StatusCode);
-        Assert.Empty(_calls);
-    }
-
-    [Fact]
-    public async Task NothingNamingAReaderIsSentWithoutTheSecret()
-    {
-        PrivateApi.ListenSecret = () => null;
-        var unlock = CurationDeskTestSupport.Post("/private-api/listen", """
-            {"code":"as:alice","author":"noelyss","permlink":"plaza","idempotency_key":"abcd1234efgh"}
-            """);
-        await PrivateApi.Listen(unlock);
-        var status = CurationDeskTestSupport.Post("/private-api/listen-status", """
-            {"code":"as:alice","author":"noelyss","permlink":"plaza"}
-            """);
-        await PrivateApi.ListenStatus(status);
-
-        Assert.Equal(503, unlock.Response.StatusCode);
-        Assert.Equal(503, status.Response.StatusCode);
         Assert.Empty(_calls);
     }
 
@@ -148,7 +129,8 @@ public class ListenHandlerTests : IDisposable
         var call = Assert.Single(_calls);
         Assert.Equal("alice", Q(call, "us"));
         Assert.Equal("2026-10-13T01:04:12", Q(call, "updated"));
-        Assert.Equal("proxy-secret", call.Secret);
+        // identity rides on PRIVATE_API_AUTH (ApiClient), not a per-route secret
+        Assert.Null(call.Secret);
     }
 
     [Theory]

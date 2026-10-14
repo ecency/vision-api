@@ -12,26 +12,11 @@ public static partial class PrivateApi
 {
     internal static Func<JsonObject, Task<string?>> ListenValidateCode = ValidateCode;
 
-    internal static Func<string?> ListenSecret = () => Config.ListenProxySecret;
-
     /// <summary>The upstream call, replaceable so tests can observe it without a network.</summary>
     internal static Func<string, HttpMethod, IEnumerable<KeyValuePair<string, string>>?, JsonNode?,
             IEnumerable<KeyValuePair<string, string?>>?, Task<UpstreamResponse>>
         ListenUpstream = (endpoint, method, headers, payload, query) =>
             ApiClient.ApiRequest(endpoint, method, headers, payload, query);
-
-    /// <summary>
-    /// The secret that lets the upstream trust the reader this proxy names. Without it
-    /// configured, nothing that names a reader is sent (503), rather than letting the
-    /// upstream refuse it as forged.
-    /// </summary>
-    private static KeyValuePair<string, string>[]? ListenSecretHeaders()
-    {
-        var secret = ListenSecret();
-        return string.IsNullOrEmpty(secret)
-            ? null
-            : new[] { new KeyValuePair<string, string>("X-Internal-Secret", secret) };
-    }
 
     private static string? ListenString(JsonObject body, string key) =>
         body[key] is JsonValue v && JsVal.TryGetStringLenient(v, out var s) && s.Length > 0 ? s : null;
@@ -76,19 +61,9 @@ public static partial class PrivateApi
         var updated = ListenString(body, "updated");
         if (updated != null) query.Add(new("updated", updated));
 
-        KeyValuePair<string, string>[]? headers = null;
-        if (username != null)
-        {
-            headers = ListenSecretHeaders();
-            if (headers == null)
-            {
-                Console.Error.WriteLine("listenStatus(): LISTEN_PROXY_SECRET not configured");
-                await ctx.SendText(503, "Service Unavailable");
-                return;
-            }
-        }
-
-        await Upstream.Pipe(ListenUpstream("listen-status", HttpMethod.Get, headers, null, query), ctx);
+        // The upstream trusts `us` because ApiClient sends PRIVATE_API_AUTH (X-Vapi-Auth)
+        // on every call; no listen-specific secret is needed.
+        await Upstream.Pipe(ListenUpstream("listen-status", HttpMethod.Get, null, null, query), ctx);
     }
 
     /// <summary>
@@ -113,18 +88,11 @@ public static partial class PrivateApi
             await ctx.SendText(400, "Bad Request");
             return;
         }
-        var headers = ListenSecretHeaders();
-        if (headers == null)
-        {
-            Console.Error.WriteLine("listen(): LISTEN_PROXY_SECRET not configured");
-            await ctx.SendText(503, "Service Unavailable");
-            return;
-        }
         var data = new JsonObject
         {
             ["us"] = username,
         };
         MiscCopyIfPresent(data, body, "author", "permlink", "idempotency_key", "updated");
-        await Upstream.Pipe(ListenUpstream("listen", HttpMethod.Post, headers, data, null), ctx);
+        await Upstream.Pipe(ListenUpstream("listen", HttpMethod.Post, null, data, null), ctx);
     }
 }
