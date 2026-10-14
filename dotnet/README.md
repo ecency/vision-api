@@ -210,7 +210,7 @@ the same defaults, as the Node service (`Config.cs` mirrors `src/config.ts`):
 |---|---|---|
 | `API_PORT` | listen port | `4000` |
 | `PRIVATE_API_ADDR` | internal private API base URL | placeholder |
-| `PRIVATE_API_AUTH` | base64-encoded JSON object of auth headers for the private API | placeholder |
+| `PRIVATE_API_AUTH` | base64-encoded JSON object of auth headers for the private API. Must include `X-Vapi-Auth` (`ApiClient.IdentityHeader`), the identity backends check: ePoints compares it to its `VAPI_UPSTREAM_AUTH` and refuses reader-bound calls such as Listen without it. Startup logs an error when it is missing | placeholder |
 | `HIVESIGNER_SECRET` | HiveSigner OAuth client secret | placeholder |
 | `SEARCH_API_ADDR` / `SEARCH_API_SECRET` | search backend + token | placeholder |
 | `STRIPE_INTERNAL_SECRET` | shared secret for the Stripe money endpoints; unset = those routes fail closed with 503 | unset |
@@ -225,7 +225,7 @@ the same defaults, as the Node service (`Config.cs` mirrors `src/config.ts`):
 ```bash
 API_PORT=4000 \
 PRIVATE_API_ADDR=https://example.com/api \
-PRIVATE_API_AUTH=$(printf '{"Authorization":"..."}' | base64 -w0) \
+PRIVATE_API_AUTH=$(printf '{"User-Agent":"...","X-Vapi-Auth":"..."}' | base64 -w0) \
 HIVESIGNER_SECRET=... \
 SEARCH_API_ADDR=https://search.example.com \
 SEARCH_API_SECRET=... \

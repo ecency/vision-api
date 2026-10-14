@@ -1,5 +1,6 @@
 using EcencyApi;
 using EcencyApi.Handlers;
+using EcencyApi.Infrastructure;
 using Microsoft.Extensions.FileProviders;
 
 // Docker HEALTHCHECK entrypoint: poll our own /healthcheck.json, exit 0/1.
@@ -43,6 +44,14 @@ if (Environment.GetEnvironmentVariable("Logging__LogLevel__Default") is null)
 }
 
 var app = builder.Build();
+
+if (!ApiClient.HasIdentity())
+{
+    // Not fatal: most routes still work. Reader-bound backend calls (Listen) are
+    // refused upstream until PRIVATE_API_AUTH carries the identity header.
+    Console.Error.WriteLine(
+        $"PRIVATE_API_AUTH has no {ApiClient.IdentityHeader} header: backend calls that need this service's identity will be refused");
+}
 
 // Global error handling — the Node app's error middleware sends a plain
 // 500 "Server Error" for anything thrown by handlers (including body-parser
