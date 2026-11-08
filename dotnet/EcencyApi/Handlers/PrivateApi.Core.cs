@@ -149,8 +149,11 @@ public static partial class PrivateApi
             var digest = HiveCrypto.Sha256Utf8(rawMessage);
             var recoveredPubKey = HiveCrypto.RecoverPublicKey(signature, digest);
 
-            var accounts = await ValidationAccounts(new[] { author })
-                ?? throw new InvalidOperationException("getAccounts result is not iterable");
+            // A read that fails (node error, timeout, unusable answer) is not a
+            // verdict on the code: it throws TokenCheckUnavailableException, which
+            // the pipeline answers 503 (ServerErrors) instead of the 401 that tells
+            // clients their session was refused. Only the chain's answer decides.
+            var accounts = await ReadValidationAccounts(author);
             var account = accounts.Count > 0 ? accounts[0] : null;
             if (account is null)
             {
@@ -158,9 +161,7 @@ public static partial class PrivateApi
                 return null;
             }
 
-            // account.posting.key_auths.map(([key]) => key) — unexpected shapes
-            // throw and land in the catch below, like the TS TypeError would.
-            var postingPubKeys = MapKeyAuths(account["posting"]!["key_auths"]);
+            var postingPubKeys = PostingKeys(account);
             if (recoveredPubKey != null && postingPubKeys.Contains(recoveredPubKey))
             {
                 return author;
@@ -172,17 +173,19 @@ public static partial class PrivateApi
             {
                 try
                 {
-                    var hsAccounts = await ValidationAccounts(new[] { "hivesigner" })
-                        ?? throw new InvalidOperationException("getAccounts result is not iterable");
+                    var hsAccounts = await ReadValidationAccounts("hivesigner");
+                    var hsAccount = hsAccounts.Count > 0 ? hsAccounts[0] : null;
+                    // An unusable answer is not cached for a day.
+                    if (hsAccount is not null) PostingKeys(hsAccount);
                     // TS caches whatever destructures out — undefined included —
                     // and stamps the time either way.
-                    _hivesignerAccountCache = hsAccounts.Count > 0 ? hsAccounts[0] : null;
+                    _hivesignerAccountCache = hsAccount;
                     _hivesignerCacheTime = currentTime;
                 }
-                catch (Exception err)
+                catch (TokenCheckUnavailableException) when (_hivesignerAccountCache is not null)
                 {
-                    Console.Error.WriteLine($"Failed to fetch hivesigner account {err}");
-                    return null;
+                    // A failed refresh keeps the keys already held (they change
+                    // rarely); the time is not stamped, so the next check retries.
                 }
             }
 
@@ -199,11 +202,55 @@ public static partial class PrivateApi
                 $"Posting key mismatch {recoveredPubKey} [{string.Join(", ", postingPubKeys)}] [{string.Join(", ", hsPostingKeys)}]");
             return null;
         }
-        catch (Exception err)
+        catch (Exception err) when (err is not TokenCheckUnavailableException)
         {
             Console.Error.WriteLine($"Token validation error {err}");
             return null;
         }
+    }
+
+    /// <summary>
+    /// The accounts read for ValidateCode. An RPC-level error is the node's
+    /// answer to the call (HiveRpcClient does not fail over on it) and stays a
+    /// refusal; anything else that fails, and an answer that is not an array,
+    /// means the keys could not be read.
+    /// </summary>
+    private static async Task<JsonArray> ReadValidationAccounts(string name)
+    {
+        JsonArray? accounts;
+        try
+        {
+            accounts = await ValidationAccounts(new[] { name });
+        }
+        catch (Exception err) when (err is not HiveRpcClient.RpcException)
+        {
+            throw Unavailable("account read failed", err);
+        }
+
+        return accounts ?? throw Unavailable("account read answered no array");
+    }
+
+    /// <summary>
+    /// account.posting.key_auths.map(([key]) => key). Every account has posting
+    /// keys, so an account without them is an unusable answer, not a refusal.
+    /// </summary>
+    private static List<string?> PostingKeys(JsonNode account)
+    {
+        try
+        {
+            return MapKeyAuths(account["posting"]!["key_auths"]);
+        }
+        catch (Exception err)
+        {
+            throw Unavailable("account answer without posting keys", err);
+        }
+    }
+
+    private static TokenCheckUnavailableException Unavailable(string reason, Exception? inner = null)
+    {
+        // The reason only, once: a node outage fails every request the same way.
+        LogOnce($"Token check unavailable: {reason}");
+        return new TokenCheckUnavailableException(reason, inner);
     }
 
     /// <summary>Forgets the cached @hivesigner account (tests).</summary>
@@ -212,6 +259,9 @@ public static partial class PrivateApi
         _hivesignerAccountCache = null;
         _hivesignerCacheTime = 0;
     }
+
+    /// <summary>Makes the cached @hivesigner account due for refresh, keeping it (tests).</summary>
+    internal static void ExpireHivesignerCache() => _hivesignerCacheTime = 0;
 
     /// <summary>The chain read behind token validation (tests answer it).</summary>
     internal static Func<IEnumerable<string?>, Task<JsonArray?>> ValidationAccounts =

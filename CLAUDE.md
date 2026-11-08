@@ -127,3 +127,10 @@ without a type.
 Handlers using `RequireAuthedUsername` differ from those calling `ValidateCode`
 directly only in that the former sends the 401 for you - the validation is the
 same, so it is never the explanation for one route failing while another passes.
+
+A 401 from `ValidateCode` is always a verdict from the chain's answer (no such
+account, a key that does not match, a malformed or non-session code). When the
+keys could not be read at all (node error, timeout, an unusable answer), it
+throws `TokenCheckUnavailableException` and `ServerErrors` answers 503
+"Service Unavailable" with `Retry-After`, so clients do not take a node outage
+for a refused session. Do not catch that exception in a handler.
