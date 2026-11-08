@@ -41,12 +41,12 @@ public class TokenCheckUnavailableTests : IDisposable
     private static JsonArray Known(string? name) =>
         new(Account(name!, name == "hivesigner" ? HsPub : Pub));
 
-    private static string Code(ECPrivKey key)
+    private static string Code(ECPrivKey key, string author = "alice")
     {
         var message = new JsonObject
         {
             ["signed_message"] = new JsonObject { ["type"] = "code", ["app"] = "ecency.app" },
-            ["authors"] = new JsonArray("alice"),
+            ["authors"] = new JsonArray(author),
             ["timestamp"] = 1726650000,
         };
         var digest = HiveCrypto.Sha256Utf8(JsJson.Stringify(message));
@@ -284,14 +284,99 @@ public class TokenCheckUnavailableTests : IDisposable
         Assert.Equal((401, "Unauthorized", ""), await StreakFreezeBuy(Key));
     }
 
-    [Fact]
-    public async Task AnRpcErrorIsTheNodesAnswerAndStaysUnauthorized()
+    [Theory]
+    [InlineData("Internal Error (-32603)")]
+    [InlineData("Unable to acquire database lock (-32000)")]
+    public async Task AnRpcErrorForAWellFormedNameIsUnavailable(string message)
     {
-        // An RPC-level error is the node answering the call (HiveRpcClient does
-        // not fail over on it), so it is not an outage.
-        PrivateApi.ValidationAccounts = _ => throw new HiveRpcClient.RpcException("bad name");
+        // A node can answer an internal error for a valid read: no verdict.
+        PrivateApi.ValidationAccounts = _ => throw new HiveRpcClient.RpcException(message);
 
-        Assert.Equal((401, "Unauthorized", ""), await Unread(Key));
+        AssertUnavailable(await Unread(Key));
+        AssertUnavailable(await StreakFreezeBuy(Key));
+    }
+
+    [Fact]
+    public async Task AnRpcErrorReadingHivesignerIsUnavailable()
+    {
+        PrivateApi.ValidationAccounts = names =>
+            names.Single() == "hivesigner"
+                ? throw new HiveRpcClient.RpcException("Internal Error (-32603)")
+                : Task.FromResult<JsonArray?>(Known("alice"));
+
+        AssertUnavailable(await Unread(HsKey));
+    }
+
+    [Theory]
+    [InlineData("Alice")]
+    [InlineData("al ice")]
+    [InlineData("al_ice")]
+    [InlineData("ab")]
+    [InlineData("averyveryverylongname")]
+    [InlineData("")]
+    public async Task AMalformedNameIsUnauthorizedWithoutAChainRead(string author)
+    {
+        var reads = 0;
+        PrivateApi.ValidationAccounts = _ =>
+        {
+            reads++;
+            throw new HiveRpcClient.RpcException("Internal Error (-32603)");
+        };
+
+        Assert.Equal((401, "Unauthorized", ""),
+            await Run(PrivateApi.UnreadNotifications, new JsonObject { ["code"] = Code(Key, author) }));
+        Assert.Equal(0, reads);
+    }
+
+    [Theory]
+    [InlineData("a.b-1")]
+    [InlineData("1ab")]
+    [InlineData("abc-")]
+    public async Task ALenientlyWellFormedNameIsRead(string author)
+    {
+        // No segment rules: an old name that today's rules refuse is still looked up.
+        var reads = new List<string?>();
+        PrivateApi.ValidationAccounts = names =>
+        {
+            reads.AddRange(names);
+            return Task.FromResult<JsonArray?>(new JsonArray());
+        };
+
+        Assert.Null(await PrivateApi.ValidateCode(new JsonObject { ["code"] = Code(Key, author) }));
+        Assert.Equal(new[] { author }, reads);
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("[null]")]
+    public async Task AHivesignerAnswerWithoutTheAccountIsUnavailableAndNotCached(string answer)
+    {
+        PrivateApi.ValidationAccounts = names =>
+            Task.FromResult<JsonArray?>(names.Single() == "hivesigner"
+                ? (JsonArray)JsonNode.Parse(answer)!
+                : Known("alice"));
+        AssertUnavailable(await Unread(HsKey));
+
+        PrivateApi.ValidationAccounts = names => Task.FromResult<JsonArray?>(Known(names.Single()));
+        Assert.Equal("alice", await PrivateApi.ValidateCode(new JsonObject { ["code"] = Code(HsKey) }));
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("[null]")]
+    public async Task AHivesignerAnswerWithoutTheAccountKeepsTheCachedKeys(string answer)
+    {
+        PrivateApi.ValidationAccounts = names => Task.FromResult<JsonArray?>(Known(names.Single()));
+        Assert.Equal("alice", await PrivateApi.ValidateCode(new JsonObject { ["code"] = Code(HsKey) }));
+
+        PrivateApi.AgeHivesignerCache(PrivateApi.HiveSignerStaleMaxMs - 60_000);
+        PrivateApi.ValidationAccounts = names =>
+            Task.FromResult<JsonArray?>(names.Single() == "hivesigner"
+                ? (JsonArray)JsonNode.Parse(answer)!
+                : Known("alice"));
+        Assert.Equal("alice", await PrivateApi.ValidateCode(new JsonObject { ["code"] = Code(HsKey) }));
+        // Still held for the next check.
+        Assert.Equal("alice", await PrivateApi.ValidateCode(new JsonObject { ["code"] = Code(HsKey) }));
     }
 
     [Fact]

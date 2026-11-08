@@ -152,7 +152,13 @@ public static partial class PrivateApi
             // A read that fails (node error, timeout, unusable answer) is not a
             // verdict on the code: it throws TokenCheckUnavailableException, which
             // the pipeline answers 503 (ServerErrors) instead of the 401 that tells
-            // clients their session was refused. Only the chain's answer decides.
+            // clients their session was refused. Only the chain's answer decides,
+            // so a name that can never be an account is refused without a read.
+            if (!IsAccountNameShape(author))
+            {
+                LogOnce("Token author is not an account name");
+                return null;
+            }
             var accounts = await ReadValidationAccounts(author);
             var account = accounts.Count > 0 ? accounts[0] : null;
             if (account is null)
@@ -176,14 +182,19 @@ public static partial class PrivateApi
                 {
                     var hsAccounts = await ReadValidationAccounts("hivesigner");
                     var hsAccount = hsAccounts.Count > 0 ? hsAccounts[0] : null;
-                    // An unusable answer is not cached for a day. @hivesigner signs
-                    // with its posting key, so an empty key list is unusable too.
-                    if (hsAccount is not null && PostingKeys(hsAccount).Count == 0)
+                    // An unusable answer is not cached for a day. @hivesigner exists
+                    // and signs with its posting key, so an answer without the
+                    // account or with an empty key list is unusable too.
+                    if (hsAccount is null)
+                    {
+                        throw Unavailable("hivesigner answer without the account");
+                    }
+                    if (PostingKeys(hsAccount).Count == 0)
                     {
                         throw Unavailable("hivesigner answer without posting keys");
                     }
-                    // TS caches whatever destructures out — undefined included —
-                    // and stamps the time either way.
+                    // Only a usable answer is cached (TS cached whatever came back,
+                    // undefined included).
                     _hivesignerAccountCache = hsAccount;
                     _hivesignerCacheTime = currentTime;
                 }
@@ -225,10 +236,10 @@ public static partial class PrivateApi
     }
 
     /// <summary>
-    /// The accounts read for ValidateCode. An RPC-level error is the node's
-    /// answer to the call (HiveRpcClient does not fail over on it) and stays a
-    /// refusal; anything else that fails, and an answer that is not an array,
-    /// means the keys could not be read.
+    /// The accounts read for ValidateCode, for a name of account shape. Any
+    /// failure, RPC-level errors included (a node can answer an internal error
+    /// for a valid read), and an answer that is not an array, means the keys
+    /// could not be read.
     /// </summary>
     private static async Task<JsonArray> ReadValidationAccounts(string name)
     {
@@ -237,13 +248,22 @@ public static partial class PrivateApi
         {
             accounts = await ValidationAccounts(new[] { name });
         }
-        catch (Exception err) when (err is not HiveRpcClient.RpcException)
+        catch (Exception err)
         {
             throw Unavailable("account read failed", err);
         }
 
         return accounts ?? throw Unavailable("account read answered no array");
     }
+
+    /// <summary>
+    /// A shape every existing Hive account name has: 3 to 16 characters of a-z,
+    /// 0-9, '.' and '-'. Deliberately looser than HiveNames.IsAccountName (no
+    /// segment rules), so no older account is ever refused by it.
+    /// </summary>
+    internal static bool IsAccountNameShape(string name) =>
+        name.Length is >= 3 and <= 16
+        && name.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '.' or '-');
 
     /// <summary>
     /// account.posting.key_auths.map(([key]) => key). Every account has a posting
