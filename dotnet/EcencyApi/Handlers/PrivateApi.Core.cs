@@ -168,6 +168,7 @@ public static partial class PrivateApi
             }
 
             // Use cached hivesigner account, refresh every 24h
+            var hsRefreshFailed = false;
             if (_hivesignerAccountCache is null
                 || currentTime - _hivesignerCacheTime > HiveSignerCacheTtlMs)
             {
@@ -175,17 +176,26 @@ public static partial class PrivateApi
                 {
                     var hsAccounts = await ReadValidationAccounts("hivesigner");
                     var hsAccount = hsAccounts.Count > 0 ? hsAccounts[0] : null;
-                    // An unusable answer is not cached for a day.
-                    if (hsAccount is not null) PostingKeys(hsAccount);
+                    // An unusable answer is not cached for a day. @hivesigner signs
+                    // with its posting key, so an empty key list is unusable too.
+                    if (hsAccount is not null && PostingKeys(hsAccount).Count == 0)
+                    {
+                        throw Unavailable("hivesigner answer without posting keys");
+                    }
                     // TS caches whatever destructures out — undefined included —
                     // and stamps the time either way.
                     _hivesignerAccountCache = hsAccount;
                     _hivesignerCacheTime = currentTime;
                 }
-                catch (TokenCheckUnavailableException) when (_hivesignerAccountCache is not null)
+                catch (TokenCheckUnavailableException)
+                    when (_hivesignerAccountCache is not null
+                          && currentTime - _hivesignerCacheTime <= HiveSignerStaleMaxMs)
                 {
                     // A failed refresh keeps the keys already held (they change
-                    // rarely); the time is not stamped, so the next check retries.
+                    // rarely) for a bounded time; the time is not stamped, so the
+                    // next check retries. They may only accept: a mismatch below
+                    // could be a key the failed read would have shown.
+                    hsRefreshFailed = true;
                 }
             }
 
@@ -196,6 +206,11 @@ public static partial class PrivateApi
             if (recoveredPubKey != null && hsPostingKeys.Contains(recoveredPubKey))
             {
                 return author;
+            }
+
+            if (hsRefreshFailed)
+            {
+                throw Unavailable("hivesigner keys could not be refreshed");
             }
 
             Console.WriteLine(
@@ -231,25 +246,34 @@ public static partial class PrivateApi
     }
 
     /// <summary>
-    /// account.posting.key_auths.map(([key]) => key). Every account has posting
-    /// keys, so an account without them is an unusable answer, not a refusal.
+    /// account.posting.key_auths.map(([key]) => key). Every account has a posting
+    /// authority, so an answer without a key list, or with an entry that is not a
+    /// key, is unusable, not a refusal. An empty list is a real account shape
+    /// (posting held by other accounts only) and is returned as is.
     /// </summary>
     private static List<string?> PostingKeys(JsonNode account)
     {
+        List<string?> keys;
         try
         {
-            return MapKeyAuths(account["posting"]!["key_auths"]);
+            keys = MapKeyAuths(account["posting"]!["key_auths"]);
         }
         catch (Exception err)
         {
             throw Unavailable("account answer without posting keys", err);
         }
+
+        if (keys.Any(string.IsNullOrEmpty))
+        {
+            throw Unavailable("account answer with a posting key that is not a key");
+        }
+        return keys;
     }
 
     private static TokenCheckUnavailableException Unavailable(string reason, Exception? inner = null)
     {
-        // The reason only, once: a node outage fails every request the same way.
-        LogOnce($"Token check unavailable: {reason}");
+        var (key, line) = UnavailableLog(reason, inner);
+        LogOnce(key, line);
         return new TokenCheckUnavailableException(reason, inner);
     }
 
@@ -260,8 +284,24 @@ public static partial class PrivateApi
         _hivesignerCacheTime = 0;
     }
 
-    /// <summary>Makes the cached @hivesigner account due for refresh, keeping it (tests).</summary>
-    internal static void ExpireHivesignerCache() => _hivesignerCacheTime = 0;
+    /// <summary>Makes the cached @hivesigner account `ageMs` old, keeping it (tests).</summary>
+    internal static void AgeHivesignerCache(long ageMs) =>
+        _hivesignerCacheTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - ageMs;
+
+    /// <summary>How old cached @hivesigner keys may be when a refresh fails.</summary>
+    internal const long HiveSignerStaleMaxMs = 2 * HiveSignerCacheTtlMs;
+
+    /// <summary>
+    /// The log line for an unavailable check, and the key it is written once under:
+    /// the cause's type and message only, never the code or the request, once per
+    /// reason and cause type, since a node outage fails every request the same way.
+    /// </summary>
+    internal static (string Key, string Line) UnavailableLog(string reason, Exception? inner)
+    {
+        var type = inner?.GetType().Name ?? "-";
+        var cause = inner is null ? "" : $" ({type}: {inner.Message})";
+        return ($"Token check unavailable: {reason} [{type}]", $"Token check unavailable: {reason}{cause}");
+    }
 
     /// <summary>The chain read behind token validation (tests answer it).</summary>
     internal static Func<IEnumerable<string?>, Task<JsonArray?>> ValidationAccounts =
@@ -291,10 +331,12 @@ public static partial class PrivateApi
     private static int _tokenLogLines;
     private static readonly ConcurrentDictionary<string, byte> TokenLogSeen = new();
 
-    private static void LogOnce(string line)
+    private static void LogOnce(string line) => LogOnce(line, line);
+
+    private static void LogOnce(string key, string line)
     {
-        if (Volatile.Read(ref _tokenLogLines) >= MaxTokenLogLines || TokenLogSeen.ContainsKey(line)) return;
-        if (!TokenLogSeen.TryAdd(line, 0)) return;
+        if (Volatile.Read(ref _tokenLogLines) >= MaxTokenLogLines || TokenLogSeen.ContainsKey(key)) return;
+        if (!TokenLogSeen.TryAdd(key, 0)) return;
         if (Interlocked.Increment(ref _tokenLogLines) > MaxTokenLogLines) return;
         Console.WriteLine(line);
     }

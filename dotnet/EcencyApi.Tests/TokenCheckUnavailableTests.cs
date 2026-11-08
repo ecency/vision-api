@@ -156,13 +156,113 @@ public class TokenCheckUnavailableTests : IDisposable
         PrivateApi.ValidationAccounts = names => Task.FromResult<JsonArray?>(Known(names.Single()));
         Assert.Equal("alice", await PrivateApi.ValidateCode(new JsonObject { ["code"] = Code(HsKey) }));
 
-        PrivateApi.ExpireHivesignerCache();
+        // Due for refresh, still inside the stale grace.
+        PrivateApi.AgeHivesignerCache(PrivateApi.HiveSignerStaleMaxMs - 60_000);
         PrivateApi.ValidationAccounts = names =>
             names.Single() == "hivesigner"
                 ? throw new HttpRequestException("node down")
                 : Task.FromResult<JsonArray?>(Known("alice"));
 
         Assert.Equal("alice", await PrivateApi.ValidateCode(new JsonObject { ["code"] = Code(HsKey) }));
+    }
+
+    private static Func<IEnumerable<string?>, Task<JsonArray?>> HivesignerDown => names =>
+        names.Single() == "hivesigner"
+            ? throw new HttpRequestException("node down")
+            : Task.FromResult<JsonArray?>(Known("alice"));
+
+    [Fact]
+    public async Task AMismatchAgainstStaleKeysAfterAFailedRefreshIsUnavailable()
+    {
+        // Cached @hivesigner keys that no longer sign (HiveSigner rotated its key).
+        PrivateApi.ValidationAccounts = names =>
+            Task.FromResult<JsonArray?>(names.Single() == "hivesigner"
+                ? new JsonArray(Account("hivesigner", Pub.Replace(Pub[^1], Pub[^1] == 'A' ? 'B' : 'A')))
+                : Known("alice"));
+        Assert.Null(await PrivateApi.ValidateCode(new JsonObject { ["code"] = Code(HsKey) }));
+
+        // The refresh that would have read the new key fails: no verdict either way.
+        PrivateApi.AgeHivesignerCache(PrivateApi.HiveSignerStaleMaxMs - 60_000);
+        PrivateApi.ValidationAccounts = HivesignerDown;
+        AssertUnavailable(await Unread(HsKey));
+    }
+
+    [Fact]
+    public async Task StaleHivesignerKeysPastTheGraceAreNotUsed()
+    {
+        PrivateApi.ValidationAccounts = names => Task.FromResult<JsonArray?>(Known(names.Single()));
+        Assert.Equal("alice", await PrivateApi.ValidateCode(new JsonObject { ["code"] = Code(HsKey) }));
+
+        PrivateApi.AgeHivesignerCache(PrivateApi.HiveSignerStaleMaxMs + 60_000);
+        PrivateApi.ValidationAccounts = HivesignerDown;
+        AssertUnavailable(await Unread(HsKey));
+    }
+
+    [Theory]
+    [InlineData("[[123, 1]]")]
+    [InlineData("[[\"\", 1]]")]
+    [InlineData("[[null, 1]]")]
+    public async Task AnAccountKeyThatIsNotAKeyIsAGarbageAnswer(string keyAuths)
+    {
+        PrivateApi.ValidationAccounts = _ => Task.FromResult<JsonArray?>(new JsonArray(new JsonObject
+        {
+            ["name"] = "alice",
+            ["posting"] = new JsonObject { ["key_auths"] = JsonNode.Parse(keyAuths) },
+        }));
+
+        AssertUnavailable(await Unread(Key));
+    }
+
+    [Theory]
+    [InlineData("[[123, 1]]")]
+    [InlineData("[]")]
+    public async Task AnUnusableHivesignerKeyListIsUnavailableAndNotCached(string keyAuths)
+    {
+        PrivateApi.ValidationAccounts = names =>
+            Task.FromResult<JsonArray?>(names.Single() == "hivesigner"
+                ? new JsonArray(new JsonObject
+                {
+                    ["name"] = "hivesigner",
+                    ["posting"] = new JsonObject { ["key_auths"] = JsonNode.Parse(keyAuths) },
+                })
+                : Known("alice"));
+        AssertUnavailable(await Unread(HsKey));
+
+        PrivateApi.ValidationAccounts = names => Task.FromResult<JsonArray?>(Known(names.Single()));
+        Assert.Equal("alice", await PrivateApi.ValidateCode(new JsonObject { ["code"] = Code(HsKey) }));
+    }
+
+    [Fact]
+    public async Task AnAccountWhosePostingIsHeldByAccountsOnlyIsStillChecked()
+    {
+        // No posting keys of its own is a real account shape (account_auths only),
+        // not a garbage answer: @hivesigner's keys still decide.
+        PrivateApi.ValidationAccounts = names =>
+            Task.FromResult<JsonArray?>(names.Single() == "hivesigner"
+                ? Known("hivesigner")
+                : new JsonArray(new JsonObject
+                {
+                    ["name"] = "alice",
+                    ["posting"] = new JsonObject { ["key_auths"] = new JsonArray() },
+                }));
+
+        Assert.Equal("alice", await PrivateApi.ValidateCode(new JsonObject { ["code"] = Code(HsKey) }));
+        Assert.Equal((401, "Unauthorized", ""), await Unread(OtherKey));
+    }
+
+    [Fact]
+    public void TheUnavailableLogNamesTheCauseButNotTheToken()
+    {
+        var timeout = PrivateApi.UnavailableLog("account read failed", new TaskCanceledException("timed out"));
+        var transport = PrivateApi.UnavailableLog("account read failed", new HttpRequestException("refused"));
+
+        Assert.Contains("TaskCanceledException", timeout.Line);
+        Assert.Contains("timed out", timeout.Line);
+        Assert.Contains("HttpRequestException", transport.Line);
+        // One line per reason and cause type, however the messages vary.
+        Assert.NotEqual(timeout.Key, transport.Key);
+        Assert.Equal(transport.Key,
+            PrivateApi.UnavailableLog("account read failed", new HttpRequestException("other")).Key);
     }
 
     [Fact]
