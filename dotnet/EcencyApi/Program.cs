@@ -53,26 +53,10 @@ if (!ApiClient.HasIdentity())
         $"PRIVATE_API_AUTH has no {ApiClient.IdentityHeader} header: backend calls that need this service's identity will be refused");
 }
 
-// Global error handling — the Node app's error middleware sends a plain
-// 500 "Server Error" for anything thrown by handlers (including body-parser
-// SyntaxErrors), so mirror that exactly.
-app.Use(async (ctx, next) =>
-{
-    try
-    {
-        await next();
-    }
-    catch (Exception e)
-    {
-        Console.Error.WriteLine($"Unhandled server error: {e}");
-        if (!ctx.Response.HasStarted)
-        {
-            ctx.Response.StatusCode = 500;
-            ctx.Response.ContentType = "text/html; charset=utf-8";
-            await ctx.Response.WriteAsync("Server Error");
-        }
-    }
-});
+// Global error handling: a 503 for a session code that could not be checked,
+// and the Node app's plain 500 "Server Error" for anything else a handler
+// throws (see ServerErrors).
+app.Use(ServerErrors.Handle);
 
 // cors() — allow-all, like the Node service
 app.UseCors(policy => policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());

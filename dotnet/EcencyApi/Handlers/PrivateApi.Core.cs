@@ -149,8 +149,17 @@ public static partial class PrivateApi
             var digest = HiveCrypto.Sha256Utf8(rawMessage);
             var recoveredPubKey = HiveCrypto.RecoverPublicKey(signature, digest);
 
-            var accounts = await ValidationAccounts(new[] { author })
-                ?? throw new InvalidOperationException("getAccounts result is not iterable");
+            // A read that fails (node error, timeout, unusable answer) is not a
+            // verdict on the code: it throws TokenCheckUnavailableException, which
+            // the pipeline answers 503 (ServerErrors) instead of the 401 that tells
+            // clients their session was refused. Only the chain's answer decides,
+            // so a name that can never be an account is refused without a read.
+            if (!IsAccountNameShape(author))
+            {
+                LogOnce("Token author is not an account name");
+                return null;
+            }
+            var accounts = await ReadValidationAccounts(author);
             var account = accounts.Count > 0 ? accounts[0] : null;
             if (account is null)
             {
@@ -158,31 +167,46 @@ public static partial class PrivateApi
                 return null;
             }
 
-            // account.posting.key_auths.map(([key]) => key) — unexpected shapes
-            // throw and land in the catch below, like the TS TypeError would.
-            var postingPubKeys = MapKeyAuths(account["posting"]!["key_auths"]);
+            var postingPubKeys = PostingKeys(account);
             if (recoveredPubKey != null && postingPubKeys.Contains(recoveredPubKey))
             {
                 return author;
             }
 
             // Use cached hivesigner account, refresh every 24h
+            var hsRefreshFailed = false;
             if (_hivesignerAccountCache is null
                 || currentTime - _hivesignerCacheTime > HiveSignerCacheTtlMs)
             {
                 try
                 {
-                    var hsAccounts = await ValidationAccounts(new[] { "hivesigner" })
-                        ?? throw new InvalidOperationException("getAccounts result is not iterable");
-                    // TS caches whatever destructures out — undefined included —
-                    // and stamps the time either way.
-                    _hivesignerAccountCache = hsAccounts.Count > 0 ? hsAccounts[0] : null;
+                    var hsAccounts = await ReadValidationAccounts("hivesigner");
+                    var hsAccount = hsAccounts.Count > 0 ? hsAccounts[0] : null;
+                    // An unusable answer is not cached for a day. @hivesigner exists
+                    // and signs with its posting key, so an answer without the
+                    // account or with an empty key list is unusable too.
+                    if (hsAccount is null)
+                    {
+                        throw Unavailable("hivesigner answer without the account");
+                    }
+                    if (PostingKeys(hsAccount).Count == 0)
+                    {
+                        throw Unavailable("hivesigner answer without posting keys");
+                    }
+                    // Only a usable answer is cached (TS cached whatever came back,
+                    // undefined included).
+                    _hivesignerAccountCache = hsAccount;
                     _hivesignerCacheTime = currentTime;
                 }
-                catch (Exception err)
+                catch (TokenCheckUnavailableException)
+                    when (_hivesignerAccountCache is not null
+                          && currentTime - _hivesignerCacheTime <= HiveSignerStaleMaxMs)
                 {
-                    Console.Error.WriteLine($"Failed to fetch hivesigner account {err}");
-                    return null;
+                    // A failed refresh keeps the keys already held (they change
+                    // rarely) for a bounded time; the time is not stamped, so the
+                    // next check retries. They may only accept: a mismatch below
+                    // could be a key the failed read would have shown.
+                    hsRefreshFailed = true;
                 }
             }
 
@@ -195,15 +219,82 @@ public static partial class PrivateApi
                 return author;
             }
 
+            if (hsRefreshFailed)
+            {
+                throw Unavailable("hivesigner keys could not be refreshed");
+            }
+
             Console.WriteLine(
                 $"Posting key mismatch {recoveredPubKey} [{string.Join(", ", postingPubKeys)}] [{string.Join(", ", hsPostingKeys)}]");
             return null;
         }
-        catch (Exception err)
+        catch (Exception err) when (err is not TokenCheckUnavailableException)
         {
             Console.Error.WriteLine($"Token validation error {err}");
             return null;
         }
+    }
+
+    /// <summary>
+    /// The accounts read for ValidateCode, for a name of account shape. Any
+    /// failure, RPC-level errors included (a node can answer an internal error
+    /// for a valid read), and an answer that is not an array, means the keys
+    /// could not be read.
+    /// </summary>
+    private static async Task<JsonArray> ReadValidationAccounts(string name)
+    {
+        JsonArray? accounts;
+        try
+        {
+            accounts = await ValidationAccounts(new[] { name });
+        }
+        catch (Exception err)
+        {
+            throw Unavailable("account read failed", err);
+        }
+
+        return accounts ?? throw Unavailable("account read answered no array");
+    }
+
+    /// <summary>
+    /// A shape every existing Hive account name has: 3 to 16 characters of a-z,
+    /// 0-9, '.' and '-'. Deliberately looser than HiveNames.IsAccountName (no
+    /// segment rules), so no older account is ever refused by it.
+    /// </summary>
+    internal static bool IsAccountNameShape(string name) =>
+        name.Length is >= 3 and <= 16
+        && name.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '.' or '-');
+
+    /// <summary>
+    /// account.posting.key_auths.map(([key]) => key). Every account has a posting
+    /// authority, so an answer without a key list, or with an entry that is not a
+    /// key, is unusable, not a refusal. An empty list is a real account shape
+    /// (posting held by other accounts only) and is returned as is.
+    /// </summary>
+    private static List<string?> PostingKeys(JsonNode account)
+    {
+        List<string?> keys;
+        try
+        {
+            keys = MapKeyAuths(account["posting"]!["key_auths"]);
+        }
+        catch (Exception err)
+        {
+            throw Unavailable("account answer without posting keys", err);
+        }
+
+        if (keys.Any(string.IsNullOrEmpty))
+        {
+            throw Unavailable("account answer with a posting key that is not a key");
+        }
+        return keys;
+    }
+
+    private static TokenCheckUnavailableException Unavailable(string reason, Exception? inner = null)
+    {
+        var (key, line) = UnavailableLog(reason, inner);
+        LogOnce(key, line);
+        return new TokenCheckUnavailableException(reason, inner);
     }
 
     /// <summary>Forgets the cached @hivesigner account (tests).</summary>
@@ -211,6 +302,25 @@ public static partial class PrivateApi
     {
         _hivesignerAccountCache = null;
         _hivesignerCacheTime = 0;
+    }
+
+    /// <summary>Makes the cached @hivesigner account `ageMs` old, keeping it (tests).</summary>
+    internal static void AgeHivesignerCache(long ageMs) =>
+        _hivesignerCacheTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - ageMs;
+
+    /// <summary>How old cached @hivesigner keys may be when a refresh fails.</summary>
+    internal const long HiveSignerStaleMaxMs = 2 * HiveSignerCacheTtlMs;
+
+    /// <summary>
+    /// The log line for an unavailable check, and the key it is written once under:
+    /// the cause's type and message only, never the code or the request, once per
+    /// reason and cause type, since a node outage fails every request the same way.
+    /// </summary>
+    internal static (string Key, string Line) UnavailableLog(string reason, Exception? inner)
+    {
+        var type = inner?.GetType().Name ?? "-";
+        var cause = inner is null ? "" : $" ({type}: {inner.Message})";
+        return ($"Token check unavailable: {reason} [{type}]", $"Token check unavailable: {reason}{cause}");
     }
 
     /// <summary>The chain read behind token validation (tests answer it).</summary>
@@ -241,10 +351,12 @@ public static partial class PrivateApi
     private static int _tokenLogLines;
     private static readonly ConcurrentDictionary<string, byte> TokenLogSeen = new();
 
-    private static void LogOnce(string line)
+    private static void LogOnce(string line) => LogOnce(line, line);
+
+    private static void LogOnce(string key, string line)
     {
-        if (Volatile.Read(ref _tokenLogLines) >= MaxTokenLogLines || TokenLogSeen.ContainsKey(line)) return;
-        if (!TokenLogSeen.TryAdd(line, 0)) return;
+        if (Volatile.Read(ref _tokenLogLines) >= MaxTokenLogLines || TokenLogSeen.ContainsKey(key)) return;
+        if (!TokenLogSeen.TryAdd(key, 0)) return;
         if (Interlocked.Increment(ref _tokenLogLines) > MaxTokenLogLines) return;
         Console.WriteLine(line);
     }

@@ -380,6 +380,14 @@ KNOWN_DIVERGENCES = {
 # code, so that difference is covered by AiAssistHandlerTests rather than an entry
 # here — an entry would skip status, content-type, and body and hide unrelated
 # regressions on the route.
+#
+# Also not listed: the 503 "Service Unavailable" (with Retry-After) that every
+# route validating a session code answers when the account keys could not be read
+# (node error, timeout, unusable answer); the reference build answered 401. It
+# happens only when the chain is read and the read fails, and no catalog case
+# reaches that read (every catalog code is malformed and refused before it), so
+# every case still matches and an entry would only skip whole routes.
+# Covered by TokenCheckUnavailableTests instead.
 
 
 def diff(a_name, b_name, loose_name=None):
