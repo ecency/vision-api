@@ -111,7 +111,8 @@ public static partial class PrivateApi
             return null;
         }
 
-        if (resp.Status == 404)
+        // An expired row is gone as far as the client is concerned.
+        if (resp.Status == 404 || (resp.Status == 200 && resp.Json is JsonObject r && r.Str("status") == "expired"))
         {
             await SendRecoveryError(ctx, 404, "not_found");
             return null;
@@ -140,8 +141,15 @@ public static partial class PrivateApi
             return;
         }
 
-        // Captcha before any chain read, so unsolved requests cost nothing upstream.
+        // The private API limits requests per client address, so one is always required.
         var ip = SignupClientIp(ctx);
+        if (ip.Length == 0)
+        {
+            await SendRecoveryError(ctx, 400, "invalid_request");
+            return;
+        }
+
+        // Captcha before any chain read, so unsolved requests cost nothing upstream.
         if (await RecoveryCaptchaRejected(body.Field("captcha_token"), ip))
         {
             await SendRecoveryError(ctx, 403, "captcha");
@@ -237,11 +245,26 @@ public static partial class PrivateApi
             return;
         }
 
+        DateTime? ownerSince;
+        try
+        {
+            var ownerOps = await RecoveryRpc("get_account_history",
+                new JsonArray(username, -1, 1000, RecoveryRules.OwnerOpsFilter, 0));
+            ownerSince = RecoveryRules.OwnerSince(ownerOps, provenKeyPub!, validUntil.Value);
+        }
+        catch (Exception)
+        {
+            await SendRecoveryUnavailable(ctx);
+            return;
+        }
+
         var payload = new JsonObject
         {
             ["new_owner_pub"] = newOwnerPub,
             ["proven_key_pub"] = provenKeyPub,
             ["proven_key_valid_until"] = RecoveryRules.FormatChainTime(validUntil.Value),
+            ["signature"] = signature,
+            ["owner_since"] = ownerSince == null ? null : RecoveryRules.FormatChainTime(ownerSince.Value),
         };
         await Upstream.Pipe(RecoveryUpstream($"recovery-request/{requestId}/prove", HttpMethod.Post, payload), ctx);
     }
