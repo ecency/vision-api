@@ -205,6 +205,13 @@ public static partial class Routes
         app.MapPost("/private-api/curation-desk/application-vote", PrivateApi.CurationDeskApplicationVote);
         app.MapPost("/private-api/curation-desk/application-window", PrivateApi.CurationDeskApplicationWindow);
 
+        // ---- Self-serve account recovery (see PrivateApi.Recovery.cs) ----
+        app.MapPost("/private-api/recovery/start", PrivateApi.RecoveryStart);
+        app.MapPost("/private-api/recovery/prove", PrivateApi.RecoveryProve);
+        app.MapPost("/private-api/recovery/verify-code", PrivateApi.RecoveryVerifyCode);
+        app.MapGet("/private-api/recovery/status", PrivateApi.RecoveryStatus);
+        app.MapPost("/private-api/recovery/complete", PrivateApi.RecoveryComplete);
+
         // ---- SSR RPC cache (internal, header-gated; see SsrRpc.cs) ----
         app.MapPost("/private-api/ssr/rpc", SsrRpc.Rpc);
         app.MapGet("/private-api/ssr/stats", SsrRpc.Stats);

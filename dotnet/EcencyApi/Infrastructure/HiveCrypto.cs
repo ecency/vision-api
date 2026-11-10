@@ -164,6 +164,63 @@ public static class HiveCrypto
         return PublicKeyToString(pubKey);
     }
 
+    /// <summary>
+    /// True for a well-formed STM public key: base58 of a 33-byte compressed point on the
+    /// curve followed by the first 4 bytes of its ripemd160 checksum.
+    /// </summary>
+    public static bool IsPublicKey(string? key)
+    {
+        if (key == null || !key.StartsWith(PublicKeyPrefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var raw = Base58Decode(key.AsSpan(PublicKeyPrefix.Length));
+        if (raw == null || raw.Length != 37)
+        {
+            return false;
+        }
+
+        var checksum = Ripemd160(raw.AsSpan(0, 33));
+        if (!checksum.AsSpan(0, 4).SequenceEqual(raw.AsSpan(33, 4)))
+        {
+            return false;
+        }
+
+        return ECPubKey.TryCreate(raw.AsSpan(0, 33), Context.Instance, out _, out var pub) && pub != null;
+    }
+
+    /// <summary>Base58 decode; null on a character outside the alphabet.</summary>
+    private static byte[]? Base58Decode(ReadOnlySpan<char> text)
+    {
+        if (text.Length == 0 || text.Length > 128)
+        {
+            return null;
+        }
+
+        var value = System.Numerics.BigInteger.Zero;
+        foreach (var c in text)
+        {
+            var digit = Base58Alphabet.IndexOf(c);
+            if (digit < 0)
+            {
+                return null;
+            }
+            value = value * 58 + digit;
+        }
+
+        var leadingZeros = 0;
+        while (leadingZeros < text.Length && text[leadingZeros] == Base58Alphabet[0])
+        {
+            leadingZeros++;
+        }
+
+        var body = value.IsZero ? Array.Empty<byte>() : value.ToByteArray(isUnsigned: true, isBigEndian: true);
+        var result = new byte[leadingZeros + body.Length];
+        body.CopyTo(result, leadingZeros);
+        return result;
+    }
+
     // ---- hashing / encoding ----------------------------------------------
 
     public static byte[] Sha256Utf8(string message) =>

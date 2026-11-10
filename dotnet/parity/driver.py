@@ -276,6 +276,20 @@ CURATION_DESK_ROUTES = [
     for case in ("min", "pop", "badcode")
 ]
 
+RECOVERY_DIVERGENCE = (
+    "Self-serve account recovery routes added after the port. The reference build has "
+    "no such route and answers 404 (POST) or the unmatched-GET template page; this one "
+    "validates the request (400), checks the captcha and the chain, and otherwise "
+    "proxies. Deterministic and additive -- no behavior the reference ever had is "
+    "changing."
+)
+
+RECOVERY_ROUTES = ["/private-api/recovery/status::get"] + [
+    f"/private-api/recovery/{route}::{case}"
+    for route in ("start", "prove", "verify-code", "complete")
+    for case in ("min", "pop", "badcode")
+]
+
 # Cases where the C# port intentionally differs from Node (Node bugs the port fixes).
 KNOWN_DIVERGENCES = {
     "/auth-api/hs-token-refresh::min":
@@ -359,6 +373,8 @@ KNOWN_DIVERGENCES = {
     # Curation desk routes, added after the port: six public reads and eight signed
     # writes. Same shape as the entries above; one entry per generated case.
     **{case: CURATION_DESK_DIVERGENCE for case in CURATION_DESK_ROUTES},
+    # Self-serve account recovery routes, added after the port. Same shape as above.
+    **{case: RECOVERY_DIVERGENCE for case in RECOVERY_ROUTES},
 }
 
 # Deliberately NOT listed above: /wallet-api/portfolio-v2::pop, whose HP action list
