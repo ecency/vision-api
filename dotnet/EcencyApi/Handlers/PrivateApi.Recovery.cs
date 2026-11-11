@@ -299,9 +299,17 @@ public static partial class PrivateApi
             await SendRecoveryError(ctx, 404, "not_found");
             return;
         }
-        if (AllowedRecoveryAccount(chain.Account) == null)
+        var recoveryAccount = AllowedRecoveryAccount(chain.Account);
+        if (recoveryAccount == null)
         {
             await SendRecoveryError(ctx, 422, "not_ecency_recovery");
+            return;
+        }
+        // The request belongs to the signer of the recovery account it started with; a change
+        // since then would leave it with the wrong one. Rows from before the field are ecency's.
+        if (recoveryAccount != (row.Str("recovery_account") ?? "ecency"))
+        {
+            await SendRecoveryError(ctx, 409, "recovery_account_changed");
             return;
         }
         if (RecoveryRules.AuthorityKeys(JsVal.Prop(chain.Account, "owner")).Contains(newOwnerPub!))
