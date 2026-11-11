@@ -140,26 +140,29 @@ public static partial class RecoveryRules
     public const long OwnerOpsFilter = (1L << 9) | (1L << 10) | (1L << 23) | (1L << 25) | (1L << 43);
 
     /// <summary>
-    /// When the proven key became an owner key of the account: the time of the latest
-    /// operation before validUntil whose new owner authority holds the key, from an answer
-    /// filtered to <see cref="OwnerOpsFilter"/>. Accounts the account created are not its own
-    /// owner changes. Null when no such operation is in the answer. Throws when the answer
-    /// cannot be read.
+    /// When the proven key most recently entered the account's owner authority, from an
+    /// answer filtered to <see cref="OwnerOpsFilter"/>: the owner-setting ops of this account
+    /// before validUntil are walked in order, and the key's span starts where it is present
+    /// and the previous owner did not hold it. A later update that keeps the key does not move
+    /// it. Null when the key is not an owner key at validUntil, or when the answer does not
+    /// reach back to where the span started (the earliest op seen already holds the key and
+    /// is not the account's creation). Throws when the answer cannot be read.
     /// </summary>
     public static DateTime? OwnerSince(JsonNode? history, string username, string provenKeyPub, DateTime validUntil)
     {
-        DateTime? latest = null;
+        var changes = new List<(DateTime Time, bool Creation, bool HoldsKey)>();
         foreach (var item in HistoryItems(history))
         {
             var (time, name, payload) = ReadHistoryItem(item);
-            var (field, required) = name switch
+            var (subject, field, required) = name switch
             {
-                "account_create" or "create_claimed_account" => ("owner", true),
-                "account_update" or "account_update2" => ("owner", false),
-                "recover_account" => ("new_owner_authority", true),
+                "account_create" or "create_claimed_account" => ("new_account_name", "owner", true),
+                "account_update" or "account_update2" => ("account", "owner", false),
+                "recover_account" => ("account_to_recover", "new_owner_authority", true),
                 _ => throw new FormatException("unexpected operation in filtered history"),
             };
-            if (field == "owner" && required && !CreatesAccount(payload, username))
+            // An account's history also holds the accounts it created.
+            if (StringField(payload, subject) != username)
             {
                 continue;
             }
@@ -172,23 +175,37 @@ public static partial class RecoveryRules
             {
                 throw new FormatException("unreadable owner authority");
             }
-            if (time < validUntil && AuthorityKeys(authority).Contains(provenKeyPub)
-                && (latest == null || time > latest))
+            if (time < validUntil)
             {
-                latest = time;
+                changes.Add((time, required && field == "owner", AuthorityKeys(authority).Contains(provenKeyPub)));
             }
         }
-        return latest;
+
+        // null start inside an open span means it began before the answer reaches back.
+        var open = false;
+        DateTime? start = null;
+        bool? previousHeldKey = null;
+        foreach (var change in changes.OrderBy(c => c.Time))
+        {
+            if (!change.HoldsKey)
+            {
+                open = false;
+                start = null;
+            }
+            else if (!open)
+            {
+                open = true;
+                start = change.Creation || previousHeldKey == false ? change.Time : null;
+            }
+            previousHeldKey = change.HoldsKey;
+        }
+        return open ? start : null;
     }
 
-    private static bool CreatesAccount(JsonObject payload, string username)
-    {
-        if (JsVal.Prop(payload, "new_account_name") is not JsonValue nv || !JsVal.TryGetStringLenient(nv, out var name))
-        {
-            throw new FormatException("unreadable new account name");
-        }
-        return name == username;
-    }
+    private static string StringField(JsonObject payload, string name) =>
+        JsVal.Prop(payload, name) is JsonValue v && JsVal.TryGetStringLenient(v, out var s)
+            ? s
+            : throw new FormatException("unreadable account name in history");
 
     /// <summary>An owner authority as the recovery rules need it.</summary>
     public sealed record OwnerAuthority(double Threshold, IReadOnlyList<(string Key, double Weight)> Keys)

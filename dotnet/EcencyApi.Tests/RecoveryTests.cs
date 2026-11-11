@@ -393,7 +393,7 @@ public class RecoveryRulesTests
     private const string K0 = "STM8ZSw7FmkxEFtkGpo7Gc9Jbs6bHjEu5XfGjNcKqZaHB3wnSXN6W";
     private const string Taken = "STM7xA2DJ2zG3uNoCzFfQ2BVwXqLHxvVW3rRKfS6kNY9iFMRtCsGq";
 
-    private static JsonArray HackedAccountOps() => new(
+    internal static JsonArray HackedAccountOps() => new(
         Op(1, "2024-03-01T10:00:00", "create_claimed_account", new JsonObject
         {
             ["creator"] = "ecency", ["new_account_name"] = Username,
@@ -464,9 +464,67 @@ public class RecoveryRulesTests
             }));
         var until = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         Assert.Equal(new DateTime(2025, 5, 5, 5, 5, 5, DateTimeKind.Utc), RecoveryRules.OwnerSince(ops, Username, OldOwnerPub, until));
-        Assert.Equal(new DateTime(2023, 1, 1, 0, 0, 0, DateTimeKind.Utc), RecoveryRules.OwnerSince(ops, Username, K0, until));
+        // K0 was replaced by the recovery, so its span is closed by then.
+        Assert.Null(RecoveryRules.OwnerSince(ops, Username, K0, until));
+        Assert.Equal(new DateTime(2023, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            RecoveryRules.OwnerSince(ops, Username, K0, new DateTime(2025, 5, 5, 5, 5, 5, DateTimeKind.Utc)));
         Assert.Null(RecoveryRules.OwnerSince(ops, Username, Taken, until));
         Assert.Null(RecoveryRules.OwnerSince(new JsonArray(), Username, K0, until));
+    }
+
+    private static readonly DateTime Nov8 = new(2026, 11, 8, 10, 0, 0, DateTimeKind.Utc);
+
+    private static JsonArray OwnerUpdate(int index, string time, string key, string account = Username) =>
+        Op(index, time, "account_update", new JsonObject
+        {
+            ["account"] = account, ["owner"] = Authority(key), ["memo_key"] = key, ["json_metadata"] = "",
+        });
+
+    [Fact]
+    public void OwnerSinceStaysAtTheFirstAddWhenALaterUpdateKeepsTheKey()
+    {
+        var ops = HackedAccountOps();
+        ops.Insert(3, OwnerUpdate(85, "2026-08-01T00:00:00", OldOwnerPub));
+        Assert.Equal(new DateTime(2026, 2, 14, 18, 30, 0, DateTimeKind.Utc),
+            RecoveryRules.OwnerSince(ops, Username, OldOwnerPub, Nov8));
+    }
+
+    [Fact]
+    public void OwnerSinceIsTheLatestReAdd()
+    {
+        var ops = HackedAccountOps();
+        ops.Insert(3, OwnerUpdate(85, "2026-06-01T00:00:00", K0));
+        ops.Insert(4, OwnerUpdate(86, "2026-07-01T00:00:00", OldOwnerPub));
+        ops.Insert(5, OwnerUpdate(87, "2026-08-01T00:00:00", OldOwnerPub));
+        Assert.Equal(new DateTime(2026, 7, 1, 0, 0, 0, DateTimeKind.Utc),
+            RecoveryRules.OwnerSince(ops, Username, OldOwnerPub, Nov8));
+    }
+
+    [Fact]
+    public void OwnerSinceIsUnknownWhenTheEarliestSeenOpAlreadyHoldsTheKey()
+    {
+        // The read did not reach back to where the key entered the owner authority.
+        var ops = new JsonArray(
+            OwnerUpdate(77, "2026-02-14T18:30:00", OldOwnerPub),
+            OwnerUpdate(85, "2026-08-01T00:00:00", OldOwnerPub));
+        Assert.Null(RecoveryRules.OwnerSince(ops, Username, OldOwnerPub, Nov8));
+    }
+
+    [Fact]
+    public void OwnerSinceIsTheAccountCreationWhenItSetTheKey()
+    {
+        var ops = HackedAccountOps();
+        Assert.Equal(new DateTime(2024, 3, 1, 10, 0, 0, DateTimeKind.Utc),
+            RecoveryRules.OwnerSince(ops, Username, K0, new DateTime(2026, 2, 14, 18, 30, 0, DateTimeKind.Utc)));
+    }
+
+    [Fact]
+    public void OwnerSinceIgnoresOwnerUpdatesOfOtherAccounts()
+    {
+        var ops = HackedAccountOps();
+        ops.Insert(3, OwnerUpdate(85, "2026-06-01T00:00:00", K0, account: "someoneelse"));
+        Assert.Equal(new DateTime(2026, 2, 14, 18, 30, 0, DateTimeKind.Utc),
+            RecoveryRules.OwnerSince(ops, Username, OldOwnerPub, Nov8));
     }
 
     [Fact]
@@ -544,8 +602,7 @@ public class RecoveryHandlerTests : IDisposable
     private bool _accountExists = true;
     private JsonArray _ownerHistory = new(RecoveryRulesTests.Entry(Old, "2026-11-08T10:00:00"));
     private JsonNode? _lastRecovery = "1970-01-01T00:00:00";
-    private JsonNode _ownerOps = new JsonArray(RecoveryRulesTests.Op(77, "2026-02-14T18:30:00", "account_update",
-        new JsonObject { ["account"] = RecoveryRulesTests.Username, ["owner"] = RecoveryRulesTests.Authority(Old) }));
+    private JsonNode _ownerOps = RecoveryRulesTests.HackedAccountOps();
     private JsonObject _owner = RecoveryRulesTests.Authority(OtherPub);
     private readonly List<double> _historyFilters = new();
     private const double OwnerOpsFilter = (1L << 9) | (1L << 10) | (1L << 23) | (1L << 25) | (1L << 43);
