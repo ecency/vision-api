@@ -77,7 +77,7 @@ public static partial class PrivateApi
         }
         catch (Exception e)
         {
-            var (key, line) = RecoveryReadFailureLog(method, e, username);
+            var (key, line) = RecoveryReadFailureLog(method, e);
             LogRecoveryFailure(key, line);
             throw;
         }
@@ -85,13 +85,23 @@ public static partial class PrivateApi
 
     /// <summary>
     /// The log line for a failed recovery chain read, and the key it is written once under:
-    /// the method and the cause, never the account, keys or client.
+    /// the method, the exception type and a fixed category. Never the message, which can carry
+    /// node-supplied text.
     /// </summary>
-    internal static (string Key, string Line) RecoveryReadFailureLog(string method, Exception e, string username)
+    internal static (string Key, string Line) RecoveryReadFailureLog(string method, Exception e)
     {
         var type = e.GetType().Name;
-        var message = e.Message.Replace(username, "<account>", StringComparison.OrdinalIgnoreCase);
-        return ($"recovery {method} [{type}]", $"warn: recovery chain read failed: {method} ({type}: {message})");
+        var category = e switch
+        {
+            OperationCanceledException or TimeoutException => "timeout",
+            HttpRequestException => "http_error",
+            // The RPC client's own node failure type (unreachable, bad status, bad body).
+            _ when type == "NodeUnavailableException" => "http_error",
+            HiveRpcClient.RpcException => "rpc_error",
+            FormatException or System.Text.Json.JsonException => "parse_error",
+            _ => "other",
+        };
+        return ($"recovery {method} [{type}]", $"warn: recovery chain read failed: {method} ({type}, {category})");
     }
 
     // Written once per method and cause type, at most a few lines per process: a node outage

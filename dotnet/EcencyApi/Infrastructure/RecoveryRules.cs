@@ -136,8 +136,13 @@ public static partial class RecoveryRules
     private static JsonArray HistoryItems(JsonNode? history) =>
         history as JsonArray ?? throw new FormatException("account history is not a list");
 
-    /// <summary>account_create, account_update, create_claimed_account, recover_account, account_update2.</summary>
-    public const long OwnerOpsFilter = (1L << 9) | (1L << 10) | (1L << 23) | (1L << 25) | (1L << 43);
+    /// <summary>
+    /// Operation ids account_create 9, account_update 10, create_claimed_account 23,
+    /// recover_account 25, account_create_with_delegation 41, account_update2 43 (all in the
+    /// low filter word).
+    /// </summary>
+    public const long OwnerOpsFilter =
+        (1L << 9) | (1L << 10) | (1L << 23) | (1L << 25) | (1L << 41) | (1L << 43);
 
     /// <summary>
     /// When the proven key most recently entered the account's owner authority, from an
@@ -156,7 +161,8 @@ public static partial class RecoveryRules
             var (time, name, payload) = ReadHistoryItem(item);
             var (subject, field, required) = name switch
             {
-                "account_create" or "create_claimed_account" => ("new_account_name", "owner", true),
+                "account_create" or "create_claimed_account" or "account_create_with_delegation" =>
+                    ("new_account_name", "owner", true),
                 "account_update" or "account_update2" => ("account", "owner", false),
                 "recover_account" => ("account_to_recover", "new_owner_authority", true),
                 _ => throw new FormatException("unexpected operation in filtered history"),

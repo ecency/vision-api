@@ -352,16 +352,35 @@ public class RecoveryRulesTests
     }
 
     [Fact]
-    public void ReadFailureLogNamesTheMethodButNotTheAccount()
+    public void ReadFailureLogNamesTheMethodAndCauseButNoMessage()
     {
         var (key, line) = PrivateApi.RecoveryReadFailureLog("get_account_history",
-            new InvalidOperationException($"could not find filtered operation for {Username}"), Username);
-        Assert.Contains("get_account_history", line);
-        Assert.Contains("InvalidOperationException", line);
+            new InvalidOperationException($"no match for {Username}\nwarn: forged line"));
+        Assert.Equal("warn: recovery chain read failed: get_account_history (InvalidOperationException, other)", line);
         Assert.DoesNotContain(Username, line);
+        Assert.DoesNotContain("\n", line);
         Assert.DoesNotContain(Username, key);
         Assert.Equal(key, PrivateApi.RecoveryReadFailureLog("get_account_history",
-            new InvalidOperationException("other"), Username).Key);
+            new InvalidOperationException("other text")).Key);
+    }
+
+    public static IEnumerable<object[]> FailureCategories() => new[]
+    {
+        new object[] { new TaskCanceledException("x"), "timeout" },
+        new object[] { new TimeoutException("x"), "timeout" },
+        new object[] { new HttpRequestException("x"), "http_error" },
+        new object[] { new HiveRpcClient.RpcException("x"), "rpc_error" },
+        new object[] { new FormatException("x"), "parse_error" },
+        new object[] { new System.Text.Json.JsonException("x"), "parse_error" },
+        new object[] { new Exception("x"), "other" },
+    };
+
+    [Theory]
+    [MemberData(nameof(FailureCategories))]
+    public void ReadFailureLogCategory(Exception e, string category)
+    {
+        var (_, line) = PrivateApi.RecoveryReadFailureLog("get_accounts", e);
+        Assert.EndsWith($"({e.GetType().Name}, {category})", line);
     }
 
     [Fact]
@@ -528,6 +547,36 @@ public class RecoveryRulesTests
     }
 
     [Fact]
+    public void OwnerSinceFromADelegatedAccountCreation()
+    {
+        var ops = new JsonArray(
+            Op(1, "2018-04-01T12:00:00", "account_create_with_delegation", new JsonObject
+            {
+                ["fee"] = "0.500 HIVE", ["delegation"] = "30000.000000 VESTS", ["creator"] = "ecency",
+                ["new_account_name"] = Username,
+                ["owner"] = Authority(K0), ["active"] = Authority(K0), ["posting"] = Authority(K0),
+                ["memo_key"] = K0, ["json_metadata"] = "", ["extensions"] = new JsonArray(),
+            }),
+            Op(2, "2019-01-01T00:00:00", "account_create_with_delegation", new JsonObject
+            {
+                ["creator"] = Username, ["new_account_name"] = "childaccount", ["owner"] = Authority(OldOwnerPub),
+            }));
+        Assert.Equal(new DateTime(2018, 4, 1, 12, 0, 0, DateTimeKind.Utc),
+            RecoveryRules.OwnerSince(ops, Username, K0, Nov8));
+        Assert.Null(RecoveryRules.OwnerSince(ops, Username, OldOwnerPub, Nov8));
+    }
+
+    [Fact]
+    public void OwnerOpsFilterSelectsExactlyTheOwnerSettingOps()
+    {
+        // Hive operation ids: account_create 9, account_update 10, create_claimed_account 23,
+        // recover_account 25, account_create_with_delegation 41, account_update2 43. All are
+        // below 64, so the high filter word stays 0.
+        var bits = Enumerable.Range(0, 64).Where(i => (RecoveryRules.OwnerOpsFilter >> i & 1) == 1).ToArray();
+        Assert.Equal(new[] { 9, 10, 23, 25, 41, 43 }, bits);
+    }
+
+    [Fact]
     public void OwnerSinceIgnoresAccountsTheUserCreated()
     {
         var ops = new JsonArray(
@@ -605,7 +654,7 @@ public class RecoveryHandlerTests : IDisposable
     private JsonNode _ownerOps = RecoveryRulesTests.HackedAccountOps();
     private JsonObject _owner = RecoveryRulesTests.Authority(OtherPub);
     private readonly List<double> _historyFilters = new();
-    private const double OwnerOpsFilter = (1L << 9) | (1L << 10) | (1L << 23) | (1L << 25) | (1L << 43);
+    private const double OwnerOpsFilter = (1L << 9) | (1L << 10) | (1L << 23) | (1L << 25) | (1L << 41) | (1L << 43);
     private const string HeadTime = "2026-11-10T12:00:00";
 
     public RecoveryHandlerTests()
