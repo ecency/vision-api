@@ -1,3 +1,5 @@
+using EcencyApi.Infrastructure;
+
 namespace EcencyApi;
 
 /// <summary>
@@ -103,6 +105,31 @@ public static class Config
     /// </summary>
     public static bool SsrCallClasses { get; } =
         Env("SSR_RPC_CALL_CLASSES")?.Trim().ToLowerInvariant() is not ("0" or "false" or "off");
+
+    /// <summary>
+    /// Accounts whose recovered users the self-serve recovery accepts (an account's on-chain
+    /// recovery_account must be one of them), comma-separated, e.g. "ecency,appreciator".
+    /// Invalid names are ignored; unset, empty or nothing valid means "ecency".
+    /// </summary>
+    public static IReadOnlySet<string> RecoveryAccounts { get; } = ParseRecoveryAccounts(Env("RECOVERY_ACCOUNTS"));
+
+    internal static IReadOnlySet<string> ParseRecoveryAccounts(string? value)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var part in (value ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var name = part.ToLowerInvariant();
+            if (HiveNames.IsAccountName(name))
+            {
+                names.Add(name);
+            }
+        }
+        if (names.Count == 0)
+        {
+            names.Add("ecency");
+        }
+        return names;
+    }
 
     private static string? NonEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 

@@ -13,19 +13,20 @@ namespace EcencyApi.Handlers;
 /// </summary>
 public static partial class PrivateApi
 {
-    private const string RecoveryAccountName = "ecency";
     private const string RecoveryCaptchaAction = "recover";
 
     // Seams for tests: the private API, the chain and the captcha check.
     internal static Func<string, HttpMethod, JsonNode?, Task<UpstreamResponse>> RecoveryUpstream = DefaultRecoveryUpstream;
     internal static Func<string, JsonArray, Task<JsonNode?>> RecoveryRpc = DefaultRecoveryRpc;
     internal static Func<JsonNode?, string, Task<bool>> RecoveryCaptchaRejected = DefaultRecoveryCaptchaRejected;
+    internal static IReadOnlySet<string> RecoveryAccounts = Config.RecoveryAccounts;
 
     internal static void ResetRecoverySeams()
     {
         RecoveryUpstream = DefaultRecoveryUpstream;
         RecoveryRpc = DefaultRecoveryRpc;
         RecoveryCaptchaRejected = DefaultRecoveryCaptchaRejected;
+        RecoveryAccounts = Config.RecoveryAccounts;
     }
 
     private static Task<UpstreamResponse> DefaultRecoveryUpstream(string endpoint, HttpMethod method, JsonNode? payload) =>
@@ -141,10 +142,16 @@ public static partial class PrivateApi
         }
     }
 
-    private static bool IsEcencyRecovered(JsonObject account) =>
+    /// <summary>
+    /// The account's on-chain recovery account when it is one this service recovers for
+    /// (<see cref="Config.RecoveryAccounts"/>), else null.
+    /// </summary>
+    private static string? AllowedRecoveryAccount(JsonObject account) =>
         JsVal.Prop(account, "recovery_account") is JsonValue rv
         && JsVal.TryGetStringLenient(rv, out var ra)
-        && ra == RecoveryAccountName;
+        && RecoveryAccounts.Contains(ra)
+            ? ra
+            : null;
 
     /// <summary>
     /// The internal row for a request. Returns null after answering the client: 404 when
@@ -219,7 +226,9 @@ public static partial class PrivateApi
             await SendRecoveryError(ctx, 404, "not_found");
             return;
         }
-        if (!IsEcencyRecovered(chain.Account))
+        // The code keeps its original name; clients map it to the manual help screen.
+        var recoveryAccount = AllowedRecoveryAccount(chain.Account);
+        if (recoveryAccount == null)
         {
             await SendRecoveryError(ctx, 422, "not_ecency_recovery");
             return;
@@ -234,7 +243,8 @@ public static partial class PrivateApi
                 return;
         }
 
-        var payload = new JsonObject { ["username"] = username, ["ip"] = ip };
+        // The private API routes the request to the signer of this recovery account.
+        var payload = new JsonObject { ["username"] = username, ["ip"] = ip, ["recovery_account"] = recoveryAccount };
         await Upstream.Pipe(RecoveryUpstream("recovery-request/start", HttpMethod.Post, payload), ctx);
     }
 
@@ -289,7 +299,7 @@ public static partial class PrivateApi
             await SendRecoveryError(ctx, 404, "not_found");
             return;
         }
-        if (!IsEcencyRecovered(chain.Account))
+        if (AllowedRecoveryAccount(chain.Account) == null)
         {
             await SendRecoveryError(ctx, 422, "not_ecency_recovery");
             return;

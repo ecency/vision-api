@@ -659,6 +659,7 @@ public class RecoveryHandlerTests : IDisposable
 
     public RecoveryHandlerTests()
     {
+        RecoveryAccountsAre("ecency");
         PrivateApi.RecoveryCaptchaRejected = (_, _) => Task.FromResult(_captchaRejected);
         PrivateApi.RecoveryUpstream = (endpoint, method, payload) =>
         {
@@ -690,6 +691,9 @@ public class RecoveryHandlerTests : IDisposable
     }
 
     public void Dispose() => PrivateApi.ResetRecoverySeams();
+
+    private static void RecoveryAccountsAre(params string[] names) =>
+        PrivateApi.RecoveryAccounts = new HashSet<string>(names);
 
     private JsonNode HistoryFor(JsonArray @params)
     {
@@ -837,7 +841,8 @@ public class RecoveryHandlerTests : IDisposable
         var call = Assert.Single(_privateApi);
         Assert.Equal("recovery-request/start", call.Endpoint);
         Assert.Equal(HttpMethod.Post, call.Method);
-        Assert.Equal("""{"username":"recoverytest","ip":"203.0.113.9"}""", call.Payload!.ToJsonString());
+        Assert.Equal("""{"username":"recoverytest","ip":"203.0.113.9","recovery_account":"ecency"}""",
+            call.Payload!.ToJsonString());
         Assert.Contains("request_id", Body(ctx));
         Assert.DoesNotContain("get_account_history", _rpc);
     }
@@ -1334,5 +1339,69 @@ public class RecoveryHandlerTests : IDisposable
         await PrivateApi.RecoveryComplete(ctx);
         Assert.Equal(503, ctx.Response.StatusCode);
         Assert.Single(_privateApi);
+    }
+
+    // ---- partner recovery accounts ----
+
+    [Fact]
+    public async Task StartForAPartnerRecoveryAccountForwardsIt()
+    {
+        RecoveryAccountsAre("ecency", "appreciator");
+        _recoveryAccount = "appreciator";
+        var ctx = StartPost("""{"username":"recoverytest","captcha_token":"t"}""");
+        await PrivateApi.RecoveryStart(ctx);
+        Assert.Equal(200, ctx.Response.StatusCode);
+        var call = Assert.Single(_privateApi);
+        Assert.Equal("""{"username":"recoverytest","ip":"203.0.113.9","recovery_account":"appreciator"}""",
+            call.Payload!.ToJsonString());
+    }
+
+    [Fact]
+    public async Task StartRefusesARecoveryAccountOutsideTheList()
+    {
+        RecoveryAccountsAre("ecency");
+        _recoveryAccount = "appreciator";
+        var ctx = StartPost("""{"username":"recoverytest","captcha_token":"t"}""");
+        await PrivateApi.RecoveryStart(ctx);
+        Assert.Equal(422, ctx.Response.StatusCode);
+        Assert.Equal("""{"error":"not_ecency_recovery"}""", Body(ctx));
+        Assert.Empty(_privateApi);
+    }
+
+    [Fact]
+    public async Task ProveForAPartnerRecoveryAccount()
+    {
+        RecoveryAccountsAre("ecency", "appreciator");
+        _recoveryAccount = "appreciator";
+        await ProveExpectingOwnerSince("2026-02-14T18:30:00");
+    }
+
+    [Fact]
+    public async Task ProveRefusesARecoveryAccountOutsideTheList()
+    {
+        RecoveryAccountsAre("appreciator");
+        RowIs("started");
+        var ctx = T.Post("/private-api/recovery/prove", ProveBody());
+        await PrivateApi.RecoveryProve(ctx);
+        Assert.Equal(422, ctx.Response.StatusCode);
+        Assert.Equal("""{"error":"not_ecency_recovery"}""", Body(ctx));
+        Assert.Single(_privateApi);
+    }
+}
+
+public class RecoveryAccountsConfigTests
+{
+    [Theory]
+    [InlineData(null, "ecency")]
+    [InlineData("", "ecency")]
+    [InlineData("  ", "ecency")]
+    [InlineData("ecency,appreciator", "appreciator,ecency")]
+    [InlineData(" Ecency , APPRECIATOR ,", "appreciator,ecency")]
+    [InlineData("appreciator", "appreciator")]
+    [InlineData("appreciator,bad name!,x,-dash", "appreciator")]
+    [InlineData("bad name!,x", "ecency")]
+    public void ParsesTheAllowlist(string? value, string expected)
+    {
+        Assert.Equal(expected, string.Join(",", Config.ParseRecoveryAccounts(value).Order()));
     }
 }
