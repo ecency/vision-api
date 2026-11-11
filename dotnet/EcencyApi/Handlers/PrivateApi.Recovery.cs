@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json.Nodes;
 using EcencyApi.Infrastructure;
 
@@ -42,26 +43,68 @@ public static partial class PrivateApi
         });
 
     /// <summary>The account and the owner-change facts the recovery rules need.</summary>
-    private sealed record RecoveryChainState(JsonObject? Account, JsonNode? OwnerHistory, DateTime? LastRecovery,
-        DateTime HeadTime);
-
-    /// <summary>recover_account is operation 25; the low filter word selects it alone.</summary>
-    private const int RecoverAccountOpFilter = 1 << 25;
+    private sealed record RecoveryChainState(JsonObject? Account, List<RecoveryRules.OwnerHistoryEntry> OwnerHistory,
+        DateTime? LastRecovery, DateTime HeadTime);
 
     private static async Task<RecoveryChainState> ReadRecoveryChain(string username)
     {
-        var accounts = RecoveryRpc("get_accounts", new JsonArray(new JsonArray(username)));
-        var ownerHistory = RecoveryRpc("get_owner_history", new JsonArray(username));
-        var history = RecoveryRpc("get_account_history",
-            new JsonArray(username, -1, 1000, RecoverAccountOpFilter, 0));
-        var props = RecoveryRpc("get_dynamic_global_properties", new JsonArray());
-        await Task.WhenAll(accounts, ownerHistory, history, props);
+        var account = RecoveryRead("get_accounts", new JsonArray(new JsonArray(username)), username, r =>
+        {
+            var found = r is JsonArray list && list.Count > 0 ? list[0] as JsonObject : null;
+            // The latest recovery comes with the account; a field that cannot be read is a read failure.
+            return (Account: found, LastRecovery: found == null ? null : RecoveryRules.LastAccountRecovery(found));
+        });
+        var ownerHistory = RecoveryRead("get_owner_history", new JsonArray(username), username,
+            RecoveryRules.ReadOwnerHistory);
+        var head = RecoveryRead("get_dynamic_global_properties", new JsonArray(), username,
+            r => RecoveryRules.ParseChainTime(JsVal.Prop(r, "time")) ?? throw new FormatException("head block time missing"));
+        await Task.WhenAll(account, ownerHistory, head);
 
-        var head = RecoveryRules.ParseChainTime(JsVal.Prop(props.Result, "time"))
-            ?? throw new InvalidOperationException("head block time missing");
-        var account = accounts.Result is JsonArray list && list.Count > 0 ? list[0] as JsonObject : null;
-        return new RecoveryChainState(account, ownerHistory.Result,
-            RecoveryRules.LatestRecoverAccountTime(history.Result), head);
+        return new RecoveryChainState(account.Result.Account, ownerHistory.Result, account.Result.LastRecovery,
+            head.Result);
+    }
+
+    /// <summary>
+    /// One chain read and the reading of its answer. A failure of either is logged (the method
+    /// and the cause only) and rethrown.
+    /// </summary>
+    private static async Task<T> RecoveryRead<T>(string method, JsonArray @params, string username,
+        Func<JsonNode?, T> read)
+    {
+        try
+        {
+            return read(await RecoveryRpc(method, @params));
+        }
+        catch (Exception e)
+        {
+            var (key, line) = RecoveryReadFailureLog(method, e, username);
+            LogRecoveryFailure(key, line);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// The log line for a failed recovery chain read, and the key it is written once under:
+    /// the method and the cause, never the account, keys or client.
+    /// </summary>
+    internal static (string Key, string Line) RecoveryReadFailureLog(string method, Exception e, string username)
+    {
+        var type = e.GetType().Name;
+        var message = e.Message.Replace(username, "<account>", StringComparison.OrdinalIgnoreCase);
+        return ($"recovery {method} [{type}]", $"warn: recovery chain read failed: {method} ({type}: {message})");
+    }
+
+    // Written once per method and cause type, at most a few lines per process: a node outage
+    // fails every request the same way and must not log per request.
+    private const int MaxRecoveryLogLines = 16;
+    private static int _recoveryLogLines;
+    private static readonly ConcurrentDictionary<string, byte> RecoveryLogSeen = new();
+
+    private static void LogRecoveryFailure(string key, string line)
+    {
+        if (Volatile.Read(ref _recoveryLogLines) >= MaxRecoveryLogLines || !RecoveryLogSeen.TryAdd(key, 0)) return;
+        if (Interlocked.Increment(ref _recoveryLogLines) > MaxRecoveryLogLines) return;
+        Console.Error.WriteLine(line);
     }
 
     private static Task SendRecoveryError(HttpContext ctx, int status, string error) =>
@@ -82,7 +125,7 @@ public static partial class PrivateApi
         }
         catch (Exception)
         {
-            // Quiet on purpose: a node outage would otherwise log per request.
+            // Already logged by RecoveryRead.
             await SendRecoveryUnavailable(ctx);
             return null;
         }
@@ -171,10 +214,14 @@ public static partial class PrivateApi
             await SendRecoveryError(ctx, 422, "not_ecency_recovery");
             return;
         }
-        if (!RecoveryRules.HasRecentOwnerChange(chain.OwnerHistory, chain.HeadTime, chain.LastRecovery))
+        switch (RecoveryRules.CheckOwnerHistory(chain.OwnerHistory, chain.HeadTime, chain.LastRecovery))
         {
-            await SendRecoveryError(ctx, 422, "no_recent_owner_change");
-            return;
+            case RecoveryRules.Verdict.NoRecentOwnerChange:
+                await SendRecoveryError(ctx, 422, "no_recent_owner_change");
+                return;
+            case RecoveryRules.Verdict.KeyNotSufficient:
+                await SendRecoveryError(ctx, 422, "key_not_sufficient");
+                return;
         }
 
         var payload = new JsonObject { ["username"] = username, ["ip"] = ip };
@@ -197,6 +244,12 @@ public static partial class PrivateApi
             await SendRecoveryError(ctx, 400, "invalid_request");
             return;
         }
+        // Checked before any other call; a proof of another length is never decoded.
+        if (signature is not { Length: HiveCrypto.SignatureHexLength })
+        {
+            await SendRecoveryError(ctx, 400, "invalid_proof");
+            return;
+        }
 
         var row = await FetchRecoveryRow(ctx, requestId!);
         if (row == null)
@@ -210,7 +263,7 @@ public static partial class PrivateApi
             return;
         }
 
-        if (signature == null || !RecoveryRules.ProofMatches(username, newOwnerPub!, nonce, signature, provenKeyPub!))
+        if (!RecoveryRules.ProofMatches(username, newOwnerPub!, nonce, signature, provenKeyPub!))
         {
             await SendRecoveryError(ctx, 400, "invalid_proof");
             return;
@@ -237,25 +290,32 @@ public static partial class PrivateApi
             return;
         }
 
-        var validUntil = RecoveryRules.ProvenKeyValidUntil(
+        var (verdict, validUntil) = RecoveryRules.CheckProvenKey(
             chain.OwnerHistory, provenKeyPub!, chain.HeadTime, chain.LastRecovery);
+        if (verdict == RecoveryRules.Verdict.KeyNotSufficient)
+        {
+            await SendRecoveryError(ctx, 422, "key_not_sufficient");
+            return;
+        }
         if (validUntil == null)
         {
             await SendRecoveryError(ctx, 422, "key_not_recent");
             return;
         }
 
+        // Only narrows which saved emails may be used, so a failed or unreadable read sends
+        // null (signup email only) instead of failing the request. The filtered read scans a
+        // bounded slice of recent history; an older key-setting op is simply not found.
         DateTime? ownerSince;
         try
         {
-            var ownerOps = await RecoveryRpc("get_account_history",
-                new JsonArray(username, -1, 1000, RecoveryRules.OwnerOpsFilter, 0));
-            ownerSince = RecoveryRules.OwnerSince(ownerOps, provenKeyPub!, validUntil.Value);
+            ownerSince = await RecoveryRead("get_account_history",
+                new JsonArray(username, -1, 1000, RecoveryRules.OwnerOpsFilter, 0), username,
+                r => RecoveryRules.OwnerSince(r, username, provenKeyPub!, validUntil.Value));
         }
         catch (Exception)
         {
-            await SendRecoveryUnavailable(ctx);
-            return;
+            ownerSince = null;
         }
 
         var payload = new JsonObject
@@ -319,18 +379,18 @@ public static partial class PrivateApi
             return;
         }
 
-        JsonNode? accounts;
+        JsonNode? account;
         try
         {
-            accounts = await RecoveryRpc("get_accounts", new JsonArray(new JsonArray(username)));
+            account = await RecoveryRead("get_accounts", new JsonArray(new JsonArray(username)), username!,
+                r => r is JsonArray list && list.Count > 0 ? list[0] : null);
         }
         catch (Exception)
         {
             await SendRecoveryUnavailable(ctx);
             return;
         }
-        var account = accounts is JsonArray list && list.Count > 0 ? list[0] : null;
-        if (!RecoveryRules.IsSingleKeyAuthority(JsVal.Prop(account, "owner"), newOwnerPub))
+        if (!RecoveryRules.IsRecoveredOwner(JsVal.Prop(account, "owner"), newOwnerPub))
         {
             await SendRecoveryError(ctx, 409, "not_recovered");
             return;

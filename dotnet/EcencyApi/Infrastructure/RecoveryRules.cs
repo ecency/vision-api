@@ -8,7 +8,8 @@ namespace EcencyApi.Infrastructure;
 /// Pure rules for self-serve account recovery, kept free of network access so they
 /// can be tested directly. A proven owner key is usable when it appears in the
 /// account's owner history, its replacement is still inside the chain's 30-day
-/// recovery window, and it was replaced after the account's most recent recovery.
+/// recovery window, it was replaced after the account's most recent recovery, and it
+/// meets that old authority's threshold on its own.
 /// </summary>
 public static partial class RecoveryRules
 {
@@ -24,9 +25,9 @@ public static partial class RecoveryRules
     [GeneratedRegex(@"\A[0-9]{6}\z")]
     private static partial Regex CodePattern();
 
-    public static bool IsRequestId(string? id) => id != null && RequestIdPattern().IsMatch(id);
+    public static bool IsRequestId(string? id) => id is { Length: 36 } && RequestIdPattern().IsMatch(id);
 
-    public static bool IsCode(string? code) => code != null && CodePattern().IsMatch(code);
+    public static bool IsCode(string? code) => code is { Length: 6 } && CodePattern().IsMatch(code);
 
     /// <summary>The message the proven key signs; binds the account, the new key and the request.</summary>
     public static string Challenge(string username, string newOwnerPub, string nonce) =>
@@ -80,20 +81,32 @@ public static partial class RecoveryRules
     }
 
     /// <summary>
-    /// True when the authority's threshold is 1 and it holds exactly one key, the given one,
-    /// with weight 1. Account auths are not looked at.
+    /// True when the authority is the shape a finished recovery leaves: exactly one key, the
+    /// given one, whose weight alone meets the threshold, and no account auths.
     /// </summary>
-    public static bool IsSingleKeyAuthority(JsonNode? authority, string key)
+    public static bool IsRecoveredOwner(JsonNode? authority, string key)
     {
-        if (JsVal.AsNumber(JsVal.Prop(authority, "weight_threshold")) != 1
-            || JsVal.Prop(authority, "key_auths") is not JsonArray auths || auths.Count != 1)
+        if (JsVal.Prop(authority, "account_auths") is not JsonArray { Count: 0 }
+            || JsVal.AsNumber(JsVal.Prop(authority, "weight_threshold")) is not { } threshold || threshold < 1
+            || JsVal.Prop(authority, "key_auths") is not JsonArray { Count: 1 } auths)
         {
             return false;
         }
-        return auths[0] is JsonArray pair && pair.Count == 2
+        return auths[0] is JsonArray { Count: 2 } pair
             && pair[0] is JsonValue kv && JsVal.TryGetStringLenient(kv, out var k)
             && string.Equals(k, key, StringComparison.Ordinal)
-            && pair[1] is JsonValue wv && JsVal.AsNumber(wv) == 1;
+            && JsVal.AsNumber(pair[1]) is { } weight && weight >= threshold;
+    }
+
+    /// <summary>
+    /// The account's latest recovery from its last_account_recovery field, or null when it was
+    /// never recovered (the chain's 1970 placeholder). Throws when the field cannot be read.
+    /// </summary>
+    public static DateTime? LastAccountRecovery(JsonNode? account)
+    {
+        var t = ParseChainTime(JsVal.Prop(account, "last_account_recovery"))
+            ?? throw new FormatException("unreadable last_account_recovery");
+        return t <= DateTime.UnixEpoch ? null : t;
     }
 
     /// <summary>
@@ -123,38 +136,17 @@ public static partial class RecoveryRules
     private static JsonArray HistoryItems(JsonNode? history) =>
         history as JsonArray ?? throw new FormatException("account history is not a list");
 
-    /// <summary>
-    /// Timestamp of the latest recover_account in an answer filtered to that operation, or
-    /// null when there is none. Throws when the answer cannot be read.
-    /// </summary>
-    public static DateTime? LatestRecoverAccountTime(JsonNode? history)
-    {
-        DateTime? latest = null;
-        foreach (var item in HistoryItems(history))
-        {
-            var (time, name, _) = ReadHistoryItem(item);
-            if (name != "recover_account")
-            {
-                throw new FormatException("unexpected operation in filtered history");
-            }
-            if (latest == null || time > latest)
-            {
-                latest = time;
-            }
-        }
-        return latest;
-    }
-
     /// <summary>account_create, account_update, create_claimed_account, recover_account, account_update2.</summary>
     public const long OwnerOpsFilter = (1L << 9) | (1L << 10) | (1L << 23) | (1L << 25) | (1L << 43);
 
     /// <summary>
-    /// When the proven key became an owner key: the time of the latest operation before
-    /// validUntil whose new owner authority holds the key, from an answer filtered to
-    /// <see cref="OwnerOpsFilter"/>. Null when no such operation is in the answer. Throws when
-    /// the answer cannot be read.
+    /// When the proven key became an owner key of the account: the time of the latest
+    /// operation before validUntil whose new owner authority holds the key, from an answer
+    /// filtered to <see cref="OwnerOpsFilter"/>. Accounts the account created are not its own
+    /// owner changes. Null when no such operation is in the answer. Throws when the answer
+    /// cannot be read.
     /// </summary>
-    public static DateTime? OwnerSince(JsonNode? history, string provenKeyPub, DateTime validUntil)
+    public static DateTime? OwnerSince(JsonNode? history, string username, string provenKeyPub, DateTime validUntil)
     {
         DateTime? latest = null;
         foreach (var item in HistoryItems(history))
@@ -167,6 +159,10 @@ public static partial class RecoveryRules
                 "recover_account" => ("new_owner_authority", true),
                 _ => throw new FormatException("unexpected operation in filtered history"),
             };
+            if (field == "owner" && required && !CreatesAccount(payload, username))
+            {
+                continue;
+            }
             var authority = JsVal.Prop(payload, field);
             if (authority == null && !required)
             {
@@ -185,54 +181,143 @@ public static partial class RecoveryRules
         return latest;
     }
 
+    private static bool CreatesAccount(JsonObject payload, string username)
+    {
+        if (JsVal.Prop(payload, "new_account_name") is not JsonValue nv || !JsVal.TryGetStringLenient(nv, out var name))
+        {
+            throw new FormatException("unreadable new account name");
+        }
+        return name == username;
+    }
+
+    /// <summary>An owner authority as the recovery rules need it.</summary>
+    public sealed record OwnerAuthority(double Threshold, IReadOnlyList<(string Key, double Weight)> Keys)
+    {
+        /// <summary>The key's weight, or null when the authority does not list it.</summary>
+        public double? WeightOf(string key)
+        {
+            foreach (var (k, w) in Keys)
+            {
+                if (string.Equals(k, key, StringComparison.Ordinal))
+                {
+                    return w;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>True when the key alone meets the threshold.</summary>
+        public bool IsSatisfiedBy(string key) => WeightOf(key) is { } w && w >= Threshold;
+
+        public bool HasSufficientKey => Keys.Any(k => IsSatisfiedBy(k.Key));
+    }
+
+    /// <summary>One owner_history entry: the authority that was replaced and until when it was valid.</summary>
+    public sealed record OwnerHistoryEntry(DateTime LastValid, OwnerAuthority Previous);
+
+    /// <summary>
+    /// A get_owner_history answer. Throws on anything unreadable: a skipped entry could turn a
+    /// read problem into a refusal.
+    /// </summary>
+    public static List<OwnerHistoryEntry> ReadOwnerHistory(JsonNode? history)
+    {
+        var list = new List<OwnerHistoryEntry>();
+        if (history is not JsonArray entries)
+        {
+            throw new FormatException("owner history is not a list");
+        }
+        foreach (var entry in entries)
+        {
+            var lastValid = ParseChainTime(JsVal.Prop(entry, "last_valid_time"))
+                ?? throw new FormatException("unreadable owner history time");
+            list.Add(new OwnerHistoryEntry(lastValid, ReadAuthority(JsVal.Prop(entry, "previous_owner_authority"))));
+        }
+        return list;
+    }
+
+    private static OwnerAuthority ReadAuthority(JsonNode? authority)
+    {
+        if (JsVal.Prop(authority, "weight_threshold") is not JsonValue tv || !IsWeight(JsVal.AsNumber(tv))
+            || JsVal.Prop(authority, "key_auths") is not JsonArray auths)
+        {
+            throw new FormatException("unreadable owner authority");
+        }
+        var keys = new List<(string, double)>();
+        foreach (var auth in auths)
+        {
+            if (auth is not JsonArray { Count: 2 } pair || pair[0] is not JsonValue kv
+                || !JsVal.TryGetStringLenient(kv, out var key) || !IsWeight(JsVal.AsNumber(pair[1])))
+            {
+                throw new FormatException("unreadable owner key");
+            }
+            keys.Add((key, JsVal.AsNumber(pair[1])!.Value));
+        }
+        return new OwnerAuthority(JsVal.AsNumber(tv)!.Value, keys);
+    }
+
+    private static bool IsWeight(double? n) => n is { } d && d >= 0 && double.IsInteger(d);
+
     /// <summary>
     /// Owner-history entries still usable for recovery: inside the window measured from
     /// head block time, and strictly newer than the latest recovery (the key a recovery
     /// replaced carries exactly the recovery's time and must not count).
     /// </summary>
-    private static IEnumerable<(JsonNode Entry, DateTime LastValid)> UsableEntries(
-        JsonNode? ownerHistory, DateTime headTime, DateTime? lastRecovery)
+    private static IEnumerable<OwnerHistoryEntry> UsableEntries(
+        IEnumerable<OwnerHistoryEntry> ownerHistory, DateTime headTime, DateTime? lastRecovery) =>
+        ownerHistory.Where(e => e.LastValid + RecoveryWindow > headTime
+            && (lastRecovery == null || e.LastValid > lastRecovery.Value));
+
+    public enum Verdict
     {
-        if (ownerHistory is not JsonArray entries)
-        {
-            yield break;
-        }
-        foreach (var entry in entries)
-        {
-            if (entry == null)
-            {
-                continue;
-            }
-            var lastValid = ParseChainTime(JsVal.Prop(entry, "last_valid_time"));
-            if (lastValid == null
-                || lastValid.Value + RecoveryWindow <= headTime
-                || (lastRecovery != null && lastValid.Value <= lastRecovery.Value))
-            {
-                continue;
-            }
-            yield return (entry, lastValid.Value);
-        }
+        Ok,
+        NoRecentOwnerChange,
+        KeyNotRecent,
+        KeyNotSufficient,
     }
 
-    public static bool HasRecentOwnerChange(JsonNode? ownerHistory, DateTime headTime, DateTime? lastRecovery) =>
-        UsableEntries(ownerHistory, headTime, lastRecovery).Any();
-
     /// <summary>
-    /// The latest last_valid_time among usable entries whose previous owner authority holds
-    /// the proven key, or null when the key cannot be used.
+    /// Whether any key could still recover the account: a usable entry must exist, and one of
+    /// them must hold a key that meets its threshold alone.
     /// </summary>
-    public static DateTime? ProvenKeyValidUntil(JsonNode? ownerHistory, string provenKeyPub, DateTime headTime,
+    public static Verdict CheckOwnerHistory(IEnumerable<OwnerHistoryEntry> ownerHistory, DateTime headTime,
         DateTime? lastRecovery)
     {
-        DateTime? best = null;
-        foreach (var (entry, lastValid) in UsableEntries(ownerHistory, headTime, lastRecovery))
+        var usable = UsableEntries(ownerHistory, headTime, lastRecovery).ToList();
+        if (usable.Count == 0)
         {
-            if (AuthorityKeys(JsVal.Prop(entry, "previous_owner_authority")).Contains(provenKeyPub)
-                && (best == null || lastValid > best))
+            return Verdict.NoRecentOwnerChange;
+        }
+        return usable.Any(e => e.Previous.HasSufficientKey) ? Verdict.Ok : Verdict.KeyNotSufficient;
+    }
+
+    /// <summary>
+    /// The proven key's verdict and, when usable, the latest last_valid_time among usable
+    /// entries in which the key alone meets the threshold.
+    /// </summary>
+    public static (Verdict Verdict, DateTime? ValidUntil) CheckProvenKey(IEnumerable<OwnerHistoryEntry> ownerHistory,
+        string provenKeyPub, DateTime headTime, DateTime? lastRecovery)
+    {
+        DateTime? best = null;
+        var insufficient = false;
+        foreach (var entry in UsableEntries(ownerHistory, headTime, lastRecovery))
+        {
+            if (entry.Previous.WeightOf(provenKeyPub) == null)
             {
-                best = lastValid;
+                continue;
+            }
+            if (!entry.Previous.IsSatisfiedBy(provenKeyPub))
+            {
+                insufficient = true;
+            }
+            else if (best == null || entry.LastValid > best)
+            {
+                best = entry.LastValid;
             }
         }
-        return best;
+        if (best != null)
+        {
+            return (Verdict.Ok, best);
+        }
+        return (insufficient ? Verdict.KeyNotSufficient : Verdict.KeyNotRecent, null);
     }
 }

@@ -122,6 +122,9 @@ public static class HiveCrypto
 
     // ---- recovery -------------------------------------------------------
 
+    /// <summary>A compact recoverable signature: 65 bytes as hex.</summary>
+    public const int SignatureHexLength = 130;
+
     /// <summary>
     /// dhive Signature.fromString(sig).recover(digest).toString(): recover the
     /// signer's public key from a 65-byte hex signature. Returns null when the
@@ -129,6 +132,12 @@ public static class HiveCrypto
     /// </summary>
     public static string? RecoverPublicKey(string signatureHex, ReadOnlySpan<byte> digest32)
     {
+        // Length first, so an oversized input is never decoded.
+        if (signatureHex.Length != SignatureHexLength)
+        {
+            return null;
+        }
+
         byte[] raw;
         try
         {
@@ -170,7 +179,9 @@ public static class HiveCrypto
     /// </summary>
     public static bool IsPublicKey(string? key)
     {
-        if (key == null || !key.StartsWith(PublicKeyPrefix, StringComparison.Ordinal))
+        // 37 bytes are at most 51 base58 characters; longer input is never decoded.
+        if (key == null || key.Length > PublicKeyPrefix.Length + 51
+            || !key.StartsWith(PublicKeyPrefix, StringComparison.Ordinal))
         {
             return false;
         }
