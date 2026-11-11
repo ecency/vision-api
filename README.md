@@ -52,6 +52,7 @@ docker run -it --rm -p 4000:4000 \
 | `DESK_MEMO_BYTES` | byte budget of each curation desk memo store (fresh and last-good), LRU beyond it (default 64 MiB) |
 | `TURNSTILE_SECRET` | Cloudflare Turnstile secret for account-create captcha |
 | `CAPTCHA_MODE` | `hard` (default) or `off` (operator break-glass) |
+| `RECOVERY_ACCOUNTS` | comma-separated recovery accounts the self-serve account recovery serves, e.g. `ecency,appreciator` (default `ecency`; invalid names are ignored) |
 | `BLOCKSTREAM_CLIENT_ID` / `BLOCKSTREAM_CLIENT_SECRET` | optional Blockstream Enterprise esplora auth (BTC fallback) |
 | `HELIUS_API_KEY` | optional Helius API key added as an extra Solana RPC fallback |
 | `ETH_RPC_URLS` / `BNB_RPC_URLS` / `SOL_RPC_URLS` / `BTC_ESPLORA_URLS` | optional comma-separated endpoint lists overriding the built-in chain provider pools |

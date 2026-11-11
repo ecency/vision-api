@@ -20,6 +20,8 @@ services:
       - STRIPE_INTERNAL_SECRET
       - TURNSTILE_SECRET
       - CAPTCHA_MODE
+      # Self-serve account recovery: recovery accounts it serves (default ecency).
+      - RECOVERY_ACCOUNTS
       - BLOCKSTREAM_CLIENT_ID
       - BLOCKSTREAM_CLIENT_SECRET
       - HELIUS_API_KEY

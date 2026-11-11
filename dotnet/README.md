@@ -216,6 +216,7 @@ the same defaults, as the Node service (`Config.cs` mirrors `src/config.ts`):
 | `STRIPE_INTERNAL_SECRET` | shared secret for the Stripe money endpoints; unset = those routes fail closed with 503 | unset |
 | `TURNSTILE_SECRET` | Cloudflare Turnstile secret for account-create captcha | unset |
 | `CAPTCHA_MODE` | `hard` (default) or `off` (operator break-glass) | `hard` |
+| `RECOVERY_ACCOUNTS` | comma-separated recovery accounts the self-serve account recovery serves, e.g. `ecency,appreciator`; invalid names are ignored | `ecency` |
 | `BLOCKSTREAM_CLIENT_ID` / `BLOCKSTREAM_CLIENT_SECRET` | optional Blockstream enterprise esplora auth | unset |
 | `HELIUS_API_KEY` | optional extra Solana RPC provider | unset |
 | `ETH_RPC_URLS` / `BNB_RPC_URLS` / `SOL_RPC_URLS` / `BTC_ESPLORA_URLS` | comma-separated overrides for the chain provider pools | built-in pools |
