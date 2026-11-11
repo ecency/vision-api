@@ -122,6 +122,9 @@ public static class HiveCrypto
 
     // ---- recovery -------------------------------------------------------
 
+    /// <summary>A compact recoverable signature: 65 bytes as hex.</summary>
+    public const int SignatureHexLength = 130;
+
     /// <summary>
     /// dhive Signature.fromString(sig).recover(digest).toString(): recover the
     /// signer's public key from a 65-byte hex signature. Returns null when the
@@ -129,6 +132,12 @@ public static class HiveCrypto
     /// </summary>
     public static string? RecoverPublicKey(string signatureHex, ReadOnlySpan<byte> digest32)
     {
+        // Length first, so an oversized input is never decoded.
+        if (signatureHex.Length != SignatureHexLength)
+        {
+            return null;
+        }
+
         byte[] raw;
         try
         {
@@ -162,6 +171,65 @@ public static class HiveCrypto
         }
 
         return PublicKeyToString(pubKey);
+    }
+
+    /// <summary>
+    /// True for a well-formed STM public key: base58 of a 33-byte compressed point on the
+    /// curve followed by the first 4 bytes of its ripemd160 checksum.
+    /// </summary>
+    public static bool IsPublicKey(string? key)
+    {
+        // 37 bytes are at most 51 base58 characters; longer input is never decoded.
+        if (key == null || key.Length > PublicKeyPrefix.Length + 51
+            || !key.StartsWith(PublicKeyPrefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var raw = Base58Decode(key.AsSpan(PublicKeyPrefix.Length));
+        if (raw == null || raw.Length != 37)
+        {
+            return false;
+        }
+
+        var checksum = Ripemd160(raw.AsSpan(0, 33));
+        if (!checksum.AsSpan(0, 4).SequenceEqual(raw.AsSpan(33, 4)))
+        {
+            return false;
+        }
+
+        return ECPubKey.TryCreate(raw.AsSpan(0, 33), Context.Instance, out _, out var pub) && pub != null;
+    }
+
+    /// <summary>Base58 decode; null on a character outside the alphabet.</summary>
+    private static byte[]? Base58Decode(ReadOnlySpan<char> text)
+    {
+        if (text.Length == 0 || text.Length > 128)
+        {
+            return null;
+        }
+
+        var value = System.Numerics.BigInteger.Zero;
+        foreach (var c in text)
+        {
+            var digit = Base58Alphabet.IndexOf(c);
+            if (digit < 0)
+            {
+                return null;
+            }
+            value = value * 58 + digit;
+        }
+
+        var leadingZeros = 0;
+        while (leadingZeros < text.Length && text[leadingZeros] == Base58Alphabet[0])
+        {
+            leadingZeros++;
+        }
+
+        var body = value.IsZero ? Array.Empty<byte>() : value.ToByteArray(isUnsigned: true, isBigEndian: true);
+        var result = new byte[leadingZeros + body.Length];
+        body.CopyTo(result, leadingZeros);
+        return result;
     }
 
     // ---- hashing / encoding ----------------------------------------------

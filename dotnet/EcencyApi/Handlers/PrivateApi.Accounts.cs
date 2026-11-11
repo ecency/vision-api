@@ -65,8 +65,10 @@ public static partial class PrivateApi
     /// account-create and paid-account-create routes. Returns true ONLY on a confirmed-human
     /// token; fails CLOSED on a missing secret/token, provider error, or rejection (a network
     /// blip must never open the gate). The secret is server-side only (config.turnstileSecret).
+    /// When expectedAction is given, the token must also have been issued for that widget
+    /// action, so a token solved on one page cannot be spent on another.
     /// </summary>
-    private static async Task<bool> VerifyTurnstile(JsonNode? token, string ip)
+    private static async Task<bool> VerifyTurnstile(JsonNode? token, string ip, string? expectedAction = null)
     {
         var secret = Config.TurnstileSecret;
         var tokenStr = token is JsonValue tv && JsVal.TryGetStringLenient(tv, out string? ts) ? ts : null;
@@ -87,18 +89,36 @@ public static partial class PrivateApi
                 form.Add(new("remoteip", ip));
             }
 
-            var data = await PostTurnstileForm(form);
-            return data is JsonObject obj
-                && obj.TryGetPropertyValue("success", out var success)
-                && success is JsonValue sv
-                && sv.TryGetValue<bool>(out bool b)
-                && b;
+            return TurnstileAccepted(await PostTurnstileForm(form), expectedAction);
         }
         catch (Exception err)
         {
             Console.WriteLine($"verifyTurnstile: siteverify error {err.Message}");
             return false;
         }
+    }
+
+    /// <summary>
+    /// A siteverify answer that confirms a human: success true and, when expectedAction is
+    /// given, the same action the widget was rendered with.
+    /// </summary>
+    internal static bool TurnstileAccepted(JsonNode? data, string? expectedAction)
+    {
+        if (data is not JsonObject obj
+            || !obj.TryGetPropertyValue("success", out var success)
+            || success is not JsonValue sv
+            || !sv.TryGetValue<bool>(out bool b)
+            || !b)
+        {
+            return false;
+        }
+        if (expectedAction == null)
+        {
+            return true;
+        }
+        return obj["action"] is JsonValue av
+            && JsVal.TryGetStringLenient(av, out var action)
+            && action == expectedAction;
     }
 
     /// <summary>
@@ -158,13 +178,13 @@ public static partial class PrivateApi
     /// Enforced for every request by default (config.captchaMode "hard"); an operator can set
     /// "off" as an emergency break-glass, since verification otherwise fails closed.
     /// </summary>
-    private static async Task<bool> AccountCaptchaRejected(JsonNode? token, string ip)
+    private static async Task<bool> AccountCaptchaRejected(JsonNode? token, string ip, string? expectedAction = null)
     {
         if (Config.CaptchaMode == "off")
         {
             return false;
         }
-        return !(await VerifyTurnstile(token, ip));
+        return !(await VerifyTurnstile(token, ip, expectedAction));
     }
 
     public static async Task CreateAccount(HttpContext ctx)
