@@ -59,6 +59,14 @@ public class SsrRpcTests
                 HttpListenerContext ctx;
                 try { ctx = await _listener.GetContextAsync(); }
                 catch { return; }
+                // Concurrently, like a real node: a burst must not queue here.
+                _ = Handle(ctx);
+            }
+        }
+
+        private async Task Handle(HttpListenerContext ctx)
+        {
+            {
                 var n = Interlocked.Increment(ref Hits);
                 string reqBody;
                 using (var reader = new StreamReader(ctx.Request.InputStream))
@@ -890,7 +898,7 @@ public class SsrRpcTests
             // once the list stays empty.
             var node = Assert.Single(body["nodes"]!.AsArray())!;
             var unsupported = node["unsupported"]?.AsArray().Select(m => m!.GetValue<string>()).ToArray();
-            Assert.Equal(new[] { "bridge.get_ranked_posts_v2" }, unsupported);
+            Assert.Equal(new[] { SsrRpc.V2Family }, unsupported);
         }
         finally
         {
@@ -989,7 +997,7 @@ public class SsrRpcTests
 
         var snap = SsrRpc.Client.HealthSnapshot();
         Assert.Empty(snap[0]!["unsupported"]!.AsArray());
-        Assert.Equal("bridge.get_post_v2", Assert.Single(snap[1]!["unsupported"]!.AsArray())!.GetValue<string>());
+        Assert.Equal(SsrRpc.V2Family, Assert.Single(snap[1]!["unsupported"]!.AsArray())!.GetValue<string>());
 
         // And the marked node, reached again, is asked v1 directly.
         capable.Status = 503;
@@ -1012,5 +1020,91 @@ public class SsrRpcTests
         var node = SsrRpc.Client.HealthSnapshot()[0]!;
         Assert.Equal(1, node["samples"]!.GetValue<int>());
         Assert.True(node["ewma_ms"]!.GetValue<double>() < 300, $"ewma {node["ewma_ms"]}");
+    }
+
+    [Fact]
+    public async Task A_cold_burst_of_v2_reads_against_a_v1_only_node_sends_one_probe()
+    {
+        // Distinct keys, so the cache's single-flight does not coalesce them;
+        // the probe is slow, so every fill reaches the node before it lands.
+        await using var stub = new RpcStub { Unknown = { "bridge.get_post_v2" }, UnknownDelayMs = 300 };
+        Use(stub);
+        var v2 = Policy("bridge.get_post_v2");
+        const int n = 8;
+        var results = await Task.WhenAll(Enumerable.Range(0, n).Select(i => SsrRpc.Resolve(v2, PV2("a", "p" + i))));
+        Assert.All(results, r => Assert.True(r.Outcome == SsrRpc.Outcome.Miss, $"{r.Outcome}: {r.Error}"));
+        Assert.All(results, r => Assert.StartsWith("{\"method\":\"get_post\"", Encoding.UTF8.GetString(r.Bytes)));
+        Assert.Equal(1, stub.Methods.Count(m => m == "bridge.get_post_v2"));
+        Assert.Equal(n, stub.Methods.Count(m => m == "bridge.get_post"));
+        // Time spent waiting for another call's probe is not this node's latency.
+        var node = SsrRpc.Client.HealthSnapshot()[0]!;
+        Assert.Equal(n, node["samples"]!.GetValue<int>());
+        Assert.True(node["ewma_ms"]!.GetValue<double>() < 150, $"ewma {node["ewma_ms"]}");
+    }
+
+    [Fact]
+    public async Task A_cold_burst_on_a_v2_node_waits_for_one_probe_and_then_runs_in_parallel()
+    {
+        // Waiters go v2 once the probe proves the family; after that the node
+        // is known capable and reads do not queue behind one another.
+        await using var stub = new RpcStub { DelayMs = 200 };
+        Use(stub);
+        var v2 = Policy("bridge.get_post_v2");
+        const int n = 6;
+        var first = await Task.WhenAll(Enumerable.Range(0, n).Select(i => SsrRpc.Resolve(v2, PV2("a", "p" + i))));
+        Assert.All(first, r => Assert.True(r.Outcome == SsrRpc.Outcome.Miss, $"{r.Outcome}: {r.Error}"));
+        Assert.Equal(n, stub.Methods.Count(m => m == "bridge.get_post_v2"));
+        Assert.Equal(0, stub.Methods.Count(m => m == "bridge.get_post"));
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var second = await Task.WhenAll(Enumerable.Range(0, n).Select(i => SsrRpc.Resolve(v2, PV2("b", "p" + i))));
+        sw.Stop();
+        Assert.All(second, r => Assert.Equal(SsrRpc.Outcome.Miss, r.Outcome));
+        Assert.True(sw.ElapsedMilliseconds < 2 * 200 + 300, $"took {sw.ElapsedMilliseconds} ms");
+    }
+
+    [Fact]
+    public async Task One_unknown_method_answer_marks_all_four_v2_reads_on_that_node()
+    {
+        await using var stub = new RpcStub
+        {
+            Unknown = { "bridge.get_post_v2", "bridge.get_ranked_posts_v2", "bridge.get_account_posts_v2", "bridge.get_discussion_v2" },
+        };
+        Use(stub);
+        await SsrRpc.Resolve(Policy("bridge.get_post_v2"), PV2("a", "b"));
+        await SsrRpc.Resolve(Policy("bridge.get_ranked_posts_v2"), new JsonObject { ["sort"] = "trending", ["tag"] = "" });
+        await SsrRpc.Resolve(Policy("bridge.get_account_posts_v2"), new JsonObject { ["sort"] = "posts", ["account"] = "a" });
+        await SsrRpc.Resolve(Policy("bridge.get_discussion_v2"), P("a", "b"));
+        Assert.Equal(
+            new[] { "bridge.get_post_v2", "bridge.get_post", "bridge.get_ranked_posts", "bridge.get_account_posts", "bridge.get_discussion" },
+            stub.Methods.ToArray());
+    }
+
+    [Fact]
+    public async Task The_same_node_may_serve_as_params_and_as_fallback_params()
+    {
+        await using var stub = new RpcStub { Unknown = { "bridge.get_post_v2" } };
+        var client = new HiveRpcClient(new[] { stub.Url }, timeoutMs: 1000, failoverThreshold: 1);
+        var p = P("a", "b");
+        var result = await client.CallMethod("bridge.get_post_v2", p, fallback: ("bridge.get_post", p, "bridge.*_v2"));
+        Assert.Equal("get_post", result?["method"]?.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task An_rpc_error_from_the_probe_proves_the_method_so_a_burst_of_errors_runs_in_parallel()
+    {
+        // A missing post answers with an assert, which only a node that has the
+        // method can give. If that taught nothing, every waiter would probe in
+        // turn and the burst would queue one round trip at a time.
+        await using var stub = new RpcStub { DelayMs = 200, RpcError = true };
+        Use(stub);
+        var v2 = Policy("bridge.get_post_v2");
+        const int n = 6;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var results = await Task.WhenAll(Enumerable.Range(0, n).Select(i => SsrRpc.Resolve(v2, PV2("a", "p" + i))));
+        sw.Stop();
+        Assert.All(results, r => Assert.Equal(SsrRpc.Outcome.RpcError, r.Outcome));
+        Assert.Equal(n, stub.Methods.Count(m => m == "bridge.get_post_v2"));
+        Assert.True(sw.ElapsedMilliseconds < 2 * 200 + 300, $"took {sw.ElapsedMilliseconds} ms");
     }
 }
