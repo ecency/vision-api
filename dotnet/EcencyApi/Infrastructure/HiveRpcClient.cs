@@ -16,7 +16,7 @@ namespace EcencyApi.Infrastructure;
 ///    instead of burning a same-node retry.
 ///  - An `unknown method` answer to a call that names a fallback method asks
 ///    the same node the fallback, and marks the node and the method's family
-///    for a while; one call probes a node at a time (CallMethod).
+///    for a while (CallMethod).
 ///
 /// Latency is tracked per call class (see <see cref="CallClass"/>) because the
 /// reads made through this client are bimodal in cost. Failure state is not: it
@@ -34,15 +34,9 @@ public sealed class HiveRpcClient
     private readonly Func<long> _clock;
     private int _seq;
 
-    // Per node and fallback family, what is known about the node serving the
-    // family: nothing (no entry), a probe in flight, or a verdict until a time
-    // on _clock. Bounded by nodes x families; see CallMethod.
-    private readonly ConcurrentDictionary<(int Node, string Family), Capability> _capability = new();
-
-    /// <param name="Supported">null while <paramref name="Probe"/> is in flight.</param>
-    /// <param name="Probe">Completes with the probe's verdict, or null when the
-    /// probe learned nothing (the node failed), after the entry is updated.</param>
-    private sealed record Capability(bool? Supported, long Until, Task<bool?>? Probe);
+    // Per node, the fallback families it answered `unknown method` for and until
+    // when (on _clock). Bounded by nodes x families; see CallMethod.
+    private readonly ConcurrentDictionary<(int Node, string Family), long> _lacksUntil = new();
 
     // timeoutMs 2000 / failoverThreshold 2 mirror the dhive Client options the
     // Node service constructed its clients with.
@@ -118,10 +112,9 @@ public sealed class HiveRpcClient
     /// preference before the first well-formed answer is accepted as-is.</summary>
     private const int MaxPreferenceProbes = 2;
 
-    /// <summary>How long a verdict on a node and family holds: a node that
-    /// answered `unknown method` is asked the fallback, one that answered anything
-    /// else is asked directly, with no probe either way. Long enough that a node
-    /// lacking the family costs one wasted round trip per half hour, short enough
+    /// <summary>How long a node that answered `unknown method` is asked the
+    /// fallback for the whole family. Long enough that a node lacking the family
+    /// costs a cold round of wasted round trips once per half hour, short enough
     /// that a node upgraded in place is used for the new methods again within the
     /// half hour, with no restart.</summary>
     internal const long UnsupportedMethodTtlMs = 30 * 60 * 1000;
@@ -178,9 +171,11 @@ public sealed class HiveRpcClient
     /// together (one verdict covers them all). A node that answers `unknown
     /// method` is not failed over: it is asked the fallback at once, in the same
     /// attempt, and is asked the fallback directly for
-    /// <see cref="UnsupportedMethodTtlMs"/>. A node that answers anything else is
-    /// known to serve the family for as long. Until a node has a verdict, one call
-    /// probes it and the others wait for that verdict instead of each probing.
+    /// <see cref="UnsupportedMethodTtlMs"/>. Each call decides on its own and
+    /// never waits on another: calls that reach an unmarked node together each
+    /// ask the new method, and an `unknown method` comes back in one fast round
+    /// trip, so a cold round of those per node per TTL is cheap, while tying
+    /// readers to one probe's fate turned a hung probe into a queue.
     /// Whatever the node answers is returned as is.</param>
     public Task<JsonNode?> CallMethod(string qualifiedMethod, JsonNode @params,
         Func<JsonNode?, bool>? validateResult = null,
@@ -222,59 +217,19 @@ public sealed class HiveRpcClient
         return named.EndsWith("_api" + bare, StringComparison.Ordinal);
     }
 
-    private IEnumerable<string> UnsupportedFamilies(int nodeIndex)
+    private bool Lacks(int nodeIndex, string family)
     {
-        var now = _clock();
-        return _capability
-            .Where(kv => kv.Key.Node == nodeIndex && kv.Value.Supported == false && now < kv.Value.Until)
-            .Select(kv => kv.Key.Family)
+        if (!_lacksUntil.TryGetValue((nodeIndex, family), out var until)) return false;
+        if (_clock() < until) return true;
+        _lacksUntil.TryRemove(new KeyValuePair<(int, string), long>((nodeIndex, family), until));
+        return false;
+    }
+
+    private IEnumerable<string> UnsupportedFamilies(int nodeIndex) =>
+        _lacksUntil.Keys.Where(k => k.Node == nodeIndex && Lacks(nodeIndex, k.Family))
+            .Select(k => k.Family)
             .OrderBy(m => m, StringComparer.Ordinal)
             .ToArray();
-    }
-
-    /// <summary>How to ask this node for a method of this family: the fallback
-    /// (true), the new method (false), and whether this call is the probe whose
-    /// verdict the caller must then report through <see cref="Settle"/>. While
-    /// another call probes the node, this waits for that verdict; the wait is
-    /// bounded by the probe's own per-node timeout.</summary>
-    private async Task<(bool UseFallback, TaskCompletionSource<bool?>? Probe)> Route(int nodeIndex, string family)
-    {
-        var key = (nodeIndex, family);
-        while (true)
-        {
-            _capability.TryGetValue(key, out var cap);
-            if (cap?.Probe is { } inFlight)
-            {
-                await inFlight;
-                continue;
-            }
-            if (cap is not null && _clock() < cap.Until) return (cap.Supported == false, null);
-            var tcs = new TaskCompletionSource<bool?>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var probing = new Capability(null, 0, tcs.Task);
-            var won = cap is null ? _capability.TryAdd(key, probing) : _capability.TryUpdate(key, probing, cap);
-            if (won) return (false, tcs);
-        }
-    }
-
-    /// <summary>Record a verdict for a node and family. A probe settles its own
-    /// entry (null: it learned nothing, so the next caller probes again) and then
-    /// releases its waiters; a call outside a probe overwrites any entry.</summary>
-    private void Settle(int nodeIndex, string family, bool? supported, TaskCompletionSource<bool?>? probe)
-    {
-        var key = (nodeIndex, family);
-        var verdict = supported is { } v ? new Capability(v, _clock() + UnsupportedMethodTtlMs, null) : null;
-        if (probe is null)
-        {
-            if (verdict is not null) _capability[key] = verdict;
-            return;
-        }
-        if (_capability.TryGetValue(key, out var cap) && ReferenceEquals(cap.Probe, probe.Task))
-        {
-            if (verdict is null) _capability.TryRemove(new KeyValuePair<(int, string), Capability>(key, cap));
-            else _capability.TryUpdate(key, verdict, cap);
-        }
-        probe.TrySetResult(supported);
-    }
 
     private async Task<JsonNode?> Send(JsonObject request, string method,
         Func<JsonNode?, bool>? validateResult,
@@ -302,41 +257,26 @@ public sealed class HiveRpcClient
                 // The ordering above is a snapshot; admission is decided now.
                 if (!_health.TryBeginAttempt(nodeIndex)) break;
                 var started = NowMs;
-                TaskCompletionSource<bool?>? probe = null;
                 try
                 {
-                    var useFallback = false;
-                    if (fallbackBody != null)
-                    {
-                        (useFallback, probe) = await Route(nodeIndex, family ?? method);
-                        started = NowMs; // the wait for another call's probe is not this node's latency
-                    }
+                    var useFallback = fallbackBody != null && Lacks(nodeIndex, family ?? method);
                     JsonNode? result;
                     try
                     {
                         result = await CallNode(node, useFallback ? fallbackBody! : body);
-                        if (probe != null) { Settle(nodeIndex, family ?? method, true, probe); probe = null; }
                     }
                     catch (RpcException e) when (fallbackBody != null && !useFallback && IsUnknownMethod(e.Message, method))
                     {
                         // The node is up, it just predates the method: same node,
                         // older method, and remember it. Not a failure, not a failover.
                         // Two round trips against the caller's budget, but only once
-                        // per (node, family) per TTL: concurrent calls wait for this
-                        // verdict instead of probing too.
-                        Settle(nodeIndex, family ?? method, false, probe);
-                        probe = null;
+                        // per (node, family) per TTL for each call that reached the
+                        // node before the mark, and inside a fill the gate bounds.
+                        _lacksUntil[(nodeIndex, family ?? method)] = _clock() + UnsupportedMethodTtlMs;
                         // Rank the node on the v1 answer it will give from now on,
                         // not on the probe that does not recur within the TTL.
                         started = NowMs;
                         result = await CallNode(node, fallbackBody);
-                    }
-                    catch (RpcException) when (probe != null)
-                    {
-                        // Any other application error proves the method exists.
-                        Settle(nodeIndex, family ?? method, true, probe);
-                        probe = null;
-                        throw;
                     }
                     if (validateResult != null && !validateResult(result))
                     {
@@ -403,9 +343,6 @@ public sealed class HiveRpcClient
                 }
                 finally
                 {
-                    // A probe that ended in a transport failure learned nothing:
-                    // release its waiters so one of them probes again.
-                    if (probe != null) Settle(nodeIndex, family ?? method, null, probe);
                     _health.EndAttempt(nodeIndex);
                 }
             }

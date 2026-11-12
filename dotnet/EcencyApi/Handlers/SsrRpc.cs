@@ -336,7 +336,7 @@ public static partial class SsrRpc
     // shape: the route stays a raw pass-through and the consumer's normalizer
     // takes both, so one fill per key still serves every reader of that key.
     // The four v2 reads shipped together in one hivemind release, so a node
-    // lacking one lacks them all: one mark (and one probe) covers the family.
+    // lacking one lacks them all: one mark covers the family.
     internal const string V2Family = "bridge.*_v2";
 
     internal static JsonNode V1Params(JsonNode @params)
