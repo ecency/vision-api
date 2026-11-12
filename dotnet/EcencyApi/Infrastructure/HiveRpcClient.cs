@@ -259,7 +259,7 @@ public sealed class HiveRpcClient
                 var started = NowMs;
                 try
                 {
-                    var useFallback = fallbackBody != null && Lacks(nodeIndex, family ?? method);
+                    var useFallback = fallbackBody != null && Lacks(nodeIndex, family!);
                     JsonNode? result;
                     try
                     {
@@ -272,7 +272,7 @@ public sealed class HiveRpcClient
                         // Two round trips against the caller's budget, but only once
                         // per (node, family) per TTL for each call that reached the
                         // node before the mark, and inside a fill the gate bounds.
-                        _lacksUntil[(nodeIndex, family ?? method)] = _clock() + UnsupportedMethodTtlMs;
+                        _lacksUntil[(nodeIndex, family!)] = _clock() + UnsupportedMethodTtlMs;
                         // Rank the node on the v1 answer it will give from now on,
                         // not on the probe that does not recur within the TTL.
                         started = NowMs;

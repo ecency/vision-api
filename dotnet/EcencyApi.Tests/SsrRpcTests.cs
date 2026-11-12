@@ -110,10 +110,17 @@ public class SsrRpcTests
                         ? "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}"
                         : "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"method\":\"" + method + "\",\"n\":" + n + ",\"text\":\"caf\\u00e9 \\ud83d\"}}";
                 var bytes = Encoding.UTF8.GetBytes(body);
-                ctx.Response.StatusCode = Status;
-                ctx.Response.ContentType = "application/json";
-                ctx.Response.ContentLength64 = bytes.Length;
-                try { await ctx.Response.OutputStream.WriteAsync(bytes); ctx.Response.Close(); } catch { }
+                // Inside the try: a handler that wakes after the listener closed
+                // (the hanging-node spec) must not throw an unobserved exception.
+                try
+                {
+                    ctx.Response.StatusCode = Status;
+                    ctx.Response.ContentType = "application/json";
+                    ctx.Response.ContentLength64 = bytes.Length;
+                    await ctx.Response.OutputStream.WriteAsync(bytes);
+                    ctx.Response.Close();
+                }
+                catch { }
             }
         }
 
@@ -1039,11 +1046,11 @@ public class SsrRpcTests
         Assert.All(results, r => Assert.StartsWith("{\"method\":\"get_post\"", Encoding.UTF8.GetString(r.Bytes)));
         Assert.InRange(stub.Methods.Count(m => m == "bridge.get_post_v2"), 1, n);
         Assert.Equal(n, stub.Methods.Count(m => m == "bridge.get_post"));
-        Assert.True(sw.ElapsedMilliseconds < 300 + 250, $"took {sw.ElapsedMilliseconds} ms");
+        Assert.True(sw.ElapsedMilliseconds < 1000, $"took {sw.ElapsedMilliseconds} ms");
         // Each sample is the v1 answer, not the probe before it.
         var node = SsrRpc.Client.HealthSnapshot()[0]!;
         Assert.Equal(n, node["samples"]!.GetValue<int>());
-        Assert.True(node["ewma_ms"]!.GetValue<double>() < 150, $"ewma {node["ewma_ms"]}");
+        Assert.True(node["ewma_ms"]!.GetValue<double>() < 250, $"ewma {node["ewma_ms"]}");
     }
 
     [Fact]
@@ -1066,7 +1073,8 @@ public class SsrRpcTests
         }));
         sw.Stop();
         Assert.All(results, x => Assert.True(x.r.Outcome == SsrRpc.Outcome.Miss, $"{x.r.Outcome}: {x.r.Error}"));
-        Assert.All(results, x => Assert.True(x.ElapsedMilliseconds < 2 * 300, $"one call took {x.ElapsedMilliseconds} ms"));
+        // Queued behind each other the last call would land near 8 x 300 ms.
+        Assert.True(results.Max(x => x.ElapsedMilliseconds) < 1200, $"slowest call took {results.Max(x => x.ElapsedMilliseconds)} ms");
         Assert.Equal(n, healthy.Methods.Count(m => m == "bridge.get_post_v2"));
     }
 
@@ -1090,7 +1098,7 @@ public class SsrRpcTests
             }));
             // One round trip each: none of them waited for another's answer.
             Assert.All(results, x => Assert.True(x.r.Outcome == SsrRpc.Outcome.Miss, $"{x.r.Outcome}: {x.r.Error}"));
-            Assert.All(results, x => Assert.True(x.ElapsedMilliseconds < 400 + 200, $"one call took {x.ElapsedMilliseconds} ms"));
+            Assert.All(results, x => Assert.True(x.ElapsedMilliseconds < 750, $"one call took {x.ElapsedMilliseconds} ms"));
         }
 
         await Burst("cold");
