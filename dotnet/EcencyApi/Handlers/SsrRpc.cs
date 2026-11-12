@@ -38,7 +38,7 @@ public static partial class SsrRpc
     /// between nodes, so the pool is ordered for them from their own latency
     /// profile (see <see cref="CallClass"/>). Required, not defaulted: a new
     /// method has to be classified, not silently filed as cheap.</param>
-    internal sealed record MethodPolicy(string Api, string Method, int TtlMs, CallClass Class)
+    internal sealed record MethodPolicy(string Api, string Method, int TtlMs, CallClass Class, string? Fallback = null)
     {
         public string Key => $"{Api}.{Method}";
     }
@@ -57,6 +57,14 @@ public static partial class SsrRpc
         new MethodPolicy("bridge", "get_account_posts", 30_000, CallClass.Heavy),
         new MethodPolicy("bridge", "get_discussion", 30_000, CallClass.Heavy),
         new MethodPolicy("bridge", "get_post", 30_000, CallClass.Cheap),
+        // Vote-free v2 twins: the v1 TTL and class, plus the v1 method a node
+        // without them is asked instead (see HiveRpcClient.CallMethod). A post's
+        // votes come separately from list_votes, a point read on the get_post TTL.
+        new MethodPolicy("bridge", "get_ranked_posts_v2", 15_000, CallClass.Heavy, Fallback: "get_ranked_posts"),
+        new MethodPolicy("bridge", "get_account_posts_v2", 30_000, CallClass.Heavy, Fallback: "get_account_posts"),
+        new MethodPolicy("bridge", "get_discussion_v2", 30_000, CallClass.Heavy, Fallback: "get_discussion"),
+        new MethodPolicy("bridge", "get_post_v2", 30_000, CallClass.Cheap, Fallback: "get_post"),
+        new MethodPolicy("bridge", "list_votes", 30_000, CallClass.Cheap),
         new MethodPolicy("bridge", "get_profile", 60_000, CallClass.Cheap),
         new MethodPolicy("bridge", "get_profiles", 60_000, CallClass.Cheap),
         new MethodPolicy("bridge", "get_community", 300_000, CallClass.Cheap),
@@ -320,6 +328,18 @@ public static partial class SsrRpc
         }
     }
 
+    // A v2 read answered by its v1 twin: the same params minus the v2-only
+    // `top_votes`, which a v1 node rejects as an unexpected keyword argument.
+    // The answer is cached under the requested (v2) key as returned, in either
+    // shape: the route stays a raw pass-through and the consumer's normalizer
+    // takes both, so one fill per key still serves every reader of that key.
+    internal static JsonNode V1Params(JsonNode @params)
+    {
+        var copy = @params.DeepClone();
+        if (copy is JsonObject obj) obj.Remove("top_votes");
+        return copy;
+    }
+
     // The one upstream call behind a key. Runs to completion even when every
     // waiter has given up, so the cache still gets filled for the next reader.
     internal sealed class FillRejectedException : Exception
@@ -377,7 +397,8 @@ public static partial class SsrRpc
                 // hivemind. The node already hangs off the request body and cannot be
                 // re-parented into the envelope, so it travels as a clone.
                 result = await Client.CallMethod($"{policy.Api}.{policy.Method}", @params.DeepClone(),
-                    callClass: CallClasses ? policy.Class : CallClass.Cheap);
+                    callClass: CallClasses ? policy.Class : CallClass.Cheap,
+                    fallback: policy.Fallback is { } v1 ? ($"{policy.Api}.{v1}", V1Params(@params)) : null);
             }
             finally
             {

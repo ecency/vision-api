@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json.Nodes;
 
@@ -13,6 +14,8 @@ namespace EcencyApi.Infrastructure;
 ///    (dhive semantics — an application error, not an unhealthy node).
 ///  - Overload statuses (429/502/503/504) advance to the next node immediately
 ///    instead of burning a same-node retry.
+///  - An `unknown method` answer to a call that names a fallback method asks
+///    the same node the fallback, and marks the node for a while (CallMethod).
 ///
 /// Latency is tracked per call class (see <see cref="CallClass"/>) because the
 /// reads made through this client are bimodal in cost. Failure state is not: it
@@ -27,7 +30,12 @@ public sealed class HiveRpcClient
     private readonly int _timeoutMs;
     private readonly int _failoverThreshold;
     private readonly NodeHealthTracker _health;
+    private readonly Func<long> _clock;
     private int _seq;
+
+    // Per node, the methods it answered `unknown method` for and until when (on
+    // _clock). Bounded by nodes x fallback-capable methods; see CallMethod.
+    private readonly ConcurrentDictionary<(int Node, string Method), long> _unsupportedUntil = new();
 
     // timeoutMs 2000 / failoverThreshold 2 mirror the dhive Client options the
     // Node service constructed its clients with.
@@ -43,6 +51,7 @@ public sealed class HiveRpcClient
         _timeoutMs = timeoutMs;
         _failoverThreshold = Math.Max(1, failoverThreshold);
         _health = new NodeHealthTracker(nodes.Length, clock);
+        _clock = clock ?? (() => Environment.TickCount64);
     }
 
     public IReadOnlyList<string> Nodes => _nodes;
@@ -82,6 +91,10 @@ public sealed class HiveRpcClient
             node["rate_limited_for_ms"] = v.RateLimitedForMs;
             node["parked_for_ms"] = v.FailureParkedForMs;
             node["failure_rate"] = Math.Round(v.FailureRate, 3);
+            // Methods this node is asked the fallback for until its mark lapses.
+            var unsupported = new JsonArray();
+            foreach (var m in UnsupportedMethods(v.Index)) unsupported.Add(m);
+            node["unsupported"] = unsupported;
             arr.Add(node);
         }
         return arr;
@@ -97,6 +110,13 @@ public sealed class HiveRpcClient
     /// <summary>How many nodes may be consulted to satisfy a soft result
     /// preference before the first well-formed answer is accepted as-is.</summary>
     private const int MaxPreferenceProbes = 2;
+
+    /// <summary>How long a node that answered `unknown method` is asked the
+    /// fallback instead. Long enough that a node lacking the method costs one
+    /// wasted round trip per method per half hour, short enough that a node
+    /// upgraded in place is used for the new method again within the half hour,
+    /// with no restart.</summary>
+    internal const long UnsupportedMethodTtlMs = 30 * 60 * 1000;
 
     // ---- calls -------------------------------------------------------------
 
@@ -145,29 +165,59 @@ public sealed class HiveRpcClient
     /// as given, which jussi/HAF route to hived or hivemind by prefix. Needed
     /// for every hivemind (`bridge`) read; works for condenser_api too.
     /// </summary>
+    /// <param name="fallback">An older method serving the same read, for nodes
+    /// that do not have this one yet. A node that answers `unknown method` is not
+    /// failed over: it is asked the fallback at once, in the same attempt, and is
+    /// asked the fallback directly for <see cref="UnsupportedMethodTtlMs"/>.
+    /// Whatever that node answers is returned as is.</param>
     public Task<JsonNode?> CallMethod(string qualifiedMethod, JsonNode @params,
         Func<JsonNode?, bool>? validateResult = null,
         Func<JsonNode?, bool>? preferResult = null,
-        CallClass callClass = CallClass.Cheap)
+        CallClass callClass = CallClass.Cheap,
+        (string Method, JsonNode Params)? fallback = null)
     {
-        var request = new JsonObject
-        {
-            ["id"] = Interlocked.Increment(ref _seq),
-            ["jsonrpc"] = "2.0",
-            ["method"] = qualifiedMethod,
-            ["params"] = @params,
-        };
-        return Send(request, qualifiedMethod, validateResult, preferResult, callClass);
+        var request = Envelope(qualifiedMethod, @params);
+        var fallbackRequest = fallback is { } f ? Envelope(f.Method, f.Params) : null;
+        return Send(request, qualifiedMethod, validateResult, preferResult, callClass, fallbackRequest);
     }
+
+    private JsonObject Envelope(string qualifiedMethod, JsonNode @params) => new()
+    {
+        ["id"] = Interlocked.Increment(ref _seq),
+        ["jsonrpc"] = "2.0",
+        ["method"] = qualifiedMethod,
+        ["params"] = @params,
+    };
+
+    // hivemind without the method: HTTP 200, code -32602, "Assert
+    // Exception:unknown method: bridge_apiget_post_v2" (verified 2026-11-12).
+    private static bool IsUnknownMethod(RpcException e) =>
+        e.Message.Contains("unknown method", StringComparison.OrdinalIgnoreCase);
+
+    private bool Unsupported(int nodeIndex, string method)
+    {
+        if (!_unsupportedUntil.TryGetValue((nodeIndex, method), out var until)) return false;
+        if (_clock() < until) return true;
+        _unsupportedUntil.TryRemove(new KeyValuePair<(int, string), long>((nodeIndex, method), until));
+        return false;
+    }
+
+    private IEnumerable<string> UnsupportedMethods(int nodeIndex) =>
+        _unsupportedUntil.Keys.Where(k => k.Node == nodeIndex && Unsupported(nodeIndex, k.Method))
+            .Select(k => k.Method)
+            .OrderBy(m => m, StringComparer.Ordinal)
+            .ToArray();
 
     private async Task<JsonNode?> Send(JsonObject request, string method,
         Func<JsonNode?, bool>? validateResult,
         Func<JsonNode?, bool>? preferResult,
-        CallClass callClass)
+        CallClass callClass,
+        JsonObject? fallbackRequest = null)
     {
         // JsJson: a lone-surrogate username from a client token must serialize
         // (JSON.stringify semantics) instead of throwing in the writer.
         var body = JsJson.Stringify(request);
+        var fallbackBody = fallbackRequest is null ? null : JsJson.Stringify(fallbackRequest);
 
         Exception? lastError = null;
         JsonNode? unpreferred = null;
@@ -185,7 +235,20 @@ public sealed class HiveRpcClient
                 var started = NowMs;
                 try
                 {
-                    var result = await CallNode(node, body);
+                    var useFallback = fallbackBody != null && Unsupported(nodeIndex, method);
+                    JsonNode? result;
+                    try
+                    {
+                        result = await CallNode(node, useFallback ? fallbackBody! : body);
+                    }
+                    catch (RpcException e) when (fallbackBody != null && !useFallback && IsUnknownMethod(e))
+                    {
+                        // The node is up, it just predates the method: same node,
+                        // older method, and remember it. Not a failure, not a failover.
+                        _unsupportedUntil[(nodeIndex, method)] = _clock() + UnsupportedMethodTtlMs;
+                        started = NowMs;
+                        result = await CallNode(node, fallbackBody);
+                    }
                     if (validateResult != null && !validateResult(result))
                     {
                         // Don't burn a same-node retry: a node serving malformed
