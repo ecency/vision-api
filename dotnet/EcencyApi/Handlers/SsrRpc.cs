@@ -58,13 +58,15 @@ public static partial class SsrRpc
         new MethodPolicy("bridge", "get_discussion", 30_000, CallClass.Heavy),
         new MethodPolicy("bridge", "get_post", 30_000, CallClass.Cheap),
         // Vote-free v2 twins: the v1 TTL and class, plus the v1 method a node
-        // without them is asked instead (see HiveRpcClient.CallMethod). A post's
-        // votes come separately from list_votes, a point read on the get_post TTL.
+        // without them is asked instead (see HiveRpcClient.CallMethod).
+        // bridge.list_votes is deliberately absent: only the client-side votes
+        // dialog reads it, and with no twin to fall back to, a node at the head of
+        // the pool that lacks it would answer every call with an RPC error,
+        // which neither fails over nor counts against the node.
         new MethodPolicy("bridge", "get_ranked_posts_v2", 15_000, CallClass.Heavy, Fallback: "get_ranked_posts"),
         new MethodPolicy("bridge", "get_account_posts_v2", 30_000, CallClass.Heavy, Fallback: "get_account_posts"),
         new MethodPolicy("bridge", "get_discussion_v2", 30_000, CallClass.Heavy, Fallback: "get_discussion"),
         new MethodPolicy("bridge", "get_post_v2", 30_000, CallClass.Cheap, Fallback: "get_post"),
-        new MethodPolicy("bridge", "list_votes", 30_000, CallClass.Cheap),
         new MethodPolicy("bridge", "get_profile", 60_000, CallClass.Cheap),
         new MethodPolicy("bridge", "get_profiles", 60_000, CallClass.Cheap),
         new MethodPolicy("bridge", "get_community", 300_000, CallClass.Cheap),
@@ -449,7 +451,10 @@ public static partial class SsrRpc
         // derived from that same node, so nothing is invented for either.
         var @params = body.Field("params");
         if (api is null || method is null || @params is not (JsonObject or JsonArray)
-            || !Allowlist.TryGetValue($"{api}.{method}", out var policy))
+            || !Allowlist.TryGetValue($"{api}.{method}", out var policy)
+            // A v2 read falls back by dropping `top_votes` by name, which a
+            // positional top_votes would survive; the consumer sends objects.
+            || (policy.Fallback is not null && @params is not JsonObject))
         {
             await Routes.Fallback(ctx);
             return;

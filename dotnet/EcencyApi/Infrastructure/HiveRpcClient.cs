@@ -191,8 +191,21 @@ public sealed class HiveRpcClient
 
     // hivemind without the method: HTTP 200, code -32602, "Assert
     // Exception:unknown method: bridge_apiget_post_v2" (verified 2026-11-12).
-    private static bool IsUnknownMethod(RpcException e) =>
-        e.Message.Contains("unknown method", StringComparison.OrdinalIgnoreCase);
+    // The same code and prefix carry asserts that echo params ("Post a/x does
+    // not exist", "invalid tag `x`"), so the assert has to START with the
+    // unknown-method text and name the method asked for; otherwise one crafted
+    // permlink would mark a capable node for the whole TTL.
+    private const string UnknownMethodPrefix = "Assert Exception:unknown method:";
+
+    internal static bool IsUnknownMethod(string message, string qualifiedMethod)
+    {
+        if (!message.StartsWith(UnknownMethodPrefix, StringComparison.Ordinal)) return false;
+        var named = message[UnknownMethodPrefix.Length..].Trim();
+        var bare = qualifiedMethod[(qualifiedMethod.LastIndexOf('.') + 1)..];
+        // hivemind names it `<api>_api<method>`: bridge.get_post_v2 is
+        // bridge_apiget_post_v2.
+        return named.EndsWith("_api" + bare, StringComparison.Ordinal);
+    }
 
     private bool Unsupported(int nodeIndex, string method)
     {
@@ -241,11 +254,16 @@ public sealed class HiveRpcClient
                     {
                         result = await CallNode(node, useFallback ? fallbackBody! : body);
                     }
-                    catch (RpcException e) when (fallbackBody != null && !useFallback && IsUnknownMethod(e))
+                    catch (RpcException e) when (fallbackBody != null && !useFallback && IsUnknownMethod(e.Message, method))
                     {
                         // The node is up, it just predates the method: same node,
                         // older method, and remember it. Not a failure, not a failover.
+                        // Two round trips against the caller's budget, but only once
+                        // per (node, method) per TTL, and inside a fill the fill gate
+                        // already bounds.
                         _unsupportedUntil[(nodeIndex, method)] = _clock() + UnsupportedMethodTtlMs;
+                        // Rank the node on the v1 answer it will give from now on,
+                        // not on the probe that does not recur within the TTL.
                         started = NowMs;
                         result = await CallNode(node, fallbackBody);
                     }

@@ -27,6 +27,12 @@ public class SsrRpcTests
         public int DelayMs;
         public bool RpcError;
         public bool NullResult;
+        // Any other hivemind assert, e.g. one that echoes a param back.
+        public string? CustomError;
+        // Answer with this HTTP status instead of 200 (a node out of service).
+        public int Status = 200;
+        // Extra delay before an `unknown method` answer only.
+        public int UnknownDelayMs;
         public volatile string LastMethod = "";
         // Methods this node answers `unknown method` for, the way a hivemind
         // without the v2 reads does (HTTP 200, code -32602, assert message).
@@ -84,8 +90,9 @@ public class SsrRpcTests
                 // param ("got an unexpected keyword argument").
                 var unexpectedArg = rawMethod.StartsWith("bridge.") && !rawMethod.EndsWith("_v2")
                     && req?["params"] is JsonObject po && po.ContainsKey("top_votes");
-                var assertion = unexpectedArg ? "got an unexpected keyword argument 'top_votes'"
-                    : Unknown.Contains(rawMethod) ? "unknown method: bridge_api" + method : null;
+                var assertion = CustomError ?? (unexpectedArg ? "got an unexpected keyword argument 'top_votes'"
+                    : Unknown.Contains(rawMethod) ? "unknown method: bridge_api" + method : null);
+                if (Unknown.Contains(rawMethod) && UnknownDelayMs > 0) await Task.Delay(UnknownDelayMs);
                 var body = assertion is not null
                     ? "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32602,\"message\":\"Assert Exception:" + assertion
                       + "\",\"data\":{\"code\":10,\"extension\":{\"assertion_expression\":\"" + assertion + "\"}}}}"
@@ -95,7 +102,7 @@ public class SsrRpcTests
                         ? "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}"
                         : "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"method\":\"" + method + "\",\"n\":" + n + ",\"text\":\"caf\\u00e9 \\ud83d\"}}";
                 var bytes = Encoding.UTF8.GetBytes(body);
-                ctx.Response.StatusCode = 200;
+                ctx.Response.StatusCode = Status;
                 ctx.Response.ContentType = "application/json";
                 ctx.Response.ContentLength64 = bytes.Length;
                 try { await ctx.Response.OutputStream.WriteAsync(bytes); ctx.Response.Close(); } catch { }
@@ -641,7 +648,7 @@ public class SsrRpcTests
                      "condenser_api.get_accounts", "condenser_api.get_content",
                      "condenser_api.get_dynamic_global_properties", "condenser_api.get_trending_tags",
                      "bridge.get_post_v2", "bridge.get_ranked_posts_v2", "bridge.get_account_posts_v2",
-                     "bridge.get_discussion_v2", "bridge.list_votes",
+                     "bridge.get_discussion_v2",
                  })
         {
             Assert.True(SsrRpc.Allowlist.ContainsKey(key), key);
@@ -649,6 +656,10 @@ public class SsrRpcTests
         }
         Assert.False(SsrRpc.Allowlist.ContainsKey("condenser_api.broadcast_transaction"));
         Assert.False(SsrRpc.Allowlist.ContainsKey("database_api.get_accounts"));
+        // Votes are read by the client-side votes dialog only, and a node at the
+        // head of the pool without list_votes would answer every call with an
+        // RPC error (no failover, counted as a fast success).
+        Assert.False(SsrRpc.Allowlist.ContainsKey("bridge.list_votes"));
     }
 
     [Fact]
@@ -853,7 +864,7 @@ public class SsrRpcTests
     }
 
     [Fact]
-    public async Task Stats_list_the_v2_methods_and_list_votes_with_their_class_and_the_node_marks()
+    public async Task Stats_list_the_v2_methods_with_their_class_and_the_node_marks()
     {
         await using var stub = new RpcStub { Unknown = { "bridge.get_ranked_posts_v2" } };
         Use(stub);
@@ -864,7 +875,6 @@ public class SsrRpcTests
             await SsrRpc.Resolve(Policy("bridge.get_ranked_posts_v2"), new JsonObject { ["sort"] = "trending", ["tag"] = "" });
             await SsrRpc.Resolve(Policy("bridge.get_account_posts_v2"), new JsonObject { ["sort"] = "posts", ["account"] = "a" });
             await SsrRpc.Resolve(Policy("bridge.get_discussion_v2"), P("a", "b"));
-            await SsrRpc.Resolve(Policy("bridge.list_votes"), new JsonObject { ["author"] = "a", ["permlink"] = "b", ["limit"] = 100 });
 
             var stats = Request("GET", "/private-api/ssr/stats", "right-secret");
             await SsrRpc.Stats(stats);
@@ -874,7 +884,6 @@ public class SsrRpcTests
             Assert.Equal("heavy", methods["bridge.get_ranked_posts_v2"]?["class"]?.GetValue<string>());
             Assert.Equal("heavy", methods["bridge.get_account_posts_v2"]?["class"]?.GetValue<string>());
             Assert.Equal("heavy", methods["bridge.get_discussion_v2"]?["class"]?.GetValue<string>());
-            Assert.Equal("cheap", methods["bridge.list_votes"]?["class"]?.GetValue<string>());
             Assert.Equal(1, methods["bridge.get_ranked_posts_v2"]?["miss"]?.GetValue<long>());
 
             // Which node lacks which v2 read, so the fallback can be retired
@@ -890,7 +899,7 @@ public class SsrRpcTests
     }
 
     [Fact]
-    public void V2_twins_take_the_v1_ttl_and_class_and_list_votes_is_a_cheap_point_read()
+    public void V2_twins_take_the_v1_ttl_and_class()
     {
         foreach (var v1 in new[] { "bridge.get_post", "bridge.get_ranked_posts", "bridge.get_account_posts", "bridge.get_discussion" })
         {
@@ -901,9 +910,107 @@ public class SsrRpcTests
             Assert.Equal(one.Method, two.Fallback);
             Assert.Null(one.Fallback);
         }
-        var votes = Policy("bridge.list_votes");
-        Assert.Equal(CallClass.Cheap, votes.Class);
-        Assert.Equal(Policy("bridge.get_post").TtlMs, votes.TtlMs);
-        Assert.Null(votes.Fallback);
+    }
+
+    [Fact]
+    public async Task A_param_echoed_into_an_assert_or_another_methods_unknown_method_does_not_mark_the_node()
+    {
+        // hivemind echoes params into its -32602 asserts ("Post a/x does not
+        // exist", "invalid tag `x`"), so a crafted permlink must not be able to
+        // mark a v2-capable node as lacking v2.
+        await using var stub = new RpcStub { CustomError = "Post a/unknown method does not exist" };
+        Use(stub);
+        var v2 = Policy("bridge.get_post_v2");
+        Assert.Equal(SsrRpc.Outcome.RpcError, (await SsrRpc.Resolve(v2, PV2("a", "unknown method"))).Outcome);
+        // An echo that even ends with the method's name is still not the assert.
+        stub.CustomError = "Post a/unknown method: bridge_apiget_post_v2";
+        Assert.Equal(SsrRpc.Outcome.RpcError, (await SsrRpc.Resolve(v2, PV2("a", "tag"))).Outcome);
+        // An unknown-method assert that names a different method is not this one.
+        stub.CustomError = "unknown method: bridge_apiget_ranked_posts_v2";
+        Assert.Equal(SsrRpc.Outcome.RpcError, (await SsrRpc.Resolve(v2, PV2("a", "other"))).Outcome);
+        Assert.Equal(new[] { "bridge.get_post_v2", "bridge.get_post_v2", "bridge.get_post_v2" }, stub.Methods.ToArray());
+
+        stub.CustomError = null;
+        var ok = await SsrRpc.Resolve(v2, PV2("a", "real"));
+        Assert.StartsWith("{\"method\":\"get_post_v2\"", Encoding.UTF8.GetString(ok.Bytes));
+        Assert.Empty(SsrRpc.Client.HealthSnapshot()[0]!["unsupported"]!.AsArray());
+    }
+
+    [Fact]
+    public async Task Positional_params_on_a_v2_read_answer_like_an_unknown_route()
+    {
+        // The v1 fallback drops `top_votes` by name; a positional one would reach
+        // a v1 node as one argument too many, so v2 reads take objects only.
+        await using var stub = new RpcStub();
+        Use(stub);
+        SsrRpc.SecretDigest = SsrRpc.Digest("s");
+        try
+        {
+            var arr = Request("POST", "/private-api/ssr/rpc", "s",
+                "{\"api\":\"bridge\",\"method\":\"get_post_v2\",\"params\":[\"a\",\"b\",\"\",0]}");
+            await SsrRpc.Rpc(arr);
+            Assert.Equal(404, arr.Response.StatusCode);
+            Assert.Contains("Cannot POST /private-api/ssr/rpc", ResponseText(arr));
+            Assert.Equal(0, stub.Hits);
+
+            var obj = Request("POST", "/private-api/ssr/rpc", "s",
+                "{\"api\":\"bridge\",\"method\":\"get_post_v2\",\"params\":{\"author\":\"a\",\"permlink\":\"b\"}}");
+            await SsrRpc.Rpc(obj);
+            Assert.Equal(200, obj.Response.StatusCode);
+            Assert.Equal(1, stub.Hits);
+        }
+        finally
+        {
+            SsrRpc.SecretDigest = null;
+        }
+    }
+
+    [Fact]
+    public async Task The_mark_belongs_to_the_node_that_lacks_the_method_not_to_its_neighbours()
+    {
+        // The capable node is first in the pool; the lacking one is only reached
+        // while the capable one is out, and then the capable one is back.
+        await using var capable = new RpcStub { Status = 503 };
+        await using var lacking = new RpcStub { Unknown = { "bridge.get_post_v2" } };
+        Use(capable);
+        SsrRpc.Client = new HiveRpcClient(new[] { capable.Url, lacking.Url }, timeoutMs: 1000, failoverThreshold: 1);
+        var v2 = Policy("bridge.get_post_v2");
+
+        var first = await SsrRpc.Resolve(v2, PV2("a", "1"));
+        Assert.True(first.Outcome == SsrRpc.Outcome.Miss, $"{first.Outcome}: {first.Error}");
+        Assert.Equal(new[] { "bridge.get_post_v2", "bridge.get_post" }, lacking.Methods.ToArray());
+
+        capable.Status = 200;
+        lacking.Status = 503;
+        var second = await SsrRpc.Resolve(v2, PV2("a", "2"));
+        Assert.True(second.Outcome == SsrRpc.Outcome.Miss, $"{second.Outcome}: {second.Error}");
+        Assert.Equal("bridge.get_post_v2", capable.Methods.Last());
+        Assert.StartsWith("{\"method\":\"get_post_v2\"", Encoding.UTF8.GetString(second.Bytes));
+
+        var snap = SsrRpc.Client.HealthSnapshot();
+        Assert.Empty(snap[0]!["unsupported"]!.AsArray());
+        Assert.Equal("bridge.get_post_v2", Assert.Single(snap[1]!["unsupported"]!.AsArray())!.GetValue<string>());
+
+        // And the marked node, reached again, is asked v1 directly.
+        capable.Status = 503;
+        lacking.Status = 200;
+        var third = await SsrRpc.Resolve(v2, PV2("a", "3"));
+        Assert.True(third.Outcome == SsrRpc.Outcome.Miss, $"{third.Outcome}: {third.Error}");
+        Assert.StartsWith("{\"method\":\"get_post\"", Encoding.UTF8.GetString(third.Bytes));
+        Assert.Equal(1, lacking.Methods.Count(m => m == "bridge.get_post_v2"));
+    }
+
+    [Fact]
+    public async Task A_fallback_attempt_records_the_latency_of_the_v1_answer_not_of_the_probe()
+    {
+        // The node is asked v1 directly for the next half hour, so the latency
+        // that ranks it is the v1 answer's; the one-off v2 probe is excluded.
+        await using var stub = new RpcStub { Unknown = { "bridge.get_post_v2" }, UnknownDelayMs = 400 };
+        Use(stub);
+        var r = await SsrRpc.Resolve(Policy("bridge.get_post_v2"), PV2("a", "b"));
+        Assert.Equal(SsrRpc.Outcome.Miss, r.Outcome);
+        var node = SsrRpc.Client.HealthSnapshot()[0]!;
+        Assert.Equal(1, node["samples"]!.GetValue<int>());
+        Assert.True(node["ewma_ms"]!.GetValue<double>() < 300, $"ewma {node["ewma_ms"]}");
     }
 }
