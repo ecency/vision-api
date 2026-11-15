@@ -108,11 +108,10 @@ Two cheap checks before assuming a token problem:
   401s for the same session, the code validated fine and the failure is
   downstream of this service.
 
-  **Do not use `notifications` as that canary.** It falls back to a
-  body-supplied `user` when validation fails, and overrides even a validated
-  username with that field whenever it is present. It can therefore answer
-  happily for a request whose code was rejected, which tells you nothing about
-  validation and actively misleads.
+  `notifications` also 401s without a valid code, but a request whose body
+  names another account in `user` is still served (the restricted feed, for
+  Decks columns). Only use it as the canary for a request without `user` or
+  naming the session's own account.
 - **Check the failure rate.** A token or session problem affects a subset of
   users; a backend gate that is misconfigured fails for everyone. An endpoint at
   100% 401 while its siblings are at 100% success is not an authentication bug
