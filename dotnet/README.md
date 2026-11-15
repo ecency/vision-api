@@ -20,22 +20,26 @@ win is a faster, more predictable proxy under concurrent load.
 dotnet/
   EcencyApi/                 the service
     Program.cs               host, middleware, static files, error handler
-    Config.cs                mirror of src/config.ts (same env vars + defaults)
+    Config.cs                env-var configuration (started as a mirror of src/config.ts)
     Handlers/
       Routes.cs              1:1 map of src/server/index.tsx route table
       SearchApi.cs           search-api.ts
       AuthApi.cs             auth-api.ts (HiveSigner code create/refresh)
       PrivateApi.*.cs        private-api.ts, split by concern
       WalletApi.*.cs         wallet-api.ts (market helpers, portfolio layers, engine)
+      SsrRpc.cs              internal SSR RPC read cache (/private-api/ssr/*)
       Announcements.cs / Spotlights.cs / HiveExplorer.cs / Constants.cs / ChainProviders.cs
     Infrastructure/
       Upstream.cs            axios baseApiRequest + Express pipe() parity
       ApiClient.cs           helper.ts apiRequest (PRIVATE_API_AUTH header injection)
+      NodeHealthTracker.cs   per-node health state + pool ordering (see below)
       HiveRpcClient.cs       dhive-style Client with node failover (see below)
+      EngineRpcClient.cs     Hive-Engine RPC with the same failover
+      ServerErrors.cs        500/503 error responses
       HiveCrypto.cs          dhive crypto: key-from-login, canonical ECDSA, recovery
       JsJson.cs              JS-identical JSON.stringify (for signed messages)
       JsVal.cs               JS parseFloat / Number / typeof coercions
-      B64u.cs, MemCache.cs, HttpContextExtensions.cs
+      B64u.cs, MemCache.cs, BytesCache.cs, HttpContextExtensions.cs, ...
     Models/HiveEngine.cs     hiveEngine.types.ts + converters.ts
   EcencyApi.Tests/           xUnit: crypto golden vectors, failover, JS semantics
   parity/                    differential HTTP parity harness (Node vs C#)
@@ -57,28 +61,39 @@ failover with a health tracker adopted from the vision-web SDK's
   without a throttle). Parked nodes sort last but remain a final resort.
 - **Recent failures deprioritize** (30s window) — one bad response moves
   traffic away without banning the node; it re-enters when the window lapses.
-- **Latency EWMA ranking** (alpha 0.3, trusted after 3 samples, stale after
-  5 min): a proven-slow node (>1s) is demoted behind unexplored nodes; config
-  order breaks ties so cold start behaves like the configured list.
+- **Repeated failures park the node**: 3 in a row park it for 30s, doubling to
+  120s (a success clears the streak), and it is not tried while any other node
+  is available.
+- **Latency EWMA ranking per call class** (`CallClass.Cheap` point reads vs
+  `CallClass.Heavy` feed-shaped queries, each with its own profile; alpha 0.3,
+  trusted after 3 samples, stale after 5 min): a proven-slow node (>1s) is
+  demoted behind unexplored nodes; config order breaks ties so cold start behaves like the configured list.
 - **Overload responses** (429/502/503/504) advance to the next node
   immediately — no wasted local retry on a throttled node.
 - **RPC-level errors** (a JSON `error` field) surface without failover — an
   application error, not an unhealthy node (matches dhive).
+- **Result shape is validated** by the typed helpers (`get_accounts` must be an
+  array, `get_dynamic_global_properties` an object): a 200 with no usable
+  result is a node failure and fails over.
+
+`EngineRpcClient` applies the same tracker to the Hive-Engine `/contracts` and
+history pools.
 
 Not adopted from the SDK (overkill at proxy call rates, documented for later:
-request hedging, per-API failure profiles, head-block staleness checks).
+request hedging, head-block staleness checks).
 
 The chain-balance providers (`ChainProviders.cs` / `PrivateApi.Chain.cs`) have
 their own equivalent provider-pool failover for the EVM/Solana/BTC endpoints.
 
 Covered by `EcencyApi.Tests/HiveRpcFailoverTests.cs` (rate-limit parking,
-failure deprioritization, timeout rollover, EWMA demotion, all-down error).
+failure deprioritization, timeout rollover, EWMA demotion, all-down error) and
+`EngineFailoverTests.cs`.
 
 ## Verifying identical responses
 
 Two layers of verification:
 
-**1. Unit tests** (`dotnet test`, 40 tests):
+**1. Unit tests** (`dotnet test`):
 - Crypto is checked **byte-for-byte against dhive**. `tools/gen-vectors.js` runs
   the exact `@hiveio/dhive` the Node service uses and emits golden vectors
   (key-from-login, canonical ECDSA signatures, public-key recovery, the full
@@ -88,7 +103,7 @@ Two layers of verification:
   `parseFloat("")` is `NaN`, etc.) that the wallet numeric parity depends on.
 - `HiveRpcFailoverTests` exercise the failover against local stub nodes.
 
-**2. Differential HTTP parity** (`parity/`): fires an identical catalog of 301
+**2. Differential HTTP parity** (`parity/`): fires an identical catalog of
 request variants (every route × empty/populated/bad-auth bodies, plus error and
 fallback probes) at the running Node image and the C# build, then diffs status,
 content-type, and body.
@@ -115,8 +130,9 @@ python3 parity/driver.py run csharp http://127.0.0.1:14001
 python3 parity/driver.py diff node csharp node2
 ```
 
-Latest result: **0 unexplained mismatches / 301 cases** (the intentional
-divergences listed above are recorded in the harness). A handful of cases compare "loose"
+Result at the migration cutover: **0 unexplained mismatches / 301 cases** (the
+intentional divergences listed below are recorded in the harness). The catalog
+has grown with the route table since. A handful of cases compare "loose"
 (status + content-type only) because they are inherently nondeterministic —
 timestamped HiveSigner tokens, random promoted-entry shuffles, and live
 portfolio data. The full `portfolio-v2` aggregation was additionally compared
@@ -166,8 +182,9 @@ same CPU budget**.
   `:permlink` route params their POST routes never declared, so they always
   queried `undefined/undefined` upstream.
 
-All three are recorded in the parity harness (`KNOWN_DIVERGENCES` /
-route-table-driven catalog).
+All three are recorded in the parity harness's `KNOWN_DIVERGENCES`, together
+with every later intentional change (mostly routes added after the port, which
+the Node reference answers as unknown).
 
 ## Remaining edges (low-risk, documented)
 
@@ -198,13 +215,14 @@ Run from this `dotnet/` directory:
 
 ```bash
 dotnet build EcencyApi/EcencyApi.csproj          # compile
-dotnet test  EcencyApi.Tests/EcencyApi.Tests.csproj   # 40 tests: crypto vectors, failover, JS semantics
+dotnet test  EcencyApi.Tests/EcencyApi.Tests.csproj   # crypto vectors, failover, JS semantics, handlers
 ```
 
 ### Run locally
 
-Configuration comes entirely from environment variables — the same set, with
-the same defaults, as the Node service (`Config.cs` mirrors `src/config.ts`):
+Configuration comes entirely from environment variables. The variables the
+Node service had keep its names and defaults. This table covers the common
+ones; the root `README.md` has the complete list:
 
 | variable | purpose | default |
 |---|---|---|
@@ -255,9 +273,8 @@ docker run -d --name vapi-csharp -p 4000:4000 \
   ecency/api-csharp
 ```
 
-For swarm, `docker-compose.yml` in this directory is a drop-in equivalent of
-the repo-root stack file (same service shape, ports, env list, and deploy
-policy) pointing at the C# image.
+For swarm, `docker-compose.yml` in this directory is the stack file (see the
+root `README.md`).
 
 ### Deployment tags & rollback
 
@@ -286,7 +303,7 @@ API_PORT=4000 ... dotnet /opt/vapi-csharp/EcencyApi.dll
 
 ### Regenerate crypto golden vectors
 
-Only needed if the dhive dependency of the Node service changes:
+Only needed to refresh the vectors against a different dhive version:
 
 ```bash
 # the repo no longer carries Node dependencies; install the two packages anywhere

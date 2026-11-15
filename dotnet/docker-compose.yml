@@ -39,10 +39,13 @@ services:
       - SSR_RPC_NODES
       - SSR_RPC_MAX_FILLS
       - SSR_RPC_MAX_QUEUED_FILLS
+      - SSR_RPC_CALL_CLASSES
       # Curation desk (Handlers/PrivateApi.CurationDesk.cs): the shared token switches
       # the routes on (unset = 503); the byte budget tunes the two memo stores.
       - DESK_INTERNAL_TOKEN
       - DESK_MEMO_BYTES
+      # Unlocks the complete notifications feed on self-views (enotify INTERNAL_TOKEN).
+      - ENOTIFY_INTERNAL_TOKEN
     ports:
       - "4000:4000"
     # Bound container logs so they can never grow unchecked on the host
