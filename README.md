@@ -56,6 +56,7 @@ docker run -it --rm -p 4000:4000 \
 | `BLOCKSTREAM_CLIENT_ID` / `BLOCKSTREAM_CLIENT_SECRET` | optional Blockstream Enterprise esplora auth (BTC fallback) |
 | `HELIUS_API_KEY` | optional Helius API key added as an extra Solana RPC fallback |
 | `ETH_RPC_URLS` / `BNB_RPC_URLS` / `SOL_RPC_URLS` / `BTC_ESPLORA_URLS` | optional comma-separated endpoint lists overriding the built-in chain provider pools |
+| `PUBLIC_DIR` | static assets directory (default `<app>/public`) |
 | `Logging__LogLevel__Default` | log level (default `Warning`; set `Information` for per-request logs) |
 | `SSR_INTERNAL_SECRET` | shared header secret that switches on the internal SSR RPC cache routes (`/private-api/ssr/*`); unset = they answer like unknown routes |
 | `SSR_CACHE_BYTES` | byte budget of the SSR RPC cache, LRU beyond it (default 512 MiB) |

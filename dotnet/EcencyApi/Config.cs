@@ -15,15 +15,6 @@ public static class Config
         Env("PRIVATE_API_AUTH") ?? "privateapiauth";
 
     /// <summary>
-    /// Shared secret presented to enotify to unlock a user's complete notification feed.
-    /// enotify has no authentication of its own and defaults to chain-derived activity
-    /// only, so without this a self-view silently loses favorites, bookmarks, Points
-    /// transfers and the aggregates. Must match [APP] INTERNAL_TOKEN there.
-    /// </summary>
-    public static string EnotifyInternalToken { get; } =
-        Env("ENOTIFY_INTERNAL_TOKEN") ?? "";
-
-    /// <summary>
     /// Shared secret presented to the curation desk backend on every desk call,
     /// public reads included: the desk answers only requests that carry it, so
     /// the memo and rate limits in front of it cannot be bypassed by going

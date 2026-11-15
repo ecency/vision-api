@@ -57,9 +57,6 @@ public static partial class PrivateApi
     internal static Func<string, HttpMethod, JsonNode?, Task<UpstreamResponse>> DeviceUpstream =
         (endpoint, method, payload) => ApiClient.ApiRequest(endpoint, method, null, payload);
 
-    /// <summary>Header enotify reads the shared secret from.</summary>
-    public const string EnotifyInternalTokenHeader = "X-Ecency-Internal-Token";
-
     /// <summary>
     /// Upstream path for the notifications feed, or null when a value cannot be
     /// expressed as a single path segment.
@@ -143,14 +140,9 @@ public static partial class PrivateApi
             return;
         }
 
-        // The secret rides alongside scope=full. enotify honours the parameter only when
-        // the header matches, and fails closed otherwise, so a missing or wrong token
-        // costs this user their own private activity rather than exposing anyone else's.
-        var extraHeaders = fullScope && Config.EnotifyInternalToken.Length > 0
-            ? new[] { new KeyValuePair<string, string>(EnotifyInternalTokenHeader, Config.EnotifyInternalToken) }
-            : null;
-
-        await Upstream.Pipe(ApiClient.ApiRequest(u, HttpMethod.Get, extraHeaders), ctx);
+        // enotify honours scope=full only for a request arriving from the private-API
+        // gateway's private address, and fails closed to the chain-derived feed otherwise.
+        await Upstream.Pipe(ApiClient.ApiRequest(u, HttpMethod.Get), ctx);
     }
 
     // GET ^/private-api/pub-notifications/:username
