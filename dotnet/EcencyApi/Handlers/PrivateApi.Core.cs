@@ -336,11 +336,17 @@ public static partial class PrivateApi
     /// HiveSigner gives for one): the two things Ecency's clients send as their
     /// session. Everything else is refused, including a missing or non-string
     /// type or app.
+    ///
+    /// A message carrying a <c>code_challenge</c> (any value) is refused too: that
+    /// is a PKCE code, good only through HiveSigner's token exchange, which checks
+    /// the matching verifier. This service never sees the verifier, so accepting
+    /// such a code would let whoever intercepted it skip that check.
     /// </summary>
     internal static bool IsEcencySession(JsonNode? signedMessage) =>
         signedMessage is JsonObject obj
         && StringField(obj, "app") == EcencyApp
-        && StringField(obj, "type") is "posting" or "code";
+        && StringField(obj, "type") is "posting" or "code"
+        && !obj.ContainsKey("code_challenge");
 
     // Token diagnostics on the request path, written once per distinct line and
     // at most MaxTokenLogLines lines per process: the service stays quiet on

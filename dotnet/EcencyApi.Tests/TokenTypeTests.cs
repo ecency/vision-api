@@ -42,6 +42,8 @@ public class TokenTypeTests
     [InlineData("""{"type":1,"app":"ecency.app"}""")]
     [InlineData("""{"type":["posting"],"app":"ecency.app"}""")]
     [InlineData("""{"type":"posting","app":["ecency.app"]}""")]
+    [InlineData("""{"type":"code","app":"ecency.app","code_challenge":"abc","code_challenge_method":"S256"}""")]
+    [InlineData("""{"type":"code","app":"ecency.app","code_challenge":null}""")]
     [InlineData("""["posting","ecency.app"]""")]
     [InlineData("\"posting\"")]
     [InlineData("null")]
