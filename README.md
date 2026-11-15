@@ -45,7 +45,6 @@ docker run -it --rm -p 4000:4000 \
 | `PRIVATE_API_ADDR` | private api endpoint |
 | `PRIVATE_API_AUTH` | private api auth (base64-encoded JSON header object). Must include `X-Vapi-Auth`: the backends identify this service by it (ePoints compares it to its `VAPI_UPSTREAM_AUTH`, so both hold the same value) and refuse reader-bound calls such as Listen without it. A startup error is logged when it is missing |
 | `HIVESIGNER_SECRET` | hivesigner client secret |
-| `ENOTIFY_INTERNAL_TOKEN` | optional, normally unset. enotify serves a user's complete notifications feed to callers on its private network, which is how this service reaches it; the token (sent on self-views, must match enotify's `INTERNAL_TOKEN`) is only for a deployment that reaches enotify from outside that network |
 | `SEARCH_API_ADDR` | hivesearcher api endpoint |
 | `SEARCH_API_SECRET` | hivesearcher api auth token |
 | `STRIPE_INTERNAL_SECRET` | shared secret for the Stripe money endpoints (unset = they fail closed) |

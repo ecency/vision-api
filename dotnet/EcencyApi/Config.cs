@@ -15,16 +15,6 @@ public static class Config
         Env("PRIVATE_API_AUTH") ?? "privateapiauth";
 
     /// <summary>
-    /// Optional secret presented to enotify on a self-view's scope=full request.
-    /// enotify grants the complete feed to callers on its private network (the normal
-    /// path, through the private-API gateway) and fails closed to chain-derived
-    /// activity for everyone else; this token is its override for an entitled caller
-    /// outside that network. Normally unset. Must match [APP] INTERNAL_TOKEN there.
-    /// </summary>
-    public static string EnotifyInternalToken { get; } =
-        Env("ENOTIFY_INTERNAL_TOKEN") ?? "";
-
-    /// <summary>
     /// Shared secret presented to the curation desk backend on every desk call,
     /// public reads included: the desk answers only requests that carry it, so
     /// the memo and rate limits in front of it cannot be bypassed by going
