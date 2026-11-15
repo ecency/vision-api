@@ -61,9 +61,11 @@ failover with a health tracker adopted from the vision-web SDK's
   without a throttle). Parked nodes sort last but remain a final resort.
 - **Recent failures deprioritize** (30s window) — one bad response moves
   traffic away without banning the node; it re-enters when the window lapses.
-- **Repeated failures park the node**: 3 in a row park it for 30s, doubling to
-  120s (a success clears the streak), and it is not tried while any other node
-  is available.
+- **Repeated failures park a node that is not answering**: 3 failures in a row
+  park it for 30s, doubling to 120s, but only when it has never succeeded or its
+  failure-rate EWMA (alpha 0.1) is at least 50%, so a node that is usually
+  healthy rides out a short burst. A parked node is not tried while any other
+  node is available; a success clears the streak.
 - **Latency EWMA ranking per call class** (`CallClass.Cheap` point reads vs
   `CallClass.Heavy` feed-shaped queries, each with its own profile; alpha 0.3,
   trusted after 3 samples, stale after 5 min): a proven-slow node (>1s) is

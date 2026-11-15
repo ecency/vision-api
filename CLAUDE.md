@@ -108,9 +108,9 @@ Two cheap checks before assuming a token problem:
   401s for the same session, the code validated fine and the failure is
   downstream of this service.
 
-  `notifications` also 401s without a valid code, but a request whose body
-  names another account in `user` is still served (the restricted feed, for
-  Decks columns). Only use it as the canary for a request without `user` or
+  `notifications` also 401s without a valid code. With a valid code, a body
+  `user` naming another account is still served (the restricted feed, for
+  Decks columns), so only use it as the canary for a request without `user` or
   naming the session's own account.
 - **Check the failure rate.** A token or session problem affects a subset of
   users; a backend gate that is misconfigured fails for everyone. An endpoint at
