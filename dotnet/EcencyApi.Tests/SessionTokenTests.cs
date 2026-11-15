@@ -89,6 +89,19 @@ public class SessionTokenTests : IDisposable
     }
 
     [Theory]
+    [InlineData("""{"type":"code","app":"ecency.app","code_challenge":"E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM","code_challenge_method":"S256"}""")]
+    [InlineData("""{"type":"code","app":"ecency.app","code_challenge":null}""")]
+    [InlineData("""{"type":"posting","app":"ecency.app","code_challenge":""}""")]
+    public async Task ACodeCarryingAPkceChallengeIsNotASession(string signedMessage)
+    {
+        // A code with a challenge is good only through HiveSigner's exchange,
+        // which checks the verifier. This service never sees the verifier, so
+        // accepting the code here would let whoever intercepted it skip that.
+        Assert.Null(await PrivateApi.ValidateCode(Body(signedMessage)));
+        Assert.Empty(_reads);
+    }
+
+    [Theory]
     [InlineData("""{"message":"hello"}""")]
     [InlineData("""{"type":"login","app":"ecency.app"}""")]
     [InlineData("""{"type":"posting","app":"another.app"}""")]

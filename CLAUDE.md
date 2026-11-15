@@ -121,7 +121,9 @@ Two cheap checks before assuming a token problem:
 (`signed_message.app` is `ecency.app`) and typed `code` or `posting`. Anything
 else is refused before the account is read, however valid its signature: a
 client signed in as another HiveSigner app, a `login` proof, a signed message
-without a type.
+without a type, and a code carrying a `code_challenge` (a PKCE code is good only
+through HiveSigner's token exchange, which checks the verifier this service never
+sees).
 
 Handlers using `RequireAuthedUsername` differ from those calling `ValidateCode`
 directly only in that the former sends the 401 for you - the validation is the
