@@ -15,10 +15,11 @@ public static class Config
         Env("PRIVATE_API_AUTH") ?? "privateapiauth";
 
     /// <summary>
-    /// Shared secret presented to enotify to unlock a user's complete notification feed.
-    /// enotify has no authentication of its own and defaults to chain-derived activity
-    /// only, so without this a self-view silently loses favorites, bookmarks, Points
-    /// transfers and the aggregates. Must match [APP] INTERNAL_TOKEN there.
+    /// Optional secret presented to enotify on a self-view's scope=full request.
+    /// enotify grants the complete feed to callers on its private network (the normal
+    /// path, through the private-API gateway) and fails closed to chain-derived
+    /// activity for everyone else; this token is its override for an entitled caller
+    /// outside that network. Normally unset. Must match [APP] INTERNAL_TOKEN there.
     /// </summary>
     public static string EnotifyInternalToken { get; } =
         Env("ENOTIFY_INTERNAL_TOKEN") ?? "";

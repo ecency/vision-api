@@ -143,9 +143,9 @@ public static partial class PrivateApi
             return;
         }
 
-        // The secret rides alongside scope=full. enotify honours the parameter only when
-        // the header matches, and fails closed otherwise, so a missing or wrong token
-        // costs this user their own private activity rather than exposing anyone else's.
+        // enotify honours scope=full only for a caller on its private network, or one
+        // presenting its optional INTERNAL_TOKEN, and fails closed otherwise. The token
+        // rides along when configured; the normal path needs none.
         var extraHeaders = fullScope && Config.EnotifyInternalToken.Length > 0
             ? new[] { new KeyValuePair<string, string>(EnotifyInternalTokenHeader, Config.EnotifyInternalToken) }
             : null;
