@@ -450,6 +450,13 @@ public sealed class HiveRpcClient
 
     /// <summary>A node is unhealthy/unreachable; try the next one. Distinct from
     /// RpcException (a real RPC-level error that must not fail over).</summary>
+    /// <summary>
+    /// The call failed because the node pool did: the last node tried timed
+    /// out, was unreachable, answered an HTTP error or an unusable body. Not a
+    /// fault of the caller's process (a config error, an unexpected exception).
+    /// </summary>
+    public static bool IsNodeFailure(Exception e) => e is NodeUnavailableException;
+
     private sealed class NodeUnavailableException : Exception
     {
         public bool AdvanceImmediately { get; }

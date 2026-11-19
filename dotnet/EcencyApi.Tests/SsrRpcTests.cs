@@ -256,14 +256,62 @@ public class SsrRpcTests
     }
 
     [Fact]
-    public async Task Unreachable_node_is_reported_as_unavailable()
+    public async Task Unreachable_node_is_reported_as_an_upstream_failure()
     {
+        // The node pool failed, not the proxy: a consumer keeps using the proxy.
         SsrRpc.Client = new HiveRpcClient(new[] { "http://127.0.0.1:9/" }, timeoutMs: 500, failoverThreshold: 1);
         SsrRpc.Cache = new BytesCache(1 << 20);
         SsrRpc.BudgetMs = 1500;
         SsrRpc.ResetForTests();
         var r = await SsrRpc.Resolve(Post, P("a", "b"));
-        Assert.Equal(SsrRpc.Outcome.Unavailable, r.Outcome);
+        Assert.Equal(SsrRpc.Outcome.Upstream, r.Outcome);
+    }
+
+    [Fact]
+    public async Task A_failed_node_pool_answers_502_UPSTREAM_and_the_proxys_own_failure_502_UNAVAILABLE()
+    {
+        // A consumer's breaker must open on a proxy that is overloaded or broken,
+        // and must not open because part of the node pool is down. One tag for
+        // both forced it to get one of them wrong.
+        await using var stub = new RpcStub { Status = 500 };
+        Use(stub);
+        SsrRpc.SecretDigest = SsrRpc.Digest("right-secret");
+        try
+        {
+            var ctx = Request("POST", "/private-api/ssr/rpc", "right-secret",
+                "{\"api\":\"bridge\",\"method\":\"get_post\",\"params\":{\"author\":\"a\",\"permlink\":\"u\"}}");
+            await SsrRpc.Rpc(ctx);
+            Assert.Equal(502, ctx.Response.StatusCode);
+            Assert.Equal("UPSTREAM", ctx.Response.Headers["X-Ssr-Cache"].ToString());
+
+            var stats = Request("GET", "/private-api/ssr/stats", "right-secret");
+            await SsrRpc.Stats(stats);
+            Assert.Equal(1, JsonNode.Parse(ResponseText(stats))!["methods"]!["bridge.get_post"]!["error"]!.GetValue<long>());
+        }
+        finally
+        {
+            SsrRpc.SecretDigest = null;
+        }
+
+        // The proxy's own failure: a fill queue with no room.
+        await using var slow = new RpcStub { DelayMs = 400 };
+        Use(slow, budgetMs: 1000, maxFills: 1, maxQueued: 0);
+        SsrRpc.SecretDigest = SsrRpc.Digest("right-secret");
+        try
+        {
+            var holder = SsrRpc.Resolve(Post, P("q", "1")); // holds the only fill slot
+            await Task.Delay(50);
+            var ctx = Request("POST", "/private-api/ssr/rpc", "right-secret",
+                "{\"api\":\"bridge\",\"method\":\"get_post\",\"params\":{\"author\":\"q\",\"permlink\":\"2\"}}");
+            await SsrRpc.Rpc(ctx);
+            Assert.Equal(502, ctx.Response.StatusCode);
+            Assert.Equal("UNAVAILABLE", ctx.Response.Headers["X-Ssr-Cache"].ToString());
+            await holder;
+        }
+        finally
+        {
+            SsrRpc.SecretDigest = null;
+        }
     }
 
     [Fact]
