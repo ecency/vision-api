@@ -14,6 +14,10 @@ namespace EcencyApi.Infrastructure;
 ///    (dhive semantics — an application error, not an unhealthy node).
 ///  - Overload statuses (429/502/503/504) advance to the next node immediately
 ///    instead of burning a same-node retry.
+///  - A node parked for a 429 is asked at most once per call, and only one such
+///    node per call: while the whole pool throttles this host, a call costs one
+///    upstream request instead of one per node. A call that failed only on 429s
+///    throws <see cref="UpstreamRateLimitedException"/>.
 ///  - An `unknown method` answer to a call that names a fallback method asks
 ///    the same node the fallback, and marks the node and the method's family
 ///    for a while (CallMethod).
@@ -247,10 +251,31 @@ public sealed class HiveRpcClient
         JsonNode? unpreferred = null;
         var haveUnpreferred = false;
         var unpreferredCount = 0;
+        // Throttling is only reported as such when it is the whole story: any
+        // other failure on the way (a timeout, a 5xx, a bad body) makes it a
+        // plain failure, so a caller is never told to just wait out an outage.
+        var sawRateLimit = false;
+        var sawOtherFailure = false;
+        var parkedProbeUsed = false;
 
         foreach (var nodeIndex in _health.OrderedNodeIndices(callClass))
         {
             var node = _nodes[nodeIndex];
+
+            // Decided now, not from the ordering snapshot: a node parked by a
+            // concurrent call since this one started is parked for it too.
+            if (_health.RateLimitedForMs(nodeIndex) > 0)
+            {
+                // One probe keeps the pool recoverable (a limit can lift before
+                // our park ends); probing every parked node is the load the 429
+                // asked us to stop sending.
+                if (parkedProbeUsed)
+                {
+                    sawRateLimit = true;
+                    continue;
+                }
+                parkedProbeUsed = true;
+            }
 
             for (var attempt = 0; attempt < _failoverThreshold; attempt++)
             {
@@ -322,11 +347,16 @@ public sealed class HiveRpcClient
                     lastError = e;
                     if (e.IsRateLimit)
                     {
+                        sawRateLimit = true;
                         _health.RecordRateLimited(nodeIndex, e.RetryAfterMs);
                     }
-                    else if (_health.RecordFailure(nodeIndex, NowMs - started, callClass, e.IsTimeout))
+                    else
                     {
-                        break; // this failure parked the node: no same-node retry
+                        sawOtherFailure = true;
+                        if (_health.RecordFailure(nodeIndex, NowMs - started, callClass, e.IsTimeout))
+                        {
+                            break; // this failure parked the node: no same-node retry
+                        }
                     }
                     if (e.AdvanceImmediately)
                     {
@@ -336,6 +366,7 @@ public sealed class HiveRpcClient
                 catch (Exception e)
                 {
                     lastError = e;
+                    sawOtherFailure = true;
                     if (_health.RecordFailure(nodeIndex, NowMs - started, callClass))
                     {
                         break;
@@ -353,9 +384,32 @@ public sealed class HiveRpcClient
         // account really has no metadata), so return it instead of failing.
         if (haveUnpreferred) return unpreferred;
 
+        if (sawRateLimit && !sawOtherFailure)
+        {
+            throw new UpstreamRateLimitedException(
+                $"every RPC node is rate-limiting {method}", (int)Math.Min(int.MaxValue, _health.ShortestRateLimitParkMs()));
+        }
+
         // Every node exhausted — surface the last transport error (dhive throws
         // after cycling the whole list).
         throw lastError ?? new InvalidOperationException("no RPC nodes configured");
+    }
+
+    /// <summary>
+    /// Every node this call could use was rate-limiting this host: each attempt
+    /// answered 429, or the node was skipped while parked for an earlier 429.
+    /// Distinct from a pool that is down, so a caller can back off for
+    /// <see cref="RetryAfterMs"/> instead of sending the read elsewhere.
+    /// </summary>
+    public sealed class UpstreamRateLimitedException : Exception
+    {
+        /// <summary>Until the soonest of the parks lapses, at least 1.</summary>
+        public int RetryAfterMs { get; }
+
+        public UpstreamRateLimitedException(string message, int retryAfterMs) : base(message)
+        {
+            RetryAfterMs = Math.Max(1, retryAfterMs);
+        }
     }
 
     /// <summary>A node is unhealthy/unreachable; try the next one. Distinct from

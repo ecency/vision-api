@@ -708,6 +708,78 @@ public class HiveRpcFailoverTests
     }
 
     [Fact]
+    public async Task AWhollyThrottledPool_CostsOneUpstreamCallPerLookup()
+    {
+        // A 429 parks the node; calling every parked node anyway turns one lookup
+        // into one 429 per node while the whole pool is throttling us, which is
+        // exactly the load the park exists to shed. Within the parks, a lookup
+        // may probe ONE parked node, never all of them.
+        await using var a = new StubNode(() => 429);
+        await using var b = new StubNode(() => 429);
+        await using var c = new StubNode(() => 429);
+        long now = 0;
+        var client = new HiveRpcClient(new[] { a.Url, b.Url, c.Url }, timeoutMs: 500, failoverThreshold: 1, clock: () => now);
+
+        await Assert.ThrowsAnyAsync<Exception>(() => client.Call("condenser_api", "get_accounts", new JsonArray()));
+        Assert.Equal(3, a.Hits + b.Hits + c.Hits); // unparked at the start: each asked once
+
+        now += 1_000; // well inside every park
+        await Assert.ThrowsAnyAsync<Exception>(() => client.Call("condenser_api", "get_accounts", new JsonArray()));
+        Assert.Equal(4, a.Hits + b.Hits + c.Hits);
+    }
+
+    [Fact]
+    public async Task AWhollyThrottledPool_ThrowsUpstreamRateLimited_WithTheShortestPark()
+    {
+        await using var a = new StubNode(() => 429);
+        await using var b = new StubNode(() => 429);
+        long now = 0;
+        var client = new HiveRpcClient(new[] { a.Url, b.Url }, timeoutMs: 500, failoverThreshold: 1, clock: () => now);
+
+        var first = await Assert.ThrowsAsync<HiveRpcClient.UpstreamRateLimitedException>(() =>
+            client.Call("condenser_api", "get_accounts", new JsonArray()));
+        Assert.True(first.RetryAfterMs > 0);
+
+        // Skipped as parked counts as throttled too, not as "no nodes".
+        now += 4_000;
+        var second = await Assert.ThrowsAsync<HiveRpcClient.UpstreamRateLimitedException>(() =>
+            client.Call("condenser_api", "get_accounts", new JsonArray()));
+        Assert.InRange(second.RetryAfterMs, 1, first.RetryAfterMs);
+    }
+
+    [Fact]
+    public async Task ThrottledAndDown_IsNotReportedAsThrottled()
+    {
+        // A node that is down is a different failure: callers must not be told
+        // to back off and come back when part of the reason is an outage.
+        await using var throttled = new StubNode(() => 429);
+        await using var down = new StubNode(() => 500);
+        var client = new HiveRpcClient(new[] { throttled.Url, down.Url }, timeoutMs: 500, failoverThreshold: 1);
+
+        var ex = await Assert.ThrowsAnyAsync<Exception>(() => client.Call("condenser_api", "get_accounts", new JsonArray()));
+        Assert.IsNotType<HiveRpcClient.UpstreamRateLimitedException>(ex);
+    }
+
+    [Fact]
+    public async Task AParkedNode_StillServes_OnceEveryUnparkedNodeHasFailed()
+    {
+        // The one-probe allowance is what keeps a throttled pool recoverable:
+        // a node whose limit has lifted early is found before its park ends.
+        var throttledStatus = 429;
+        await using var throttled = new StubNode(() => throttledStatus);
+        await using var down = new StubNode(() => 500);
+        long now = 0;
+        var client = new HiveRpcClient(new[] { throttled.Url, down.Url }, timeoutMs: 500, failoverThreshold: 1, clock: () => now);
+
+        await Assert.ThrowsAnyAsync<Exception>(() => client.Call("condenser_api", "get_accounts", new JsonArray()));
+        throttledStatus = 200;
+        now += 1_000;
+        var result = await client.Call("condenser_api", "get_accounts", new JsonArray());
+        Assert.Equal("served-by", result![0]!["name"]!.GetValue<string>());
+        Assert.Equal(2, throttled.Hits);
+    }
+
+    [Fact]
     public async Task AllNodesDown_Throws()
     {
         await using var bad1 = new StubNode(() => 500);

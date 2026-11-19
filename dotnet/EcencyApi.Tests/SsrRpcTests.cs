@@ -267,6 +267,41 @@ public class SsrRpcTests
     }
 
     [Fact]
+    public async Task A_throttled_upstream_answers_503_RATELIMITED_with_Retry_After_and_is_counted()
+    {
+        // Distinct from UNAVAILABLE (502): the consumer must be able to tell
+        // "the nodes are throttling this host" from "this proxy is broken", or it
+        // trips its breaker and sends every read to the same throttling nodes.
+        await using var stub = new RpcStub { Status = 429 };
+        Use(stub);
+        SsrRpc.SecretDigest = SsrRpc.Digest("right-secret");
+        try
+        {
+            var r = await SsrRpc.Resolve(Post, P("a", "b"));
+            Assert.Equal(SsrRpc.Outcome.RateLimited, r.Outcome);
+
+            var ctx = Request("POST", "/private-api/ssr/rpc", "right-secret",
+                "{\"api\":\"bridge\",\"method\":\"get_post\",\"params\":{\"author\":\"a\",\"permlink\":\"c\"}}");
+            await SsrRpc.Rpc(ctx);
+            Assert.Equal(503, ctx.Response.StatusCode);
+            Assert.Equal("RATELIMITED", ctx.Response.Headers["X-Ssr-Cache"].ToString());
+            Assert.True(int.TryParse(ctx.Response.Headers.RetryAfter.ToString(), out var secs) && secs >= 1,
+                $"Retry-After '{ctx.Response.Headers.RetryAfter}'");
+
+            var stats = Request("GET", "/private-api/ssr/stats", "right-secret");
+            await SsrRpc.Stats(stats);
+            var body = JsonNode.Parse(ResponseText(stats))!;
+            var m = body["methods"]!["bridge.get_post"]!;
+            Assert.Equal(2, m["rate_limited"]!.GetValue<long>());
+            Assert.Equal(0, m["error"]!.GetValue<long>());
+        }
+        finally
+        {
+            SsrRpc.SecretDigest = null;
+        }
+    }
+
+    [Fact]
     public async Task Fills_in_progress_are_bounded_so_distinct_keys_queue_instead_of_piling_up()
     {
         await using var stub = new RpcStub { DelayMs = 250 };

@@ -28,6 +28,10 @@ namespace EcencyApi.Handlers;
 ///  - A lookup that outlives the budget answers 504 while the upstream call
 ///    completes in the background and fills the cache; an RPC-level error
 ///    answers 502. Either way the consumer falls back to its own node pool.
+///  - A lookup that failed only because every node is rate-limiting this host
+///    answers 503 RATELIMITED with a Retry-After. The proxy itself is fine, so
+///    a consumer must not count it toward a breaker that would send its other
+///    reads straight to the same throttling nodes.
 ///  - No per-request logging (invariant 6); counters on /stats instead.
 /// </summary>
 public static partial class SsrRpc
@@ -152,7 +156,7 @@ public static partial class SsrRpc
 
     internal sealed class Counter
     {
-        public long Hit, Miss, Coalesced, Error, Timeout;
+        public long Hit, Miss, Coalesced, Error, Timeout, RateLimited;
         // Fills that outran the lookup budget. Distinct from Timeout, which is
         // counted once per waiting reader: one slow fill on a hot key is one
         // slow fill and many timeouts.
@@ -226,9 +230,9 @@ public static partial class SsrRpc
 
     // ---- core ----------------------------------------------------------------
 
-    internal enum Outcome { Hit, Miss, Coalesced, Timeout, RpcError, Unavailable }
+    internal enum Outcome { Hit, Miss, Coalesced, Timeout, RpcError, Unavailable, RateLimited }
 
-    internal readonly record struct Resolution(Outcome Outcome, byte[] Bytes, string? Error);
+    internal readonly record struct Resolution(Outcome Outcome, byte[] Bytes, string? Error, int RetryAfterMs = 0);
 
     /// <summary>
     /// Answer one allowlisted call from the cache, or from one shared upstream
@@ -317,6 +321,11 @@ public static partial class SsrRpc
             // before it falls through to the generic unavailable path below.
             Interlocked.Increment(ref counter.Timeout);
             return new Resolution(Outcome.Timeout, Array.Empty<byte>(), "budget exceeded");
+        }
+        catch (HiveRpcClient.UpstreamRateLimitedException e)
+        {
+            Interlocked.Increment(ref counter.RateLimited);
+            return new Resolution(Outcome.RateLimited, Array.Empty<byte>(), e.Message, e.RetryAfterMs);
         }
         catch (HiveRpcClient.RpcException e)
         {
@@ -479,6 +488,10 @@ public static partial class SsrRpc
             case Outcome.Timeout:
                 await ctx.SendJson(504, new JsonObject { ["error"] = "Upstream Timeout" });
                 return;
+            case Outcome.RateLimited:
+                ctx.Response.Headers.RetryAfter = ((resolution.RetryAfterMs + 999) / 1000).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                await ctx.SendJson(503, new JsonObject { ["error"] = "Upstream Rate Limited" });
+                return;
             default:
                 await ctx.SendJson(502, new JsonObject { ["error"] = resolution.Error ?? "Upstream Error" });
                 return;
@@ -511,6 +524,7 @@ public static partial class SsrRpc
                 ["coalesced"] = Interlocked.Read(ref c.Coalesced),
                 ["error"] = Interlocked.Read(ref c.Error),
                 ["timeout"] = Interlocked.Read(ref c.Timeout),
+                ["rate_limited"] = Interlocked.Read(ref c.RateLimited),
                 ["slow_fill"] = Interlocked.Read(ref c.SlowFill),
                 ["upstream_ms"] = Math.Round(c.ReadUpstreamMs(), 1),
             };

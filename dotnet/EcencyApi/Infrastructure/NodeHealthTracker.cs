@@ -268,7 +268,8 @@ public sealed class NodeHealthTracker
     /// <summary>
     /// Node indices ordered best-first: unparked nodes sorted by
     /// (recent-failure tier, latency score, config index); rate-limit-parked
-    /// nodes appended last as a final resort. A node parked for consecutive
+    /// nodes appended last as a final resort, the park that lapses soonest
+    /// first (a caller that probes only one of them probes the likeliest). A node parked for consecutive
     /// failures is left out altogether while any other node is available (it
     /// was not answering; a throttled node might), and probed once its park
     /// lapses. When every node is failure-parked all are offered, so a pool
@@ -296,7 +297,8 @@ public sealed class NodeHealthTracker
                                         && p.SampleCount >= LatencyMinSamples
                                         && now - p.UpdatedAtMs <= LatencyMaxAgeMs;
                     var score = latencyUsable ? p.EwmaMs!.Value : LatencyUnprovenPriorMs;
-                    return (Index: i, Parked: parked, Dead: dead, RecentFailure: recentFailure, Score: score);
+                    return (Index: i, Parked: parked, ParkedUntil: parked ? h.RateLimitedUntilMs : 0,
+                        Dead: dead, RecentFailure: recentFailure, Score: score);
                 })
                 .ToList();
             if (ranked.Any(x => !x.Dead))
@@ -305,11 +307,37 @@ public sealed class NodeHealthTracker
             }
             return ranked
                 .OrderBy(x => x.Parked)
+                .ThenBy(x => x.ParkedUntil)
                 .ThenBy(x => x.RecentFailure)
                 .ThenBy(x => x.Score)
                 .ThenBy(x => x.Index)
                 .Select(x => x.Index)
                 .ToList();
+        }
+    }
+
+    /// <summary>How long the node stays parked for a 429, 0 when it is not.</summary>
+    public long RateLimitedForMs(int nodeIndex)
+    {
+        lock (_lock)
+        {
+            return Math.Max(0, _health[nodeIndex].RateLimitedUntilMs - NowMs);
+        }
+    }
+
+    /// <summary>The shortest 429 park still running anywhere in the pool, 0 when none is.</summary>
+    public long ShortestRateLimitParkMs()
+    {
+        lock (_lock)
+        {
+            var now = NowMs;
+            long shortest = 0;
+            foreach (var h in _health)
+            {
+                var left = h.RateLimitedUntilMs - now;
+                if (left > 0 && (shortest == 0 || left < shortest)) shortest = left;
+            }
+            return shortest;
         }
     }
 

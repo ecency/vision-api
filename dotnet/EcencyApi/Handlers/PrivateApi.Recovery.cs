@@ -98,6 +98,7 @@ public static partial class PrivateApi
             HttpRequestException => "http_error",
             // The RPC client's own node failure type (unreachable, bad status, bad body).
             _ when type == "NodeUnavailableException" => "http_error",
+            HiveRpcClient.UpstreamRateLimitedException => "http_error",
             HiveRpcClient.RpcException => "rpc_error",
             FormatException or System.Text.Json.JsonException => "parse_error",
             _ => "other",
