@@ -230,7 +230,11 @@ public static partial class SsrRpc
 
     // ---- core ----------------------------------------------------------------
 
-    internal enum Outcome { Hit, Miss, Coalesced, Timeout, RpcError, Unavailable, RateLimited }
+    // Upstream: every node failed (timeout, unreachable, HTTP error, unusable
+    // body). Unavailable: this proxy failed (fill queue full, fill expired in
+    // the queue, an unexpected exception). Both answer 502, tagged apart, so a
+    // consumer's breaker can open on the proxy and not on a partly down pool.
+    internal enum Outcome { Hit, Miss, Coalesced, Timeout, RpcError, Unavailable, RateLimited, Upstream }
 
     internal readonly record struct Resolution(Outcome Outcome, byte[] Bytes, string? Error, int RetryAfterMs = 0);
 
@@ -331,6 +335,11 @@ public static partial class SsrRpc
         {
             Interlocked.Increment(ref counter.Error);
             return new Resolution(Outcome.RpcError, Array.Empty<byte>(), e.Message);
+        }
+        catch (Exception e) when (HiveRpcClient.IsNodeFailure(e))
+        {
+            Interlocked.Increment(ref counter.Error);
+            return new Resolution(Outcome.Upstream, Array.Empty<byte>(), e.Message);
         }
         catch (Exception e)
         {

@@ -450,6 +450,13 @@ public sealed class HiveRpcClient
 
     /// <summary>A node is unhealthy/unreachable; try the next one. Distinct from
     /// RpcException (a real RPC-level error that must not fail over).</summary>
+    /// <summary>
+    /// The call failed because the node pool did: the last node tried timed
+    /// out, was unreachable, answered an HTTP error or an unusable body. Not a
+    /// fault of the caller's process (a config error, an unexpected exception).
+    /// </summary>
+    public static bool IsNodeFailure(Exception e) => e is NodeUnavailableException;
+
     private sealed class NodeUnavailableException : Exception
     {
         public bool AdvanceImmediately { get; }
@@ -524,13 +531,32 @@ public sealed class HiveRpcClient
                 throw new NodeUnavailableException($"RPC node {node} returned non-JSON", advanceImmediately: false).WithInner(e);
             }
 
-            if (parsed is JsonObject obj && obj.TryGetPropertyValue("error", out var error) && error != null)
+            // Valid JSON that is not the JSON-RPC object every node answers with
+            // ([], 5, null) is the node failing, like a body that is not JSON.
+            if (parsed is not JsonObject obj)
             {
-                var message = error["message"]?.GetValue<string>() ?? error.ToJsonString();
-                throw new RpcException(message);
+                throw new NodeUnavailableException($"RPC node {node} returned an unusable reply: not a JSON-RPC object", advanceImmediately: true);
             }
 
-            return parsed?["result"];
+            if (obj.TryGetPropertyValue("error", out var error) && error != null)
+            {
+                // The node's own error, whatever its shape: a string message, or
+                // the error as JSON when there is none (or it is not a string).
+                var message = error is JsonObject eo ? JsVal.AsString(eo["message"]) : null;
+                throw new RpcException(message ?? error.ToJsonString());
+            }
+
+            // An object with neither an error nor a result is not an answer
+            // either; read as null it would be cached as one. An explicit
+            // `"result": null` is (a post that does not exist). Both malformed
+            // shapes skip the same-node retry: a node serving malformed 200s
+            // keeps serving them.
+            if (!obj.TryGetPropertyValue("result", out var result))
+            {
+                throw new NodeUnavailableException($"RPC node {node} returned an unusable reply: no result", advanceImmediately: true);
+            }
+
+            return result;
         }
     }
 
@@ -610,12 +636,17 @@ public sealed class HiveRpcClient
 /// </summary>
 public static class HiveClients
 {
-    // techcoderx.com and hiveapi.actifit.io are deliberately absent: both serve
-    // accounts with posting_json_metadata stripped (balances correct, metadata
-    // empty). They are fast, so the latency EWMA ranked them first and the
-    // portfolio engine/chain layers came back empty for everyone. GetAccounts
-    // also routes around such a node at runtime, but keeping them out of the pool
-    // means correctness here does not depend on that fallback firing.
+    // techcoderx.com and hiveapi.actifit.io were out of the pool until 2026-11:
+    // both served accounts with posting_json_metadata stripped (balances
+    // correct, metadata empty). They were fast, so the latency EWMA ranked them
+    // first and the portfolio engine/chain layers came back empty for everyone.
+    // Re-checked 2026-11-19: metadata identical to api.hive.blog for 113
+    // accounts, 32 carrying wallet tokens, so they are back, listed last. A
+    // wider pool spreads this host's per-IP request rate. GetAccounts (wallet
+    // and portfolio reads) still prefers a node that serves metadata; the SSR
+    // read-through cache does not, so a regression would show as blank profile
+    // metadata on rendered pages too. If either symptom appears, compare
+    // condenser_api.get_accounts on these two against api.hive.blog first.
     // hive-api.arcange.eu and hive-api.3speak.tv are absent for the same reason
     // as each other: neither completes a TCP connect from any host this service
     // runs on (SYN, no answer, on 443 and on 80), so every attempt cost the full
@@ -633,6 +664,8 @@ public static class HiveClients
         "https://api.openhive.network",
         "https://api.syncad.com",
         "https://api.c0ff33a.uk",
+        "https://techcoderx.com",
+        "https://hiveapi.actifit.io",
     };
 
     public static readonly HiveRpcClient Default = new(DefaultNodes.ToArray());
