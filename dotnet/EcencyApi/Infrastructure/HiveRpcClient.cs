@@ -14,10 +14,10 @@ namespace EcencyApi.Infrastructure;
 ///    (dhive semantics — an application error, not an unhealthy node).
 ///  - Overload statuses (429/502/503/504) advance to the next node immediately
 ///    instead of burning a same-node retry.
-///  - A node parked for a 429 is asked at most once per call, and only one such
-///    node per call: while the whole pool throttles this host, a call costs one
-///    upstream request instead of one per node. A call that failed only on 429s
-///    throws <see cref="UpstreamRateLimitedException"/>.
+///  - Only one node parked for a 429 is asked per call (the one whose park
+///    lapses soonest), after every unparked node: while the whole pool throttles
+///    this host, a call reaches one node instead of all of them. A call that
+///    failed only on 429s throws <see cref="UpstreamRateLimitedException"/>.
 ///  - An `unknown method` answer to a call that names a fallback method asks
 ///    the same node the fallback, and marks the node and the method's family
 ///    for a while (CallMethod).
@@ -258,29 +258,39 @@ public sealed class HiveRpcClient
         var sawOtherFailure = false;
         var parkedProbeUsed = false;
 
-        foreach (var nodeIndex in _health.OrderedNodeIndices(callClass))
+        var ordered = _health.OrderedNodeIndices(callClass);
+        // A node left out of the ordering is parked for failing: part of the
+        // pool is down, so this call cannot be "only throttled".
+        if (ordered.Count < _nodes.Length) sawOtherFailure = true;
+
+        foreach (var nodeIndex in ordered)
         {
             var node = _nodes[nodeIndex];
 
             // Decided now, not from the ordering snapshot: a node parked by a
-            // concurrent call since this one started is parked for it too.
-            if (_health.RateLimitedForMs(nodeIndex) > 0)
+            // concurrent call since this one started is parked for it too. One
+            // probe keeps the pool recoverable (a limit can lift before our park
+            // ends); probing every parked node is the load the 429 asked us to
+            // stop sending.
+            var parkedNow = _health.RateLimitedForMs(nodeIndex) > 0;
+            if (parkedNow && parkedProbeUsed)
             {
-                // One probe keeps the pool recoverable (a limit can lift before
-                // our park ends); probing every parked node is the load the 429
-                // asked us to stop sending.
-                if (parkedProbeUsed)
-                {
-                    sawRateLimit = true;
-                    continue;
-                }
-                parkedProbeUsed = true;
+                sawRateLimit = true;
+                continue;
             }
 
             for (var attempt = 0; attempt < _failoverThreshold; attempt++)
             {
-                // The ordering above is a snapshot; admission is decided now.
-                if (!_health.TryBeginAttempt(nodeIndex)) break;
+                // The ordering above is a snapshot; admission is decided now. A
+                // refusal means the node is failure-parked or a probe of it is in
+                // flight: an outage, not throttling, and no request was sent, so
+                // it does not spend the parked-node probe either.
+                if (!_health.TryBeginAttempt(nodeIndex))
+                {
+                    sawOtherFailure = true;
+                    break;
+                }
+                if (parkedNow) parkedProbeUsed = true;
                 var started = NowMs;
                 try
                 {

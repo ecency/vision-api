@@ -489,7 +489,8 @@ public static partial class SsrRpc
                 await ctx.SendJson(504, new JsonObject { ["error"] = "Upstream Timeout" });
                 return;
             case Outcome.RateLimited:
-                ctx.Response.Headers.RetryAfter = ((resolution.RetryAfterMs + 999) / 1000).ToString(System.Globalization.CultureInfo.InvariantCulture);
+                // long: a node may send a Retry-After near int.MaxValue ms.
+                ctx.Response.Headers.RetryAfter = ((resolution.RetryAfterMs + 999L) / 1000).ToString(System.Globalization.CultureInfo.InvariantCulture);
                 await ctx.SendJson(503, new JsonObject { ["error"] = "Upstream Rate Limited" });
                 return;
             default:

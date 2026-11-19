@@ -761,6 +761,26 @@ public class HiveRpcFailoverTests
     }
 
     [Fact]
+    public async Task AParkedDeadNodeAndAThrottledNode_IsNotReportedAsThrottled()
+    {
+        // A node already parked for failing is left out of the ordering, so it
+        // never fails inside the call; it is still an outage, not throttling.
+        await using var dead = new StubNode(() => -1);
+        await using var throttled = new StubNode(() => 429);
+        long now = 0;
+        var client = new HiveRpcClient(new[] { dead.Url, throttled.Url }, timeoutMs: 200, failoverThreshold: 1, clock: () => now);
+        for (var i = 0; i < 3; i++)
+        {
+            if (i > 0) now += 61_000; // past the throttled node's park, inside nothing
+            await Assert.ThrowsAnyAsync<Exception>(() => client.Call("condenser_api", "get_accounts", new JsonArray()));
+        }
+        Assert.True(client.HealthSnapshot()[0]!["parked_for_ms"]!.GetValue<long>() > 0);
+
+        var ex = await Assert.ThrowsAnyAsync<Exception>(() => client.Call("condenser_api", "get_accounts", new JsonArray()));
+        Assert.IsNotType<HiveRpcClient.UpstreamRateLimitedException>(ex);
+    }
+
+    [Fact]
     public async Task AParkedNode_StillServes_OnceEveryUnparkedNodeHasFailed()
     {
         // The one-probe allowance is what keeps a throttled pool recoverable:
