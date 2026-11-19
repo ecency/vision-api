@@ -31,6 +31,11 @@ public class SsrRpcTests
         public string? CustomError;
         // Answer with this HTTP status instead of 200 (a node out of service).
         public int Status = 200;
+        // Answer exactly this body instead of a built one (a malformed node).
+        public string? RawBody;
+        // Send the headers and half the body, then stall this long (a node that
+        // stops mid-answer).
+        public int BodyStallMs;
         // Extra delay before an `unknown method` answer only.
         public int UnknownDelayMs;
         public volatile string LastMethod = "";
@@ -109,6 +114,7 @@ public class SsrRpcTests
                     : NullResult
                         ? "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}"
                         : "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"method\":\"" + method + "\",\"n\":" + n + ",\"text\":\"caf\\u00e9 \\ud83d\"}}";
+                if (RawBody is not null) body = RawBody;
                 var bytes = Encoding.UTF8.GetBytes(body);
                 // Inside the try: a handler that wakes after the listener closed
                 // (the hanging-node spec) must not throw an unobserved exception.
@@ -117,7 +123,17 @@ public class SsrRpcTests
                     ctx.Response.StatusCode = Status;
                     ctx.Response.ContentType = "application/json";
                     ctx.Response.ContentLength64 = bytes.Length;
-                    await ctx.Response.OutputStream.WriteAsync(bytes);
+                    if (BodyStallMs > 0)
+                    {
+                        await ctx.Response.OutputStream.WriteAsync(bytes.AsMemory(0, bytes.Length / 2));
+                        await ctx.Response.OutputStream.FlushAsync();
+                        await Task.Delay(BodyStallMs);
+                        await ctx.Response.OutputStream.WriteAsync(bytes.AsMemory(bytes.Length / 2));
+                    }
+                    else
+                    {
+                        await ctx.Response.OutputStream.WriteAsync(bytes);
+                    }
                     ctx.Response.Close();
                 }
                 catch { }
@@ -265,6 +281,42 @@ public class SsrRpcTests
         SsrRpc.ResetForTests();
         var r = await SsrRpc.Resolve(Post, P("a", "b"));
         Assert.Equal(SsrRpc.Outcome.Upstream, r.Outcome);
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("5")]
+    [InlineData("\"result\"")]
+    [InlineData("null")]
+    public async Task A_well_formed_JSON_answer_that_is_not_an_RPC_envelope_is_an_upstream_failure(string body)
+    {
+        // Valid JSON, but not the object every node answers with: the node failed.
+        await using var stub = new RpcStub { RawBody = body };
+        Use(stub);
+        var r = await SsrRpc.Resolve(Post, P("e", body));
+        Assert.True(r.Outcome == SsrRpc.Outcome.Upstream, $"{r.Outcome}: {r.Error}");
+    }
+
+    [Theory]
+    [InlineData("{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":1,\"message\":5}}")]
+    [InlineData("{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":\"boom\"}")]
+    public async Task An_RPC_error_in_an_unexpected_shape_is_still_the_nodes_own_error(string body)
+    {
+        // The node answered with an error; its shape is odd, but it is the node's
+        // answer to relay, not a fault of the proxy.
+        await using var stub = new RpcStub { RawBody = body };
+        Use(stub);
+        var r = await SsrRpc.Resolve(Post, P("e", "rpc"));
+        Assert.True(r.Outcome == SsrRpc.Outcome.RpcError, $"{r.Outcome}: {r.Error}");
+    }
+
+    [Fact]
+    public async Task A_node_that_stalls_mid_body_is_an_upstream_timeout()
+    {
+        await using var stub = new RpcStub { BodyStallMs = 2500 };
+        Use(stub, budgetMs: 3000);
+        var r = await SsrRpc.Resolve(Post, P("e", "stall"));
+        Assert.True(r.Outcome == SsrRpc.Outcome.Upstream, $"{r.Outcome}: {r.Error}");
     }
 
     [Fact]

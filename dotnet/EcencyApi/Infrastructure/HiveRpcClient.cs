@@ -531,13 +531,22 @@ public sealed class HiveRpcClient
                 throw new NodeUnavailableException($"RPC node {node} returned non-JSON", advanceImmediately: false).WithInner(e);
             }
 
-            if (parsed is JsonObject obj && obj.TryGetPropertyValue("error", out var error) && error != null)
+            // Valid JSON that is not the JSON-RPC object every node answers with
+            // ([], 5, null) is the node failing, like a body that is not JSON.
+            if (parsed is not JsonObject obj)
             {
-                var message = error["message"]?.GetValue<string>() ?? error.ToJsonString();
-                throw new RpcException(message);
+                throw new NodeUnavailableException($"RPC node {node} returned a non-object JSON body", advanceImmediately: false);
             }
 
-            return parsed?["result"];
+            if (obj.TryGetPropertyValue("error", out var error) && error != null)
+            {
+                // The node's own error, whatever its shape: a string message, or
+                // the error as JSON when there is none (or it is not a string).
+                var message = error is JsonObject eo ? JsVal.AsString(eo["message"]) : null;
+                throw new RpcException(message ?? error.ToJsonString());
+            }
+
+            return obj["result"];
         }
     }
 
