@@ -535,7 +535,7 @@ public sealed class HiveRpcClient
             // ([], 5, null) is the node failing, like a body that is not JSON.
             if (parsed is not JsonObject obj)
             {
-                throw new NodeUnavailableException($"RPC node {node} returned a non-object JSON body", advanceImmediately: false);
+                throw new NodeUnavailableException($"RPC node {node} returned an unusable reply: not a JSON-RPC object", advanceImmediately: true);
             }
 
             if (obj.TryGetPropertyValue("error", out var error) && error != null)
@@ -546,7 +546,17 @@ public sealed class HiveRpcClient
                 throw new RpcException(message ?? error.ToJsonString());
             }
 
-            return obj["result"];
+            // An object with neither an error nor a result is not an answer
+            // either; read as null it would be cached as one. An explicit
+            // `"result": null` is (a post that does not exist). Both malformed
+            // shapes skip the same-node retry: a node serving malformed 200s
+            // keeps serving them.
+            if (!obj.TryGetPropertyValue("result", out var result))
+            {
+                throw new NodeUnavailableException($"RPC node {node} returned an unusable reply: no result", advanceImmediately: true);
+            }
+
+            return result;
         }
     }
 

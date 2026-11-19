@@ -712,7 +712,7 @@ public class HiveRpcFailoverTests
 
         var ex = await Assert.ThrowsAnyAsync<Exception>(() =>
             client.GetAccounts(new[] { "good-karma" }));
-        Assert.Contains("unusable get_accounts result", ex.Message);
+        Assert.Contains("unusable", ex.Message);
         Assert.Contains("http://127.0.0.1:", ex.Message); // node URL for diagnosability
     }
 

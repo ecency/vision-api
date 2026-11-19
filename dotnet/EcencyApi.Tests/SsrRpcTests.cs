@@ -288,6 +288,8 @@ public class SsrRpcTests
     [InlineData("5")]
     [InlineData("\"result\"")]
     [InlineData("null")]
+    [InlineData("{}")]
+    [InlineData("{\"jsonrpc\":\"2.0\",\"id\":1}")]
     public async Task A_well_formed_JSON_answer_that_is_not_an_RPC_envelope_is_an_upstream_failure(string body)
     {
         // Valid JSON, but not the object every node answers with: the node failed.
@@ -295,6 +297,16 @@ public class SsrRpcTests
         Use(stub);
         var r = await SsrRpc.Resolve(Post, P("e", body));
         Assert.True(r.Outcome == SsrRpc.Outcome.Upstream, $"{r.Outcome}: {r.Error}");
+    }
+
+    [Fact]
+    public async Task An_explicit_null_result_is_still_an_answer()
+    {
+        // Distinct from a missing result: a node may answer null for a missing post.
+        await using var stub = new RpcStub { RawBody = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":null}" };
+        Use(stub);
+        var r = await SsrRpc.Resolve(Post, P("e", "explicit-null"));
+        Assert.True(r.Outcome == SsrRpc.Outcome.Miss, $"{r.Outcome}: {r.Error}");
     }
 
     [Theory]
