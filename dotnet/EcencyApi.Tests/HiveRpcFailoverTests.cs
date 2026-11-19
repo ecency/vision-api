@@ -484,6 +484,15 @@ public class HiveRpcFailoverTests
     }
 
     [Fact]
+    public void DefaultPool_CarriesTheReverifiedNodes()
+    {
+        // Back in the pool after their metadata stripping was re-checked
+        // (2026-11-19); a wider pool spreads this host's per-IP request rate.
+        Assert.Contains("https://techcoderx.com", HiveClients.DefaultNodes);
+        Assert.Contains("https://hiveapi.actifit.io", HiveClients.DefaultNodes);
+    }
+
+    [Fact]
     public async Task ProvenSlowNode_IsDemotedByLatencyEwma()
     {
         // Adopted from @ecency/sdk's NodeHealthTracker: once a node's latency

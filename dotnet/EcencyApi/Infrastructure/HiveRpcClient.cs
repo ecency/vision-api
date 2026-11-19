@@ -610,12 +610,17 @@ public sealed class HiveRpcClient
 /// </summary>
 public static class HiveClients
 {
-    // techcoderx.com and hiveapi.actifit.io are deliberately absent: both serve
-    // accounts with posting_json_metadata stripped (balances correct, metadata
-    // empty). They are fast, so the latency EWMA ranked them first and the
-    // portfolio engine/chain layers came back empty for everyone. GetAccounts
-    // also routes around such a node at runtime, but keeping them out of the pool
-    // means correctness here does not depend on that fallback firing.
+    // techcoderx.com and hiveapi.actifit.io were out of the pool until 2026-11:
+    // both served accounts with posting_json_metadata stripped (balances
+    // correct, metadata empty). They were fast, so the latency EWMA ranked them
+    // first and the portfolio engine/chain layers came back empty for everyone.
+    // Re-checked 2026-11-19: metadata identical to api.hive.blog for 113
+    // accounts, 32 carrying wallet tokens, so they are back, listed last. A
+    // wider pool spreads this host's per-IP request rate. GetAccounts (wallet
+    // and portfolio reads) still prefers a node that serves metadata; the SSR
+    // read-through cache does not, so a regression would show as blank profile
+    // metadata on rendered pages too. If either symptom appears, compare
+    // condenser_api.get_accounts on these two against api.hive.blog first.
     // hive-api.arcange.eu and hive-api.3speak.tv are absent for the same reason
     // as each other: neither completes a TCP connect from any host this service
     // runs on (SYN, no answer, on 443 and on 80), so every attempt cost the full
@@ -633,6 +638,8 @@ public static class HiveClients
         "https://api.openhive.network",
         "https://api.syncad.com",
         "https://api.c0ff33a.uk",
+        "https://techcoderx.com",
+        "https://hiveapi.actifit.io",
     };
 
     public static readonly HiveRpcClient Default = new(DefaultNodes.ToArray());
