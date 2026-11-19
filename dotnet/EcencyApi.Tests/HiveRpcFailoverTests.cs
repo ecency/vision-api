@@ -800,6 +800,62 @@ public class HiveRpcFailoverTests
     }
 
     [Fact]
+    public async Task ANodeThrottledMidCall_DoesNotTakeTheProbeFromTheSoonestPark()
+    {
+        // The ordering is a snapshot. A node another call parks while this one
+        // runs is the furthest from lapsing, so it must not take the single
+        // probe; the soonest-lapsing parked node gets it.
+        HiveRpcClient client = null!;
+        long now = 0;
+        await using var a = new StubNode(() => { client.Health.RecordRateLimited(1, null); return 500; });
+        await using var b = new StubNode(() => 429);
+        await using var c = new StubNode(() => 200);
+        client = new HiveRpcClient(new[] { a.Url, b.Url, c.Url }, timeoutMs: 500, failoverThreshold: 1, clock: () => now);
+        client.Health.RecordRateLimited(2, null); // c parked first: lapses first
+        now = 5_000;
+
+        var result = await client.Call("condenser_api", "get_accounts", new JsonArray());
+        Assert.Equal("served-by", result![0]!["name"]!.GetValue<string>());
+        Assert.Equal(0, b.Hits);
+        Assert.Equal(1, c.Hits);
+    }
+
+    [Fact]
+    public async Task ANodeDownAndThrottled_IsAnOutage_EvenAfterTheProbeIsSpent()
+    {
+        HiveRpcClient client = null!;
+        long now = 0;
+        await using var x = new StubNode(() =>
+        {
+            client.Health.RecordRateLimited(1, null);
+            client.Health.RecordRateLimited(2, null);
+            for (var i = 0; i < 3; i++) client.Health.RecordFailure(2, 10, CallClass.Cheap, timedOut: true);
+            return 429;
+        });
+        await using var y = new StubNode(() => 429);
+        await using var z = new StubNode(() => 429);
+        client = new HiveRpcClient(new[] { x.Url, y.Url, z.Url }, timeoutMs: 500, failoverThreshold: 1, clock: () => now);
+
+        var ex = await Assert.ThrowsAnyAsync<Exception>(() => client.Call("condenser_api", "get_accounts", new JsonArray()));
+        Assert.IsNotType<HiveRpcClient.UpstreamRateLimitedException>(ex);
+    }
+
+    [Fact]
+    public async Task RetryAfter_CountsAParkThatLapsedDuringTheCall()
+    {
+        // The first node's park lapses while the second is answering: it can
+        // serve now, so the advised wait is the minimum, not the second's park.
+        long now = 0;
+        await using var a = new StubNode(() => 429);
+        await using var b = new StubNode(() => { now += 11_000; return 429; });
+        var client = new HiveRpcClient(new[] { a.Url, b.Url }, timeoutMs: 500, failoverThreshold: 1, clock: () => now);
+
+        var ex = await Assert.ThrowsAsync<HiveRpcClient.UpstreamRateLimitedException>(() =>
+            client.Call("condenser_api", "get_accounts", new JsonArray()));
+        Assert.Equal(1, ex.RetryAfterMs);
+    }
+
+    [Fact]
     public async Task AllNodesDown_Throws()
     {
         await using var bad1 = new StubNode(() => 500);

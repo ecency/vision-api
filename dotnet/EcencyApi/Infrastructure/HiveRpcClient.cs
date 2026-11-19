@@ -15,7 +15,7 @@ namespace EcencyApi.Infrastructure;
 ///  - Overload statuses (429/502/503/504) advance to the next node immediately
 ///    instead of burning a same-node retry.
 ///  - Only one node parked for a 429 is asked per call (the one whose park
-///    lapses soonest), after every unparked node: while the whole pool throttles
+///    lapses soonest, chosen after every unparked node was tried): while the whole pool throttles
 ///    this host, a call reaches one node instead of all of them. A call that
 ///    failed only on 429s throws <see cref="UpstreamRateLimitedException"/>.
 ///  - An `unknown method` answer to a call that names a fallback method asks
@@ -37,6 +37,9 @@ public sealed class HiveRpcClient
     private readonly NodeHealthTracker _health;
     private readonly Func<long> _clock;
     private int _seq;
+
+    /// <summary>Test seam: the pool's health state, to stage parks mid-call.</summary>
+    internal NodeHealthTracker Health => _health;
 
     // Per node, the fallback families it answered `unknown method` for and until
     // when (on _clock). Bounded by nodes x families; see CallMethod.
@@ -256,41 +259,54 @@ public sealed class HiveRpcClient
         // plain failure, so a caller is never told to just wait out an outage.
         var sawRateLimit = false;
         var sawOtherFailure = false;
-        var parkedProbeUsed = false;
+        // Nodes this call found parked for a 429 (deferred) or saw answer 429:
+        // the advised wait is how long until the first of them can serve again.
+        var deferred = new List<int>();
+        var throttledNodes = new HashSet<int>();
 
         var ordered = _health.OrderedNodeIndices(callClass);
         // A node left out of the ordering is parked for failing: part of the
         // pool is down, so this call cannot be "only throttled".
         if (ordered.Count < _nodes.Length) sawOtherFailure = true;
 
-        foreach (var nodeIndex in ordered)
+        // Every node in order, skipping the ones parked for a 429 at the moment
+        // they come up (the ordering is a snapshot; another call may have parked
+        // one since). Then ONE probe, to the deferred node whose park lapses
+        // soonest by then: it keeps the pool recoverable when a limit lifts
+        // early, while probing every parked node is the load the 429s asked us
+        // to stop sending. Chosen after the pass, so a node parked mid-call (the
+        // furthest from lapsing) cannot take the probe from an older park.
+        IEnumerable<(int Node, bool Probe)> Sequence()
+        {
+            foreach (var i in ordered) yield return (i, false);
+            if (deferred.Count > 0)
+            {
+                yield return (deferred.OrderBy(i => _health.RateLimitedForMs(i)).First(), true);
+            }
+        }
+
+        foreach (var (nodeIndex, isProbe) in Sequence())
         {
             var node = _nodes[nodeIndex];
 
-            // Decided now, not from the ordering snapshot: a node parked by a
-            // concurrent call since this one started is parked for it too. One
-            // probe keeps the pool recoverable (a limit can lift before our park
-            // ends); probing every parked node is the load the 429 asked us to
-            // stop sending.
-            var parkedNow = _health.RateLimitedForMs(nodeIndex) > 0;
-            if (parkedNow && parkedProbeUsed)
-            {
-                sawRateLimit = true;
-                continue;
-            }
-
             for (var attempt = 0; attempt < _failoverThreshold; attempt++)
             {
-                // The ordering above is a snapshot; admission is decided now. A
-                // refusal means the node is failure-parked or a probe of it is in
-                // flight: an outage, not throttling, and no request was sent, so
-                // it does not spend the parked-node probe either.
-                if (!_health.TryBeginAttempt(nodeIndex))
+                // Admission is decided now, under one lock with the park check.
+                var admission = _health.Admit(nodeIndex, allowRateLimitParked: isProbe);
+                if (admission == NodeHealthTracker.Admission.RateLimitParked)
                 {
+                    sawRateLimit = true;
+                    throttledNodes.Add(nodeIndex);
+                    if (attempt == 0) deferred.Add(nodeIndex);
+                    break;
+                }
+                if (admission == NodeHealthTracker.Admission.Refused)
+                {
+                    // Failure-parked, or a probe of it is already in flight: an
+                    // outage, not throttling. No request was sent.
                     sawOtherFailure = true;
                     break;
                 }
-                if (parkedNow) parkedProbeUsed = true;
                 var started = NowMs;
                 try
                 {
@@ -358,6 +374,7 @@ public sealed class HiveRpcClient
                     if (e.IsRateLimit)
                     {
                         sawRateLimit = true;
+                        throttledNodes.Add(nodeIndex);
                         _health.RecordRateLimited(nodeIndex, e.RetryAfterMs);
                     }
                     else
@@ -396,8 +413,10 @@ public sealed class HiveRpcClient
 
         if (sawRateLimit && !sawOtherFailure)
         {
+            // A park that lapsed during the call counts as 0: that node can serve now.
+            var wait = throttledNodes.Min(i => _health.RateLimitedForMs(i));
             throw new UpstreamRateLimitedException(
-                $"every RPC node is rate-limiting {method}", (int)Math.Min(int.MaxValue, _health.ShortestRateLimitParkMs()));
+                $"every RPC node is rate-limiting {method}", (int)Math.Min(int.MaxValue, wait));
         }
 
         // Every node exhausted — surface the last transport error (dhive throws

@@ -325,22 +325,6 @@ public sealed class NodeHealthTracker
         }
     }
 
-    /// <summary>The shortest 429 park still running anywhere in the pool, 0 when none is.</summary>
-    public long ShortestRateLimitParkMs()
-    {
-        lock (_lock)
-        {
-            var now = NowMs;
-            long shortest = 0;
-            foreach (var h in _health)
-            {
-                var left = h.RateLimitedUntilMs - now;
-                if (left > 0 && (shortest == 0 || left < shortest)) shortest = left;
-            }
-            return shortest;
-        }
-    }
-
     /// <summary>
     /// Admission at attempt time, because the ordering a call holds was taken
     /// when the call started and can be stale by the time it reaches this node:
@@ -350,7 +334,18 @@ public sealed class NodeHealthTracker
     /// rule yields when no other node could take the attempt. Pair with
     /// <see cref="EndAttempt"/>.
     /// </summary>
-    public bool TryBeginAttempt(int nodeIndex)
+    public bool TryBeginAttempt(int nodeIndex) => Admit(nodeIndex, allowRateLimitParked: true) == Admission.Admitted;
+
+    public enum Admission { Admitted, RateLimitParked, Refused }
+
+    /// <summary>
+    /// <see cref="TryBeginAttempt"/> plus, when <paramref name="allowRateLimitParked"/>
+    /// is false, a node parked for a 429 is not admitted (RateLimitParked), decided
+    /// under the same lock so a concurrent park cannot slip in between. A node that
+    /// is failure-parked is Refused first, even if it is also rate-limit parked: an
+    /// outage outranks throttling. Admitted pairs with <see cref="EndAttempt"/>.
+    /// </summary>
+    public Admission Admit(int nodeIndex, bool allowRateLimitParked)
     {
         lock (_lock)
         {
@@ -369,10 +364,11 @@ public sealed class NodeHealthTracker
                     var oBusy = !oParked && o.FailureParkStreak > 0 && o.InFlight > 0;
                     othersAvailable = !oParked && !oBusy;
                 }
-                if (othersAvailable) return false;
+                if (othersAvailable) return Admission.Refused;
             }
+            if (!allowRateLimitParked && h.RateLimitedUntilMs > now) return Admission.RateLimitParked;
             h.InFlight++;
-            return true;
+            return Admission.Admitted;
         }
     }
 
