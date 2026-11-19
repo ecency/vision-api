@@ -268,7 +268,8 @@ public sealed class NodeHealthTracker
     /// <summary>
     /// Node indices ordered best-first: unparked nodes sorted by
     /// (recent-failure tier, latency score, config index); rate-limit-parked
-    /// nodes appended last as a final resort. A node parked for consecutive
+    /// nodes appended last as a final resort, the park that lapses soonest
+    /// first (a caller that probes only one of them probes the likeliest). A node parked for consecutive
     /// failures is left out altogether while any other node is available (it
     /// was not answering; a throttled node might), and probed once its park
     /// lapses. When every node is failure-parked all are offered, so a pool
@@ -296,7 +297,8 @@ public sealed class NodeHealthTracker
                                         && p.SampleCount >= LatencyMinSamples
                                         && now - p.UpdatedAtMs <= LatencyMaxAgeMs;
                     var score = latencyUsable ? p.EwmaMs!.Value : LatencyUnprovenPriorMs;
-                    return (Index: i, Parked: parked, Dead: dead, RecentFailure: recentFailure, Score: score);
+                    return (Index: i, Parked: parked, ParkedUntil: parked ? h.RateLimitedUntilMs : 0,
+                        Dead: dead, RecentFailure: recentFailure, Score: score);
                 })
                 .ToList();
             if (ranked.Any(x => !x.Dead))
@@ -305,11 +307,21 @@ public sealed class NodeHealthTracker
             }
             return ranked
                 .OrderBy(x => x.Parked)
+                .ThenBy(x => x.ParkedUntil)
                 .ThenBy(x => x.RecentFailure)
                 .ThenBy(x => x.Score)
                 .ThenBy(x => x.Index)
                 .Select(x => x.Index)
                 .ToList();
+        }
+    }
+
+    /// <summary>How long the node stays parked for a 429, 0 when it is not.</summary>
+    public long RateLimitedForMs(int nodeIndex)
+    {
+        lock (_lock)
+        {
+            return Math.Max(0, _health[nodeIndex].RateLimitedUntilMs - NowMs);
         }
     }
 
@@ -322,7 +334,18 @@ public sealed class NodeHealthTracker
     /// rule yields when no other node could take the attempt. Pair with
     /// <see cref="EndAttempt"/>.
     /// </summary>
-    public bool TryBeginAttempt(int nodeIndex)
+    public bool TryBeginAttempt(int nodeIndex) => Admit(nodeIndex, allowRateLimitParked: true) == Admission.Admitted;
+
+    public enum Admission { Admitted, RateLimitParked, Refused }
+
+    /// <summary>
+    /// <see cref="TryBeginAttempt"/> plus, when <paramref name="allowRateLimitParked"/>
+    /// is false, a node parked for a 429 is not admitted (RateLimitParked), decided
+    /// under the same lock so a concurrent park cannot slip in between. A node that
+    /// is failure-parked is Refused first, even if it is also rate-limit parked: an
+    /// outage outranks throttling. Admitted pairs with <see cref="EndAttempt"/>.
+    /// </summary>
+    public Admission Admit(int nodeIndex, bool allowRateLimitParked)
     {
         lock (_lock)
         {
@@ -341,10 +364,11 @@ public sealed class NodeHealthTracker
                     var oBusy = !oParked && o.FailureParkStreak > 0 && o.InFlight > 0;
                     othersAvailable = !oParked && !oBusy;
                 }
-                if (othersAvailable) return false;
+                if (othersAvailable) return Admission.Refused;
             }
+            if (!allowRateLimitParked && h.RateLimitedUntilMs > now) return Admission.RateLimitParked;
             h.InFlight++;
-            return true;
+            return Admission.Admitted;
         }
     }
 
