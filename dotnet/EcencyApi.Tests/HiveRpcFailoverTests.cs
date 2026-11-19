@@ -821,6 +821,31 @@ public class HiveRpcFailoverTests
     }
 
     [Fact]
+    public async Task ARefusedProbe_PassesToTheNextParkedNode()
+    {
+        // c is parked (soonest) after this call's snapshot and deferred; then,
+        // still inside the pass, it goes down. At probe time it is refused with
+        // no request sent, so the probe passes to the next parked node, b.
+        HiveRpcClient client = null!;
+        long now = 0;
+        await using var a = new StubNode(() => { client.Health.RecordRateLimited(1, 1); return 500; });
+        await using var c = new StubNode(() => 200);
+        await using var d = new StubNode(() =>
+        {
+            for (var i = 0; i < 3; i++) client.Health.RecordFailure(1, 10, CallClass.Cheap, timedOut: true);
+            return 500;
+        });
+        await using var b = new StubNode(() => 200);
+        client = new HiveRpcClient(new[] { a.Url, c.Url, d.Url, b.Url }, timeoutMs: 500, failoverThreshold: 1, clock: () => now);
+        client.Health.RecordRateLimited(3, null); // b parked before the call: last in the snapshot
+
+        var result = await client.Call("condenser_api", "get_accounts", new JsonArray());
+        Assert.Equal("served-by", result![0]!["name"]!.GetValue<string>());
+        Assert.Equal(0, c.Hits);
+        Assert.Equal(1, b.Hits);
+    }
+
+    [Fact]
     public async Task ANodeDownAndThrottled_IsAnOutage_EvenAfterTheProbeIsSpent()
     {
         HiveRpcClient client = null!;

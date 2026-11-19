@@ -275,13 +275,19 @@ public sealed class HiveRpcClient
         // soonest by then: it keeps the pool recoverable when a limit lifts
         // early, while probing every parked node is the load the 429s asked us
         // to stop sending. Chosen after the pass, so a node parked mid-call (the
-        // furthest from lapsing) cannot take the probe from an older park.
+        // furthest from lapsing) cannot take the probe from an older park. A
+        // candidate refused at probe time (down, or probed by another call
+        // meanwhile) got no request, so the probe passes to the next one.
+        var probeSent = false;
         IEnumerable<(int Node, bool Probe)> Sequence()
         {
             foreach (var i in ordered) yield return (i, false);
-            if (deferred.Count > 0)
+            var candidates = new List<int>(deferred);
+            while (!probeSent && candidates.Count > 0)
             {
-                yield return (deferred.OrderBy(i => _health.RateLimitedForMs(i)).First(), true);
+                var next = candidates.OrderBy(i => _health.RateLimitedForMs(i)).First();
+                candidates.Remove(next);
+                yield return (next, true);
             }
         }
 
@@ -307,6 +313,7 @@ public sealed class HiveRpcClient
                     sawOtherFailure = true;
                     break;
                 }
+                if (isProbe) probeSent = true;
                 var started = NowMs;
                 try
                 {
