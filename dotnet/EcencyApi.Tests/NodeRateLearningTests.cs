@@ -818,6 +818,117 @@ public class NodeRateLearningTests
     }
 
     [Fact]
+    public async Task AFallback_AfterAFailureParkMeanwhile_IsAnOutageNotThrottling()
+    {
+        // Concurrent calls time out and failure-park node 0 between its v2
+        // answer and the fallback, while node 1 can serve. The fallback is not
+        // sent, and the call does not end as throttled although node 1 then
+        // answers 429: an outage is not a reason to advise a retry wait.
+        HiveRpcClient client = null!;
+        long now = 0;
+        await using var node = new OldMethodStub(() => 200, onV2: () =>
+        {
+            now = 100;
+            while (!client.Health.RecordFailure(0, 2_000, CallClass.Cheap, timedOut: true)) { }
+            now = 150;
+        });
+        await using var limited = new LimitedStub(() => false);
+        client = new HiveRpcClient(new[] { node.Url, limited.Url }, timeoutMs: 1000, failoverThreshold: 1, clock: () => now);
+        client.Health.RecordRateLimited(1, retryAfterMs: 30_000, sentAtMs: 0);
+
+        var e = await Assert.ThrowsAnyAsync<Exception>(() => GetPostV2(client));
+
+        Assert.Equal(1, node.V2);
+        Assert.Equal(0, node.V1);
+        Assert.IsNotType<HiveRpcClient.UpstreamRateLimitedException>(e);
+        Assert.IsNotType<InvalidOperationException>(e);
+    }
+
+    [Fact]
+    public async Task AFallback_AfterAFailureParkMeanwhile_IsSentWhenNoOtherNodeCanServe()
+    {
+        // The same park on the only node: a fresh call would be admitted into
+        // it (the pool would be empty otherwise), so the fallback is too. The
+        // node has just answered.
+        HiveRpcClient client = null!;
+        long now = 0;
+        await using var node = new OldMethodStub(() => 200, onV2: () =>
+        {
+            now = 100;
+            while (!client.Health.RecordFailure(0, 2_000, CallClass.Cheap, timedOut: true)) { }
+            now = 150;
+        });
+        client = new HiveRpcClient(new[] { node.Url }, timeoutMs: 1000, failoverThreshold: 1, clock: () => now);
+
+        Assert.NotNull(await GetPostV2(client));
+        Assert.Equal(1, node.V1);
+    }
+
+    [Fact]
+    public async Task AWithheldFallback_ReportsTheNodeError_NotAConfigError()
+    {
+        // Node 1 is down (failure-parked, so the call cannot be only
+        // throttled). Node 0 answers `unknown method` and another call's 429
+        // parks it before the fallback. The call ends with a node error, not
+        // "no RPC nodes configured".
+        HiveRpcClient client = null!;
+        long now = 0;
+        await using var node = new OldMethodStub(() => 200, onV2: () =>
+        {
+            now = 100;
+            client.Health.RecordRateLimited(0, null, sentAtMs: 100);
+            now = 150;
+        });
+        await using var down = new LimitedStub(() => true);
+        client = new HiveRpcClient(new[] { node.Url, down.Url }, timeoutMs: 1000, failoverThreshold: 1, clock: () => now);
+        while (!client.Health.RecordFailure(1, 2_000, CallClass.Cheap, timedOut: true)) { }
+
+        var e = await Assert.ThrowsAnyAsync<Exception>(() => GetPostV2(client));
+
+        Assert.Equal(0, node.V1);
+        Assert.IsNotType<InvalidOperationException>(e);
+        Assert.Contains("429", e.Message);
+    }
+
+    [Fact]
+    public async Task AFallback_IsNotSent_AfterAFresh429InsideALongerPark()
+    {
+        // A probe is let into a 30s named park. Another call's probe draws a
+        // new 429 (rate halved, ladder 10s): shorter than the park, so the
+        // deadline does not move, but the node has just refused again.
+        HiveRpcClient client = null!;
+        long now = 0;
+        await using var node = new OldMethodStub(() => 200, onV2: () =>
+        {
+            now = 1_100;
+            client.Health.RecordRateLimited(0, null, sentAtMs: 1_100);
+            now = 1_150;
+        });
+        client = new HiveRpcClient(new[] { node.Url }, timeoutMs: 1000, failoverThreshold: 1, clock: () => now);
+        client.Health.RecordRateLimited(0, retryAfterMs: 30_000, sentAtMs: 0);
+        now = 1_000;
+
+        await Assert.ThrowsAsync<HiveRpcClient.UpstreamRateLimitedException>(() => GetPostV2(client));
+        Assert.Equal(0, node.V1);
+    }
+
+    [Fact]
+    public async Task AProbeIntoAPark_StillSendsItsFallback()
+    {
+        // The only node is parked by a named wait, so the call probes it. The
+        // probe is allowed into that park; its `unknown method` answer must
+        // still get the v1 fallback, or the call fails though the node answers.
+        await using var node = new OldMethodStub(() => 200);
+        long now = 0;
+        var client = new HiveRpcClient(new[] { node.Url }, timeoutMs: 1000, failoverThreshold: 1, clock: () => now);
+        client.Health.RecordRateLimited(0, retryAfterMs: 30_000, sentAtMs: 0);
+        now = 1_000;
+
+        Assert.NotNull(await GetPostV2(client));
+        Assert.Equal(1, node.V1);
+    }
+
+    [Fact]
     public async Task ARefusedCall_CountsTheNodesItLeftOut_InTheAdvisedWait()
     {
         // Both nodes refused at 0 and paused 1s. At 1.5s both are over their

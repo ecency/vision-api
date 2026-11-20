@@ -138,6 +138,9 @@ public sealed class NodeHealthTracker
         public long LastRateLimitAtMs = long.MinValue / 4;
         public long FailureParkedUntilMs;
         public int FailureParkStreak;
+        // When each park last began or grew, as a ParkSeq mark: tells a park
+        // that began since a request was admitted from one it was let into.
+        public long RateParkSeq, FailureParkSeq;
         // Recent failure fraction (1 = every recent call failed).
         public double FailureRate;
         // Hard failures only (timeouts, refusals, bad answers), never 429s: a
@@ -183,6 +186,8 @@ public sealed class NodeHealthTracker
 
     private readonly NodeHealth[] _health;
     private readonly object _lock = new();
+    // Bumped under the lock each time a park begins or grows (see SpendAnother).
+    private long _parkSeq;
     private readonly Func<long> _clock;
     private readonly bool _learnRates;
 
@@ -281,6 +286,7 @@ public sealed class NodeHealthTracker
             {
                 var parkMs = Math.Min(FailureParkBaseMs << Math.Min(h.FailureParkStreak, 2), FailureParkMaxMs);
                 h.FailureParkedUntilMs = now + parkMs;
+                h.FailureParkSeq = ++_parkSeq;
                 h.FailureParkStreak++;
             }
             return h.FailureParkedUntilMs > now;
@@ -333,6 +339,7 @@ public sealed class NodeHealthTracker
                 var parkMs = retryAfterMs
                              ?? Math.Min(RateLimitBaseMs << Math.Min(h.RateLimitStreak, 3), RateLimitMaxMs);
                 h.RateLimitedUntilMs = now + parkMs;
+                h.RateParkSeq = ++_parkSeq;
                 h.RateLimitStreak++;
             }
             else if (sameBurst)
@@ -341,7 +348,7 @@ public sealed class NodeHealthTracker
                 // server names is still honoured.
                 if (retryAfterMs is { } named)
                 {
-                    h.RateLimitedUntilMs = Math.Max(h.RateLimitedUntilMs, now + named);
+                    ExtendRatePark(h, now + named);
                 }
             }
             else
@@ -357,12 +364,36 @@ public sealed class NodeHealthTracker
                     ? (h.RateLimitStreak == 0 ? named : Math.Max(named, ladderMs))
                     : ladderMs;
                 // Never shorten a park already in force: a wait the server
-                // named earlier still stands.
-                h.RateLimitedUntilMs = Math.Max(h.RateLimitedUntilMs, now + parkMs);
+                // named earlier still stands. A new refusal all the same, even
+                // when the park does not grow (see SpendAnother).
+                ExtendRatePark(h, now + parkMs);
+                h.RateParkSeq = ++_parkSeq;
                 h.RateLimitStreak++;
             }
             h.LastRateLimitAtMs = now;
         }
+    }
+
+    /// <summary>Some other node is neither failure-parked nor busy half-open.
+    /// Call under the lock.</summary>
+    private bool OthersAvailable(int nodeIndex, long now)
+    {
+        for (var j = 0; j < _health.Length; j++)
+        {
+            if (j == nodeIndex) continue;
+            var o = _health[j];
+            var oParked = o.FailureParkedUntilMs > now;
+            var oBusy = !oParked && o.FailureParkStreak > 0 && o.InFlight > 0;
+            if (!oParked && !oBusy) return true;
+        }
+        return false;
+    }
+
+    private void ExtendRatePark(NodeHealth h, long untilMs)
+    {
+        if (untilMs <= h.RateLimitedUntilMs) return;
+        h.RateLimitedUntilMs = untilMs;
+        h.RateParkSeq = ++_parkSeq;
     }
 
     private static double BurstCapacity(NodeHealth h) => Math.Max(1, h.RatePerS * RateBurstSeconds);
@@ -573,28 +604,23 @@ public sealed class NodeHealthTracker
     /// <inheritdoc cref="Admit(int, bool, RateUse)"/>
     /// <param name="admittedAtMs">The time admission was decided, under the same
     /// lock: pass it to <see cref="RecordRateLimited"/> as the send time.</param>
-    public Admission Admit(int nodeIndex, bool allowRateLimitParked, RateUse rateUse, out long admittedAtMs)
+    public Admission Admit(int nodeIndex, bool allowRateLimitParked, RateUse rateUse, out long admittedAtMs) =>
+        Admit(nodeIndex, allowRateLimitParked, rateUse, out admittedAtMs, out _);
+
+    /// <inheritdoc cref="Admit(int, bool, RateUse, out long)"/>
+    /// <param name="parkMark">Marks the parks in force at admission: pass it to
+    /// <see cref="SpendAnother"/> for a further request in the same attempt.</param>
+    public Admission Admit(int nodeIndex, bool allowRateLimitParked, RateUse rateUse, out long admittedAtMs, out long parkMark)
     {
         lock (_lock)
         {
             var now = NowMs;
             admittedAtMs = now;
+            parkMark = _parkSeq;
             var h = _health[nodeIndex];
             var parked = h.FailureParkedUntilMs > now;
             var halfOpenBusy = !parked && h.FailureParkStreak > 0 && h.InFlight > 0;
-            if (parked || halfOpenBusy)
-            {
-                var othersAvailable = false;
-                for (var j = 0; j < _health.Length && !othersAvailable; j++)
-                {
-                    if (j == nodeIndex) continue;
-                    var o = _health[j];
-                    var oParked = o.FailureParkedUntilMs > now;
-                    var oBusy = !oParked && o.FailureParkStreak > 0 && o.InFlight > 0;
-                    othersAvailable = !oParked && !oBusy;
-                }
-                if (othersAvailable) return Admission.Refused;
-            }
+            if ((parked || halfOpenBusy) && OthersAvailable(nodeIndex, now)) return Admission.Refused;
             if (!allowRateLimitParked && h.RateLimitedUntilMs > now) return Admission.RateLimitParked;
             if (_learnRates)
             {
@@ -617,18 +643,25 @@ public sealed class NodeHealthTracker
     /// A further request inside an attempt already admitted (the same-node
     /// fallback after an `unknown method`): it spends one more unit of the
     /// node's rate, into debt if none is left, without counting as over-rate,
-    /// since no node was chosen for it. Returns its send time, decided under
-    /// the lock, for <see cref="RecordRateLimited"/>; null when the node was
-    /// parked (for a 429 or for failing) since the first request, so the
-    /// further request is not sent into the park.
+    /// since no node was chosen for it. <paramref name="sentAtMs"/> is its send
+    /// time, decided under the lock, for <see cref="RecordRateLimited"/>.
+    ///
+    /// Not sent into a park that began since the first request was admitted
+    /// (<paramref name="parkMark"/>, from Admit): Refused for a failure park (an
+    /// outage) when another node can serve, as Admit has it; RateLimitParked
+    /// for a 429 park, or a 429 inside one. A park the first request was let
+    /// into (a probe) does not stop it: the node has just answered.
     /// </summary>
-    public long? SpendAnother(int nodeIndex)
+    public Admission SpendAnother(int nodeIndex, long parkMark, out long sentAtMs)
     {
         lock (_lock)
         {
             var now = NowMs;
+            sentAtMs = now;
             var h = _health[nodeIndex];
-            if (h.RateLimitedUntilMs > now || h.FailureParkedUntilMs > now) return null;
+            if (h.FailureParkedUntilMs > now && h.FailureParkSeq > parkMark && OthersAvailable(nodeIndex, now))
+                return Admission.Refused;
+            if (h.RateLimitedUntilMs > now && h.RateParkSeq > parkMark) return Admission.RateLimitParked;
             if (_learnRates)
             {
                 Refill(h, now);
@@ -636,7 +669,7 @@ public sealed class NodeHealthTracker
                 h.Tokens = Math.Max(h.Tokens - 1, -BurstCapacity(h));
                 h.WindowSent++;
             }
-            return now;
+            return Admission.Admitted;
         }
     }
 

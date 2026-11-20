@@ -368,7 +368,7 @@ public sealed class HiveRpcClient
                         Pass.Ranked => NodeHealthTracker.RateUse.Require,
                         Pass.OverRate => NodeHealthTracker.RateUse.Overdraw,
                         _ => NodeHealthTracker.RateUse.Spend,
-                    }, out var sentAt);
+                    }, out var sentAt, out var parkMark);
                 if (admission == NodeHealthTracker.Admission.OverRate)
                 {
                     // Not sent. A first look makes it an over-rate candidate; a
@@ -380,6 +380,9 @@ public sealed class HiveRpcClient
                 {
                     sawRateLimit = true;
                     throttledNodes.Add(nodeIndex);
+                    // No request was sent: a real error from another node says more.
+                    lastError ??= new NodeUnavailableException(
+                        $"RPC node {node} is parked for a 429", advanceImmediately: true, isRateLimit: true);
                     if (attempt == 0) deferred.Add(nodeIndex);
                     break;
                 }
@@ -388,6 +391,8 @@ public sealed class HiveRpcClient
                     // Failure-parked, or a probe of it is already in flight: an
                     // outage, not throttling. No request was sent.
                     sawOtherFailure = true;
+                    lastError ??= new NodeUnavailableException(
+                        $"RPC node {node} is parked for failing", advanceImmediately: true);
                     break;
                 }
                 if (isProbe) probeSent = true;
@@ -412,11 +417,25 @@ public sealed class HiveRpcClient
                         // not on the probe that does not recur within the TTL.
                         // A second request to the node: it spends its own unit of
                         // the node's rate and has its own send time. If the node
-                        // was parked since the first request, it is not sent.
-                        if (_health.SpendAnother(nodeIndex) is not { } fallbackAt)
+                        // was parked since the first request, it is not sent: a
+                        // 429 park makes the call throttled there, a failure park
+                        // is an outage, not throttling.
+                        var again = _health.SpendAnother(nodeIndex, parkMark, out var fallbackAt);
+                        if (again == NodeHealthTracker.Admission.RateLimitParked)
                         {
                             sawRateLimit = true;
                             throttledNodes.Add(nodeIndex);
+                            lastError = new NodeUnavailableException(
+                                $"RPC node {node} was parked for a 429 before the {method} fallback",
+                                advanceImmediately: true, isRateLimit: true);
+                            break;
+                        }
+                        if (again == NodeHealthTracker.Admission.Refused)
+                        {
+                            sawOtherFailure = true;
+                            lastError = new NodeUnavailableException(
+                                $"RPC node {node} was parked for failing before the {method} fallback",
+                                advanceImmediately: true);
                             break;
                         }
                         sentAt = fallbackAt;
