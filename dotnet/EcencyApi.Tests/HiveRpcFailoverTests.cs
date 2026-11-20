@@ -25,6 +25,9 @@ public class HiveRpcFailoverTests
         /// answer with a well-formed account whose posting_json_metadata is empty.</summary>
         public bool ServesMetadata = true;
 
+        /// <summary>Headers added to every response.</summary>
+        public Dictionary<string, string> Headers = new();
+
         // A healthy node's get_accounts result. Account-metadata presence matters:
         // GetAccounts prefers a node that serves it, so the default stub carries it.
         private string AccountResultBody =>
@@ -62,7 +65,8 @@ public class HiveRpcFailoverTests
                 {
                     requestBody = await reader.ReadToEndAsync();
                 }
-                var status = _handler(MethodOf(requestBody));
+                var method = MethodOf(requestBody);
+                var status = _handler(method);
                 byte[] body;
                 if (status == 200)
                 {
@@ -108,11 +112,21 @@ public class HiveRpcFailoverTests
                         "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[\"invalid\"]}");
                     status = 200;
                 }
+                else if (status == -6)
+                {
+                    // hivemind without the method asked for.
+                    var bare = method[(method.LastIndexOf('.') + 1)..];
+                    body = Encoding.UTF8.GetBytes(
+                        "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32602,\"message\":\"Assert Exception:unknown method: bridge_api"
+                        + bare + "\"}}");
+                    status = 200;
+                }
                 else
                 {
                     body = Encoding.UTF8.GetBytes("rate limited");
                 }
 
+                foreach (var (k, v) in Headers) ctx.Response.Headers[k] = v;
                 ctx.Response.StatusCode = status;
                 ctx.Response.ContentType = "application/json";
                 ctx.Response.ContentLength64 = body.Length;
@@ -446,6 +460,115 @@ public class HiveRpcFailoverTests
         Assert.Equal(3, view["calls"]!.GetValue<long>());
         Assert.Equal(2, view["rate_limited"]!.GetValue<long>());
         Assert.Equal(0, view["parked_for_ms"]!.GetValue<long>());
+    }
+
+    [Fact]
+    public async Task TheNodeTrace_RecordsEveryUpstreamRequest_WithoutChangingRouting()
+    {
+        // The throttled node is still tried first and the call still lands on
+        // the good node; the trace saw one 429 on one and one answer on the
+        // other, in the second they were sent.
+        await using var throttled = new StubNode(() => 429);
+        await using var good = new StubNode(() => 200);
+        long unixMs = 1_700_000_040_000;
+        var lines = new List<string>();
+        var client = new HiveRpcClient(new[] { throttled.Url, good.Url }, timeoutMs: 500, failoverThreshold: 1,
+            clock: null, traceClock: () => unixMs, traceLog: lines.Add);
+
+        Assert.NotNull(await client.Call("condenser_api", "get_accounts", new JsonArray()));
+
+        Assert.Equal(1, throttled.Hits);
+        Assert.Equal(1, good.Hits);
+        unixMs += 60_000 + NodeTrace.GraceMs;
+        client.Trace.Flush();
+        Assert.Equal(2, lines.Count);
+        Assert.Contains(" rl=1,", lines.Single(l => l.Contains("node=127.0.0.1:" + new Uri(throttled.Url).Port + " ")));
+        Assert.Contains(" ok=1,", lines.Single(l => l.Contains("node=127.0.0.1:" + new Uri(good.Url).Port + " ")));
+    }
+
+    [Fact]
+    public async Task TheNodeTrace_CountsATimeoutApart()
+    {
+        await using var hung = new StubNode(() => -1);
+        long unixMs = 1_700_000_040_000;
+        var lines = new List<string>();
+        var client = new HiveRpcClient(new[] { hung.Url }, timeoutMs: 200, failoverThreshold: 1,
+            clock: null, traceClock: () => unixMs, traceLog: lines.Add);
+
+        await Assert.ThrowsAnyAsync<Exception>(() => client.Call("condenser_api", "get_accounts", new JsonArray()));
+
+        unixMs += 60_000 + NodeTrace.GraceMs;
+        client.Trace.Flush();
+        var line = Assert.Single(lines);
+        Assert.Contains(" timeout=1,", line);
+        Assert.Contains(" fail=- ", line);
+    }
+
+    [Fact]
+    public async Task TheNodeTrace_KeepsA5xxApart_WithTheLimitersHeaders()
+    {
+        await using var overloaded = new StubNode(() => 503);
+        overloaded.Headers["Server"] = "nginx";
+        overloaded.Headers["X-RateLimit-Limit"] = "10";
+        await using var good = new StubNode(() => 200);
+        long unixMs = 1_700_000_040_000;
+        var lines = new List<string>();
+        var client = new HiveRpcClient(new[] { overloaded.Url, good.Url }, timeoutMs: 500, failoverThreshold: 1,
+            clock: null, traceClock: () => unixMs, traceLog: lines.Add);
+
+        Assert.NotNull(await client.Call("condenser_api", "get_accounts", new JsonArray()));
+
+        unixMs += 60_000 + NodeTrace.GraceMs;
+        client.Trace.Flush();
+        var line = lines.Single(l => l.Contains("node=127.0.0.1:" + new Uri(overloaded.Url).Port + " "));
+        Assert.Contains(" e5xx=1,", line);
+        Assert.Contains(" fail=- ", line);
+        Assert.Contains(" hdr=503|", line);
+        Assert.Contains("server:", line);
+        Assert.Contains("x-ratelimit-limit:10", line);
+    }
+
+    [Fact]
+    public async Task TheNodeTrace_SamplesTheHeadersOfAnyRefusal_WithItsStatus()
+    {
+        // A WAF's 403 is a limiter answer too.
+        await using var blocked = new StubNode(() => 403);
+        blocked.Headers["Server"] = "cloudflare";
+        long unixMs = 1_700_000_040_000;
+        var lines = new List<string>();
+        var client = new HiveRpcClient(new[] { blocked.Url }, timeoutMs: 500, failoverThreshold: 1,
+            clock: null, traceClock: () => unixMs, traceLog: lines.Add);
+
+        await Assert.ThrowsAnyAsync<Exception>(() => client.Call("condenser_api", "get_accounts", new JsonArray()));
+
+        unixMs += 60_000 + NodeTrace.GraceMs;
+        client.Trace.Flush();
+        var line = Assert.Single(lines);
+        Assert.Contains(" fail=1,", line);
+        Assert.Contains(" hdr=403|", line);
+        Assert.Contains("server:cloudflare", line);
+    }
+
+    [Fact]
+    public async Task TheNodeTrace_CountsTheV1Fallback_AsASecondRequest()
+    {
+        // `unknown method`, then the v1 method on the same node: two requests
+        // its limiter counted, both answered.
+        await using var old = new StubNode(m => m.EndsWith("_v2") ? -6 : 200);
+        long unixMs = 1_700_000_040_000;
+        var lines = new List<string>();
+        var client = new HiveRpcClient(new[] { old.Url }, timeoutMs: 500, failoverThreshold: 1,
+            clock: null, traceClock: () => unixMs, traceLog: lines.Add);
+
+        await client.CallMethod("bridge.get_post_v2", new JsonObject { ["author"] = "a", ["permlink"] = "p" },
+            fallback: ("bridge.get_post", new JsonObject { ["author"] = "a", ["permlink"] = "p" }, "bridge.*_v2"));
+
+        Assert.Equal(2, old.Hits);
+        unixMs += 60_000 + NodeTrace.GraceMs;
+        client.Trace.Flush();
+        var line = Assert.Single(lines);
+        Assert.Contains(" sent=2,", line);
+        Assert.Contains(" ok=2,", line);
     }
 
     [Fact]

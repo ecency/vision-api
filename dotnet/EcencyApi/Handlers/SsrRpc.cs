@@ -96,7 +96,8 @@ public static partial class SsrRpc
     internal static HiveRpcClient Client = new(
         Config.SsrRpcNodes ?? HiveClients.DefaultNodes.ToArray(),
         timeoutMs: Config.SsrNodeTimeoutMs,
-        failoverThreshold: 1);
+        failoverThreshold: 1,
+        name: "ssr");
 
     internal static BytesCache Cache = new(Config.SsrCacheBytes);
 

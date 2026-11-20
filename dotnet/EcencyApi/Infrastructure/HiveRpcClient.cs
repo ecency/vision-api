@@ -35,6 +35,9 @@ public sealed class HiveRpcClient
     private readonly int _timeoutMs;
     private readonly int _failoverThreshold;
     private readonly NodeHealthTracker _health;
+    private readonly Func<long> _traceClock;
+    // Upstream requests in flight per node, for the trace.
+    private readonly int[] _inFlight;
     private readonly Func<long> _clock;
     private int _seq;
 
@@ -47,20 +50,33 @@ public sealed class HiveRpcClient
 
     // timeoutMs 2000 / failoverThreshold 2 mirror the dhive Client options the
     // Node service constructed its clients with.
-    public HiveRpcClient(string[] nodes, int timeoutMs = 2000, int failoverThreshold = 2)
-        : this(nodes, timeoutMs, failoverThreshold, null)
+    /// <param name="name">Names this pool in the node trace's log lines.</param>
+    public HiveRpcClient(string[] nodes, int timeoutMs = 2000, int failoverThreshold = 2, string name = "default")
+        : this(nodes, timeoutMs, failoverThreshold, null, name: name)
     {
     }
 
     /// <param name="clock">Test seam for the health tracker's notion of time.</param>
-    internal HiveRpcClient(string[] nodes, int timeoutMs, int failoverThreshold, Func<long>? clock)
+    /// <param name="traceClock">Test seam: unix ms for the node trace.</param>
+    /// <param name="traceLog">Test seam: where the node trace writes its lines.</param>
+    internal HiveRpcClient(string[] nodes, int timeoutMs, int failoverThreshold, Func<long>? clock,
+        Func<long>? traceClock = null, Action<string>? traceLog = null, string name = "default")
     {
         _nodes = nodes;
         _timeoutMs = timeoutMs;
         _failoverThreshold = Math.Max(1, failoverThreshold);
         _health = new NodeHealthTracker(nodes.Length, clock);
         _clock = clock ?? (() => Environment.TickCount64);
+        _traceClock = traceClock ?? NodeTrace.MonotonicUnixMs();
+        _inFlight = new int[nodes.Length];
+        // host[:port], so nodes on one host stay apart.
+        Trace = new NodeTrace(
+            nodes.Select(n => Uri.TryCreate(n, UriKind.Absolute, out var u) ? u.Authority : n).ToArray(),
+            _traceClock, traceLog ?? Console.WriteLine, name);
     }
+
+    /// <summary>Per-node, per-second upstream requests and outcomes; see NodeTrace.</summary>
+    internal NodeTrace Trace { get; }
 
     public IReadOnlyList<string> Nodes => _nodes;
 
@@ -321,7 +337,7 @@ public sealed class HiveRpcClient
                     JsonNode? result;
                     try
                     {
-                        result = await CallNode(node, useFallback ? fallbackBody! : body);
+                        result = await TracedCallNode(nodeIndex, useFallback ? fallbackBody! : body);
                     }
                     catch (RpcException e) when (fallbackBody != null && !useFallback && IsUnknownMethod(e.Message, method))
                     {
@@ -334,7 +350,7 @@ public sealed class HiveRpcClient
                         // Rank the node on the v1 answer it will give from now on,
                         // not on the probe that does not recur within the TTL.
                         started = NowMs;
-                        result = await CallNode(node, fallbackBody);
+                        result = await TracedCallNode(nodeIndex, fallbackBody);
                     }
                     if (validateResult != null && !validateResult(result))
                     {
@@ -463,6 +479,10 @@ public sealed class HiveRpcClient
         public bool IsRateLimit { get; }
         public bool IsTimeout { get; }
         public int? RetryAfterMs { get; }
+        /// <summary>The HTTP status, when the node answered with one.</summary>
+        public int? StatusCode { get; init; }
+        /// <summary>A 429 or 5xx's limiter headers, for the node trace.</summary>
+        public string? LimitHeaders { get; init; }
         public Exception? Cause { get; private set; }
 
         public NodeUnavailableException(string message, bool advanceImmediately,
@@ -480,6 +500,75 @@ public sealed class HiveRpcClient
     // Overload statuses mean "this node is throttling/failing at the edge" —
     // skip it now rather than burning a retry that will fail the same way.
     private static bool IsOverloadStatus(int status) => status is 429 or 502 or 503 or 504;
+
+    // What a refusing node says about itself, for the trace: the status, the
+    // IETF RateLimit-* and common X-RateLimit-* headers, Retry-After, and who
+    // answered (Server, Via). Never throws: it must not change how the
+    // failure is handled.
+    private static string? LimitHeadersOf(HttpResponseMessage resp, int status)
+    {
+        try
+        {
+            var parts = resp.Headers.Concat(resp.Content.Headers)
+                .Where(h => h.Key.Contains("ratelimit", StringComparison.OrdinalIgnoreCase)
+                            || h.Key.Equals("Retry-After", StringComparison.OrdinalIgnoreCase)
+                            || h.Key.Equals("Server", StringComparison.OrdinalIgnoreCase)
+                            || h.Key.Equals("Via", StringComparison.OrdinalIgnoreCase))
+                .Select(h => $"{h.Key.ToLowerInvariant()}:{string.Join(',', h.Value)}");
+            return $"{status}|{string.Join(';', parts)}";
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // Every upstream request goes through here, so the trace sees each one,
+    // including failovers, same-node retries, the v1 fallback and the extra
+    // requests a preference makes. The node's own error is an answer.
+    private async Task<JsonNode?> TracedCallNode(int nodeIndex, string body)
+    {
+        var sentAt = _traceClock();
+        var inFlight = Interlocked.Increment(ref _inFlight[nodeIndex]);
+        var started = Environment.TickCount64;
+        int Elapsed() => (int)Math.Min(int.MaxValue, Environment.TickCount64 - started);
+        try
+        {
+            var result = await CallNode(_nodes[nodeIndex], body);
+            Trace.Record(nodeIndex, sentAt, NodeTrace.Outcome.Answered, latencyMs: Elapsed(), inFlight: inFlight);
+            return result;
+        }
+        catch (RpcException)
+        {
+            Trace.Record(nodeIndex, sentAt, NodeTrace.Outcome.Answered, latencyMs: Elapsed(), inFlight: inFlight);
+            throw;
+        }
+        catch (NodeUnavailableException e)
+        {
+            var outcome = e.IsRateLimit ? NodeTrace.Outcome.RateLimited
+                : e.IsTimeout ? NodeTrace.Outcome.Timeout
+                : e.StatusCode >= 500 ? NodeTrace.Outcome.ServerError
+                : NodeTrace.Outcome.Failed;
+            Trace.Record(nodeIndex, sentAt, outcome, e.RetryAfterMs, inFlight: inFlight, headers: e.LimitHeaders);
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            // The per-node timeout firing while the body was read: headers came,
+            // the body stalled.
+            Trace.Record(nodeIndex, sentAt, NodeTrace.Outcome.Timeout, inFlight: inFlight);
+            throw;
+        }
+        catch
+        {
+            Trace.Record(nodeIndex, sentAt, NodeTrace.Outcome.Failed, inFlight: inFlight);
+            throw;
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _inFlight[nodeIndex]);
+        }
+    }
 
     private async Task<JsonNode?> CallNode(string node, string body)
     {
@@ -517,7 +606,11 @@ public sealed class HiveRpcClient
                     $"RPC node {node} returned {status}",
                     advanceImmediately: IsOverloadStatus(status),
                     isRateLimit: status == 429,
-                    retryAfterMs: retryAfter);
+                    retryAfterMs: retryAfter)
+                {
+                    StatusCode = status,
+                    LimitHeaders = LimitHeadersOf(resp, status),
+                };
             }
 
             var text = await resp.Content.ReadAsStringAsync(cts.Token);
