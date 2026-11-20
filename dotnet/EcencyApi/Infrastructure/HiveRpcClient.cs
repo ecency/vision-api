@@ -285,6 +285,7 @@ public sealed class HiveRpcClient
         // the advised wait is how long until the first of them can serve again.
         var deferred = new List<int>();
         var throttledNodes = new HashSet<int>();
+        var leftOutNodes = new HashSet<int>();
 
         var ordered = _health.OrderedNodeIndices(callClass);
         // A node left out of the ordering is parked for failing: part of the
@@ -321,7 +322,17 @@ public sealed class HiveRpcClient
             var overRateCandidates = new List<int>(overRate);
             while (overRateCandidates.Count > 0)
             {
-                if (refused) overRateCandidates.RemoveAll(i => _health.RateLimitedRecently(i, RefusedRecentlyMs));
+                if (refused)
+                {
+                    // Left out for refusing a moment ago, usually not parked:
+                    // they count toward the wait advised if the call ends
+                    // throttled, until they would be tried again.
+                    foreach (var i in overRateCandidates.Where(i => _health.RateLimitedRecently(i, RefusedRecentlyMs)).ToList())
+                    {
+                        overRateCandidates.Remove(i);
+                        leftOutNodes.Add(i);
+                    }
+                }
                 if (overRateCandidates.Count == 0) break;
                 var next = _health.OverRateOrder(overRateCandidates)[0];
                 overRateCandidates.Remove(next);
@@ -399,6 +410,16 @@ public sealed class HiveRpcClient
                         _lacksUntil[(nodeIndex, family!)] = _clock() + UnsupportedMethodTtlMs;
                         // Rank the node on the v1 answer it will give from now on,
                         // not on the probe that does not recur within the TTL.
+                        // A second request to the node: it spends its own unit of
+                        // the node's rate and has its own send time. If the node
+                        // was parked since the first request, it is not sent.
+                        if (_health.SpendAnother(nodeIndex) is not { } fallbackAt)
+                        {
+                            sawRateLimit = true;
+                            throttledNodes.Add(nodeIndex);
+                            break;
+                        }
+                        sentAt = fallbackAt;
                         started = NowMs;
                         result = await CallNode(node, fallbackBody);
                     }
@@ -490,7 +511,10 @@ public sealed class HiveRpcClient
         if (sawRateLimit && !sawOtherFailure)
         {
             // A park that lapsed during the call counts as 0: that node can serve now.
-            var wait = throttledNodes.Min(i => _health.RateLimitedForMs(i));
+            var wait = throttledNodes.Select(i => _health.RateLimitedForMs(i))
+                .Concat(leftOutNodes.Select(i => Math.Max(_health.RateLimitedForMs(i),
+                    _health.RateLimitedRecentlyForMs(i, RefusedRecentlyMs))))
+                .Min();
             throw new UpstreamRateLimitedException(
                 $"every RPC node is rate-limiting {method}", (int)Math.Min(int.MaxValue, wait));
         }

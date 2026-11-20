@@ -361,6 +361,19 @@ public class NodeRateLearningTests
     }
 
     [Fact]
+    public void ALaterRateLimit_NeverShortensANamedWait()
+    {
+        long now = 0;
+        var tracker = new NodeHealthTracker(1, () => now, learnRates: true);
+        tracker.RecordRateLimited(0, 60_000, sentAtMs: 0);
+
+        now = 1_000; // a probe's 429, a new signal: the ladder's 10s step
+        tracker.RecordRateLimited(0, null, sentAtMs: 1_000);
+
+        Assert.Equal(59_000, tracker.RateLimitedForMs(0));
+    }
+
+    [Fact]
     public void ANamedWait_IsHonoured_EvenFromACallSentBeforeTheDecrease()
     {
         long now = 0;
@@ -660,6 +673,179 @@ public class NodeRateLearningTests
         Assert.NotNull(await client.Call("condenser_api", "get_dynamic_global_properties", new JsonArray()));
         Assert.Equal(1, recovered.Ok);
         Assert.Equal(0, paused.Limited);
+    }
+
+    /// <summary>A node without the v2 method: `unknown method` for it, and
+    /// <paramref name="v1"/> decides the v1 fallback's status.</summary>
+    private sealed class OldMethodStub : IAsyncDisposable
+    {
+        private readonly HttpListener _listener = new();
+        private readonly Func<int> _v1;
+        private readonly Action _onV2;
+        public string Url { get; }
+        public int V2, V1;
+
+        public OldMethodStub(Func<int> v1, Action? onV2 = null)
+        {
+            _v1 = v1;
+            _onV2 = onV2 ?? (() => { });
+            var l = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+            l.Start();
+            var port = ((IPEndPoint)l.LocalEndpoint).Port;
+            l.Stop();
+            Url = $"http://127.0.0.1:{port}/";
+            _listener.Prefixes.Add(Url);
+            _listener.Start();
+            _ = Loop();
+        }
+
+        private async Task Loop()
+        {
+            while (_listener.IsListening)
+            {
+                HttpListenerContext ctx;
+                try { ctx = await _listener.GetContextAsync(); }
+                catch { return; }
+                string req;
+                using (var reader = new StreamReader(ctx.Request.InputStream)) req = await reader.ReadToEndAsync();
+                int status;
+                string body;
+                if (req.Contains("get_post_v2"))
+                {
+                    Interlocked.Increment(ref V2);
+                    _onV2();
+                    status = 200;
+                    body = "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32602,\"message\":\"Assert Exception:unknown method: bridge_apiget_post_v2\"}}";
+                }
+                else
+                {
+                    Interlocked.Increment(ref V1);
+                    status = _v1();
+                    body = status == 200 ? "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"v\":1}}" : "rate limited";
+                }
+                var bytes = Encoding.UTF8.GetBytes(body);
+                ctx.Response.StatusCode = status;
+                ctx.Response.ContentLength64 = bytes.Length;
+                try
+                {
+                    await ctx.Response.OutputStream.WriteAsync(bytes);
+                    ctx.Response.Close();
+                }
+                catch { /* client moved on */ }
+            }
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            _listener.Stop();
+            _listener.Close();
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private static Task<JsonNode?> GetPostV2(HiveRpcClient client) =>
+        client.CallMethod("bridge.get_post_v2", new JsonObject { ["author"] = "a", ["permlink"] = "p" },
+            fallback: ("bridge.get_post", new JsonObject { ["author"] = "a", ["permlink"] = "p" }, "bridge.*_v2"));
+
+    [Fact]
+    public async Task TheSameNodeFallback_SpendsItsOwnUnitOfRate()
+    {
+        // `unknown method` then the v1 fallback: two requests to the node, so
+        // two units of its rate, not one.
+        await using var node = new OldMethodStub(() => 200);
+        long now = 0;
+        var client = new HiveRpcClient(new[] { node.Url }, timeoutMs: 1000, failoverThreshold: 1, clock: () => now);
+
+        Assert.NotNull(await GetPostV2(client));
+        Assert.Equal(1, node.V2);
+        Assert.Equal(1, node.V1);
+
+        var left = 0;
+        while (client.Health.Admit(0, allowRateLimitParked: false, NodeHealthTracker.RateUse.Require) == NodeHealthTracker.Admission.Admitted)
+        {
+            client.Health.EndAttempt(0);
+            left++;
+        }
+        Assert.Equal(3, left); // a bucket of 5, less the two requests
+    }
+
+    [Fact]
+    public async Task AFallbacksRateLimit_IsTimedByTheFallbackItself()
+    {
+        // Between the v2 answer and the fallback, another call's 429 halves the
+        // node's rate and pauses it; the pause is over by the time the fallback
+        // goes out. The fallback is sent after that decrease, so its own 429 is
+        // new news and halves again; timed by the first request it would read
+        // as part of the earlier burst.
+        HiveRpcClient client = null!;
+        long now = 0;
+        await using var node = new OldMethodStub(() => 429, onV2: () =>
+        {
+            now = 100;
+            client.Health.RecordRateLimited(0, null, sentAtMs: 100);
+            now = 100 + Pause + 100;
+        });
+        client = new HiveRpcClient(new[] { node.Url }, timeoutMs: 1000, failoverThreshold: 1, clock: () => now);
+        var start = client.HealthSnapshot()[0]!["rate_per_s"]!.GetValue<double>();
+
+        await Assert.ThrowsAsync<HiveRpcClient.UpstreamRateLimitedException>(() => GetPostV2(client));
+
+        Assert.Equal(start / 4, client.HealthSnapshot()[0]!["rate_per_s"]!.GetValue<double>(), 1);
+    }
+
+    [Fact]
+    public async Task AFallback_IsNotSentIntoAParkThatBeganMeanwhile()
+    {
+        // Another call's 429 parks the node between the v2 answer and the
+        // fallback. Sending the fallback anyway would draw a 429 that counts as
+        // new, halving the rate again and lengthening the park.
+        HiveRpcClient client = null!;
+        long now = 0;
+        await using var node = new OldMethodStub(() => 200, onV2: () =>
+        {
+            now = 100;
+            client.Health.RecordRateLimited(0, null, sentAtMs: 100);
+            now = 150;
+        });
+        client = new HiveRpcClient(new[] { node.Url }, timeoutMs: 1000, failoverThreshold: 1, clock: () => now);
+        var start = client.HealthSnapshot()[0]!["rate_per_s"]!.GetValue<double>();
+
+        await Assert.ThrowsAsync<HiveRpcClient.UpstreamRateLimitedException>(() => GetPostV2(client));
+
+        Assert.Equal(0, node.V1);
+        Assert.Equal(start / 2, client.HealthSnapshot()[0]!["rate_per_s"]!.GetValue<double>(), 1);
+        Assert.Equal(Pause - 50, client.Health.RateLimitedForMs(0));
+    }
+
+    [Fact]
+    public async Task ARefusedCall_CountsTheNodesItLeftOut_InTheAdvisedWait()
+    {
+        // Both nodes refused at 0 and paused 1s. At 1.5s both are over their
+        // rate; the call sends over the rate to one, which refuses again and
+        // goes to the 10s step. The other was left out only for having
+        // refused 1.5s ago and is not parked: it is tried again once that
+        // refusal is 2s old, in 500ms, so that is the advice, not 10s.
+        await using var a = new LimitedStub(() => false);
+        await using var b = new LimitedStub(() => false);
+        long now = 0;
+        var client = new HiveRpcClient(new[] { a.Url, b.Url }, timeoutMs: 1000, failoverThreshold: 1, clock: () => now);
+        await Assert.ThrowsAsync<HiveRpcClient.UpstreamRateLimitedException>(() =>
+            client.Call("condenser_api", "get_dynamic_global_properties", new JsonArray()));
+
+        now = 1_500;
+        for (var n = 0; n < 2; n++)
+        {
+            for (var i = 0; i < 10; i++)
+            {
+                client.Health.Admit(n, allowRateLimitParked: false, NodeHealthTracker.RateUse.Overdraw);
+                client.Health.EndAttempt(n);
+            }
+        }
+        var ex = await Assert.ThrowsAsync<HiveRpcClient.UpstreamRateLimitedException>(() =>
+            client.Call("condenser_api", "get_dynamic_global_properties", new JsonArray()));
+
+        Assert.Equal(3, a.Limited + b.Limited);
+        Assert.Equal(500, ex.RetryAfterMs);
     }
 
     [Fact]

@@ -356,7 +356,9 @@ public sealed class NodeHealthTracker
                 var parkMs = retryAfterMs is { } named
                     ? (h.RateLimitStreak == 0 ? named : Math.Max(named, ladderMs))
                     : ladderMs;
-                h.RateLimitedUntilMs = now + parkMs;
+                // Never shorten a park already in force: a wait the server
+                // named earlier still stands.
+                h.RateLimitedUntilMs = Math.Max(h.RateLimitedUntilMs, now + parkMs);
                 h.RateLimitStreak++;
             }
             h.LastRateLimitAtMs = now;
@@ -391,6 +393,16 @@ public sealed class NodeHealthTracker
             h.WindowRateLimited = false;
             h.WindowAnswered = false;
             h.WindowStartMs += windows * RateWindowMs;
+        }
+    }
+
+    /// <summary>How long until the node's last 429 is <paramref name="withinMs"/>
+    /// old, 0 when it already is.</summary>
+    public long RateLimitedRecentlyForMs(int nodeIndex, long withinMs)
+    {
+        lock (_lock)
+        {
+            return Math.Max(0, _health[nodeIndex].LastRateLimitAtMs + withinMs - NowMs);
         }
     }
 
@@ -598,6 +610,33 @@ public sealed class NodeHealthTracker
             }
             h.InFlight++;
             return Admission.Admitted;
+        }
+    }
+
+    /// <summary>
+    /// A further request inside an attempt already admitted (the same-node
+    /// fallback after an `unknown method`): it spends one more unit of the
+    /// node's rate, into debt if none is left, without counting as over-rate,
+    /// since no node was chosen for it. Returns its send time, decided under
+    /// the lock, for <see cref="RecordRateLimited"/>; null when the node was
+    /// parked (for a 429 or for failing) since the first request, so the
+    /// further request is not sent into the park.
+    /// </summary>
+    public long? SpendAnother(int nodeIndex)
+    {
+        lock (_lock)
+        {
+            var now = NowMs;
+            var h = _health[nodeIndex];
+            if (h.RateLimitedUntilMs > now || h.FailureParkedUntilMs > now) return null;
+            if (_learnRates)
+            {
+                Refill(h, now);
+                if (h.Tokens < 1) h.WindowLimited = true;
+                h.Tokens = Math.Max(h.Tokens - 1, -BurstCapacity(h));
+                h.WindowSent++;
+            }
+            return now;
         }
     }
 
