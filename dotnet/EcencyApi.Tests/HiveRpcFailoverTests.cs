@@ -392,6 +392,7 @@ public class HiveRpcFailoverTests
         for (var i = 0; i < 40; i++)
         {
             await client.Call("condenser_api", "get_accounts", new JsonArray());
+            now += 1_000; // within the busy node's sending rate
         }
         // Three overlapping timeouts: the calls start together, each holding an
         // ordering with the busy node first, and all three fail on it at the
@@ -732,7 +733,7 @@ public class HiveRpcFailoverTests
         await Assert.ThrowsAnyAsync<Exception>(() => client.Call("condenser_api", "get_accounts", new JsonArray()));
         Assert.Equal(3, a.Hits + b.Hits + c.Hits); // unparked at the start: each asked once
 
-        now += 1_000; // well inside every park
+        now += 500; // inside every park (a first 429 pauses a node for 1s)
         await Assert.ThrowsAnyAsync<Exception>(() => client.Call("condenser_api", "get_accounts", new JsonArray()));
         Assert.Equal(4, a.Hits + b.Hits + c.Hits);
     }
@@ -750,7 +751,7 @@ public class HiveRpcFailoverTests
         Assert.True(first.RetryAfterMs > 0);
 
         // Skipped as parked counts as throttled too, not as "no nodes".
-        now += 4_000;
+        now += 500; // inside every park (a first 429 pauses a node for 1s)
         var second = await Assert.ThrowsAsync<HiveRpcClient.UpstreamRateLimitedException>(() =>
             client.Call("condenser_api", "get_accounts", new JsonArray()));
         Assert.InRange(second.RetryAfterMs, 1, first.RetryAfterMs);
@@ -821,7 +822,7 @@ public class HiveRpcFailoverTests
         await using var c = new StubNode(() => 200);
         client = new HiveRpcClient(new[] { a.Url, b.Url, c.Url }, timeoutMs: 500, failoverThreshold: 1, clock: () => now);
         client.Health.RecordRateLimited(2, null); // c parked first: lapses first
-        now = 5_000;
+        now = 500; // inside both parks (a first 429 pauses a node for 1s)
 
         var result = await client.Call("condenser_api", "get_accounts", new JsonArray());
         Assert.Equal("served-by", result![0]!["name"]!.GetValue<string>());

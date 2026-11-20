@@ -46,6 +46,15 @@ public enum CallClass
 ///    node that class has not proven scores a neutral prior (1s), so an unknown
 ///    node is explored before a proven-slow one. Config order breaks ties, so
 ///    cold start behaves exactly like the configured list.
+///  - Optional learned sending rates (see the <c>learnRates</c> constructor
+///    argument, used by the Hive pool): each node gets a rate this process may
+///    call it at, learned by additive increase and multiplicative decrease.
+///    A node's limit is per client IP and nodes rarely say what it is, so the
+///    rate is found by probing it: it grows while calls run into it and are
+///    answered, and halves on a 429. Admission can then require the rate, so
+///    calls spill to the next node instead of overrunning the fastest one.
+///    Several processes behind one IP converge to a share of each limit
+///    without coordinating.
 /// </summary>
 public sealed class NodeHealthTracker
 {
@@ -88,6 +97,26 @@ public sealed class NodeHealthTracker
     private const double FailureRateAlpha = 0.1;
     private const double FailureRateParkFloor = 0.5;
 
+    // Learned sending rates (learnRates only). Calls per second.
+    private const double InitialRatePerS = 5;
+    private const double MinRatePerS = 0.5;
+    private const double MaxRatePerS = 200;
+    // A window in which demand ran into the rate and no call was answered 429
+    // raises the rate by this much.
+    private const double RateIncreasePerWindow = 0.5;
+    private const int RateWindowMs = 1_000;
+    // Calls already in flight come back 429 together. A 429 for a call sent
+    // before the last decrease is the same signal: no second halving, no new
+    // park. When the caller cannot say when its call was sent, 429s inside this
+    // hold after a decrease are treated as the same signal.
+    private const int RateDecreaseHoldMs = 1_000;
+    // How much of the rate may be spent at once: a second's worth.
+    private const double RateBurstSeconds = 1;
+    // With learned rates, the first header-less 429 of a streak pauses the node
+    // briefly (the halved rate is what keeps it from 429ing again); a 429 with
+    // no answer since the last one climbs the usual ladder.
+    public const int RateLimitFirstPauseMs = 1_000;
+
     // The class is an index into each node's latency array, so CallClass values
     // must stay contiguous from zero.
     private static readonly int CallClassCount = Enum.GetValues<CallClass>().Length;
@@ -106,9 +135,12 @@ public sealed class NodeHealthTracker
         public long LastFailureAtMs;
         public long RateLimitedUntilMs;
         public int RateLimitStreak;
-        public long LastRateLimitAtMs;
+        public long LastRateLimitAtMs = long.MinValue / 4;
         public long FailureParkedUntilMs;
         public int FailureParkStreak;
+        // When each park last began or grew, as a ParkSeq mark: tells a park
+        // that began since a request was admitted from one it was let into.
+        public long RateParkSeq, FailureParkSeq;
         // Recent failure fraction (1 = every recent call failed).
         public double FailureRate;
         // Hard failures only (timeouts, refusals, bad answers), never 429s: a
@@ -122,6 +154,23 @@ public sealed class NodeHealthTracker
             Enumerable.Range(0, CallClassCount).Select(_ => new LatencyProfile()).ToArray();
         // Lifetime counters, for the stats endpoint.
         public long Calls, Successes, Failures, Timeouts, RateLimits;
+
+        // Learned sending rate (learnRates only): a token bucket refilled at
+        // RatePerS, holding at most a burst's worth, allowed into debt by calls
+        // that go out over the rate.
+        public double RatePerS = InitialRatePerS;
+        public double Tokens = InitialRatePerS * RateBurstSeconds;
+        public long RefilledAtMs;
+        public long WindowStartMs;
+        // Demand ran into the rate during this window / a call was answered 429.
+        public bool WindowLimited, WindowRateLimited, WindowAnswered;
+        // Until its first 429 the rate doubles per window instead of adding
+        // (TCP's slow start), so a restart finds each node's limit in seconds.
+        public bool SlowStart = true;
+        public int WindowSent, LastWindowSent;
+        public long LastDecreaseAtMs = long.MinValue / 4;
+        // Lifetime count of calls sent over the rate because no node had any.
+        public long OverRate;
     }
 
     /// <summary>One node's latency for one call class, as reported by
@@ -132,20 +181,29 @@ public sealed class NodeHealthTracker
     public sealed record NodeView(
         int Index, long Calls, long Successes, long Failures, long Timeouts, long RateLimits,
         IReadOnlyList<ClassLatencyView> Latency, int ConsecutiveFailures,
-        bool RecentFailure, long RateLimitedForMs, long FailureParkedForMs, double FailureRate);
+        bool RecentFailure, long RateLimitedForMs, long FailureParkedForMs, double FailureRate,
+        double RatePerS, int SentLastS, long OverRate);
 
     private readonly NodeHealth[] _health;
     private readonly object _lock = new();
+    // Bumped under the lock each time a park begins or grows (see SpendAnother).
+    private long _parkSeq;
     private readonly Func<long> _clock;
+    private readonly bool _learnRates;
 
-    public NodeHealthTracker(int nodeCount, Func<long>? clock = null)
+    /// <param name="learnRates">Learn a sending rate per node and let admission
+    /// require it (see the class summary). Off, admission ignores rates and a
+    /// header-less 429 parks on the 10/20/40/60s ladder from the first one.</param>
+    public NodeHealthTracker(int nodeCount, Func<long>? clock = null, bool learnRates = false)
     {
+        _clock = clock ?? (() => Environment.TickCount64);
+        _learnRates = learnRates;
+        var now = _clock();
         _health = new NodeHealth[nodeCount];
         for (var i = 0; i < nodeCount; i++)
         {
-            _health[i] = new NodeHealth();
+            _health[i] = new NodeHealth { RefilledAtMs = now, WindowStartMs = now };
         }
-        _clock = clock ?? (() => Environment.TickCount64);
     }
 
     private long NowMs => _clock();
@@ -165,6 +223,12 @@ public sealed class NodeHealthTracker
             h.FailureRate *= 1 - FailureRateAlpha;
             h.ConsecutiveFailures = 0;
             h.ConsecutiveHardFailures = 0;
+            // An answer after 429s that climbed the ladder ends a refusal, not a
+            // node at its limit: each lapse of the park halved the rate again,
+            // down to the floor. Ramp back by doubling, as at start (TCP restarts
+            // slow start after a timeout), so the node is not underused for
+            // minutes once it serves again.
+            if (_learnRates && h.RateLimitStreak >= 2) h.SlowStart = true;
             h.RateLimitStreak = 0;
             h.FailureParkStreak = 0;
             // A node that just answered is not parked, whatever the deadline said:
@@ -172,6 +236,11 @@ public sealed class NodeHealthTracker
             // not be pushed out again by a stale deadline the moment another
             // node's park lapses.
             h.FailureParkedUntilMs = 0;
+            if (_learnRates)
+            {
+                Refill(h, NowMs);
+                h.WindowAnswered = true;
+            }
             RecordLatency(h, callClass, elapsedMs);
         }
     }
@@ -217,13 +286,18 @@ public sealed class NodeHealthTracker
             {
                 var parkMs = Math.Min(FailureParkBaseMs << Math.Min(h.FailureParkStreak, 2), FailureParkMaxMs);
                 h.FailureParkedUntilMs = now + parkMs;
+                h.FailureParkSeq = ++_parkSeq;
                 h.FailureParkStreak++;
             }
             return h.FailureParkedUntilMs > now;
         }
     }
 
-    public void RecordRateLimited(int nodeIndex, int? retryAfterMs)
+    /// <param name="sentAtMs">When the call that drew the 429 was admitted, on
+    /// this tracker's clock (as <see cref="Admit(int, bool, RateUse, out long)"/>
+    /// returns it). With learned rates it tells a 429 that predates the last
+    /// decrease (already acted on) from a new one.</param>
+    public void RecordRateLimited(int nodeIndex, int? retryAfterMs, long? sentAtMs = null)
     {
         lock (_lock)
         {
@@ -231,17 +305,179 @@ public sealed class NodeHealthTracker
             var now = NowMs;
             h.Calls++;
             h.RateLimits++;
-            h.ConsecutiveFailures++;
-            h.LastFailureAtMs = now;
+            if (!_learnRates)
+            {
+                // Without learned rates a 429 also demotes the node behind clean
+                // ones for a while. With them, the halved rate is the response:
+                // demoting too would leave a node at its limit idle for as long
+                // as the others can absorb the traffic.
+                h.ConsecutiveFailures++;
+                h.LastFailureAtMs = now;
+            }
             if (now - h.LastRateLimitAtMs > RateLimitStreakResetMs)
             {
                 h.RateLimitStreak = 0;
             }
-            var parkMs = retryAfterMs
-                         ?? Math.Min(RateLimitBaseMs << Math.Min(h.RateLimitStreak, 3), RateLimitMaxMs);
-            h.RateLimitedUntilMs = now + parkMs;
-            h.RateLimitStreak++;
+            // One burst of 429s is one signal (see RateDecreaseHoldMs).
+            var sameBurst = _learnRates && (sentAtMs is { } sent
+                ? sent <= h.LastDecreaseAtMs
+                : now - h.LastDecreaseAtMs < RateDecreaseHoldMs);
+            if (_learnRates)
+            {
+                Refill(h, now);
+                h.WindowRateLimited = true;
+                if (!sameBurst)
+                {
+                    h.RatePerS = Math.Max(MinRatePerS, h.RatePerS / 2);
+                    h.SlowStart = false;
+                    h.LastDecreaseAtMs = now;
+                    h.Tokens = Math.Min(h.Tokens, 0);
+                }
+            }
+            if (!_learnRates)
+            {
+                var parkMs = retryAfterMs
+                             ?? Math.Min(RateLimitBaseMs << Math.Min(h.RateLimitStreak, 3), RateLimitMaxMs);
+                h.RateLimitedUntilMs = now + parkMs;
+                h.RateParkSeq = ++_parkSeq;
+                h.RateLimitStreak++;
+            }
+            else if (sameBurst)
+            {
+                // Already acted on: the decrease and the park it set. A wait the
+                // server names is still honoured.
+                if (retryAfterMs is { } named)
+                {
+                    ExtendRatePark(h, now + named);
+                }
+            }
+            else
+            {
+                // The first 429 of a streak: the server's wait if it named one,
+                // else a short pause (the halved rate does the rest). A repeat
+                // with no answer in between is a refusal, whatever the header
+                // says: at least the next step of the ladder.
+                var ladderMs = h.RateLimitStreak == 0
+                    ? RateLimitFirstPauseMs
+                    : Math.Min(RateLimitBaseMs << Math.Min(h.RateLimitStreak - 1, 3), RateLimitMaxMs);
+                var parkMs = retryAfterMs is { } named
+                    ? (h.RateLimitStreak == 0 ? named : Math.Max(named, ladderMs))
+                    : ladderMs;
+                // Never shorten a park already in force: a wait the server
+                // named earlier still stands. A new refusal all the same, even
+                // when the park does not grow (see SpendAnother).
+                ExtendRatePark(h, now + parkMs);
+                h.RateParkSeq = ++_parkSeq;
+                h.RateLimitStreak++;
+            }
             h.LastRateLimitAtMs = now;
+        }
+    }
+
+    /// <summary>Some other node is neither failure-parked nor busy half-open.
+    /// Call under the lock.</summary>
+    private bool OthersAvailable(int nodeIndex, long now)
+    {
+        for (var j = 0; j < _health.Length; j++)
+        {
+            if (j == nodeIndex) continue;
+            var o = _health[j];
+            var oParked = o.FailureParkedUntilMs > now;
+            var oBusy = !oParked && o.FailureParkStreak > 0 && o.InFlight > 0;
+            if (!oParked && !oBusy) return true;
+        }
+        return false;
+    }
+
+    private void ExtendRatePark(NodeHealth h, long untilMs)
+    {
+        if (untilMs <= h.RateLimitedUntilMs) return;
+        h.RateLimitedUntilMs = untilMs;
+        h.RateParkSeq = ++_parkSeq;
+    }
+
+    private static double BurstCapacity(NodeHealth h) => Math.Max(1, h.RatePerS * RateBurstSeconds);
+
+    /// <summary>Brings the node's bucket and rate window up to now.</summary>
+    private static void Refill(NodeHealth h, long now)
+    {
+        if (now > h.RefilledAtMs)
+        {
+            h.Tokens = Math.Min(BurstCapacity(h), h.Tokens + h.RatePerS * (now - h.RefilledAtMs) / 1000.0);
+            h.RefilledAtMs = now;
+        }
+        var windows = (now - h.WindowStartMs) / RateWindowMs;
+        if (windows >= 1)
+        {
+            // Growth needs demand that ran into the rate and was answered: an
+            // idle node must not come back with a rate it never proved, and a
+            // node that answers nothing must not grow because calls queued for it.
+            if (h.WindowLimited && h.WindowAnswered && !h.WindowRateLimited)
+            {
+                h.RatePerS = Math.Min(MaxRatePerS,
+                    h.SlowStart ? h.RatePerS * 2 : h.RatePerS + RateIncreasePerWindow);
+            }
+            // Windows stay aligned, so the count is for exactly one second.
+            h.LastWindowSent = windows == 1 ? h.WindowSent : 0;
+            h.WindowSent = 0;
+            h.WindowLimited = false;
+            h.WindowRateLimited = false;
+            h.WindowAnswered = false;
+            h.WindowStartMs += windows * RateWindowMs;
+        }
+    }
+
+    /// <summary>How long until the node's last 429 is <paramref name="withinMs"/>
+    /// old, 0 when it already is.</summary>
+    public long RateLimitedRecentlyForMs(int nodeIndex, long withinMs)
+    {
+        lock (_lock)
+        {
+            return Math.Max(0, _health[nodeIndex].LastRateLimitAtMs + withinMs - NowMs);
+        }
+    }
+
+    /// <summary>The node answered 429 within the last <paramref name="withinMs"/>
+    /// (default <see cref="RateLimitBaseMs"/>).</summary>
+    public bool RateLimitedRecently(int nodeIndex, long withinMs = RateLimitBaseMs)
+    {
+        lock (_lock)
+        {
+            return NowMs - _health[nodeIndex].LastRateLimitAtMs < withinMs;
+        }
+    }
+
+    private static long OverRateForMs(NodeHealth h) =>
+        h.Tokens >= 1 ? 0 : (long)Math.Ceiling((1 - h.Tokens) / h.RatePerS * 1000);
+
+    /// <summary>
+    /// The order to send a call over the rate to these nodes (learned rates):
+    /// a node that answered 429 in the last <see cref="RateLimitBaseMs"/> last,
+    /// since sending over its rate is likeliest to draw another; then the one
+    /// that frees up soonest; then the one sent the fewest calls this second.
+    /// The last breaks the tie under sustained overload, where every node's
+    /// debt sits at its cap and the excess would otherwise all go to one node.
+    /// </summary>
+    public List<int> OverRateOrder(IEnumerable<int> nodeIndices)
+    {
+        lock (_lock)
+        {
+            var now = NowMs;
+            return nodeIndices
+                .Select(i =>
+                {
+                    var h = _health[i];
+                    if (_learnRates) Refill(h, now);
+                    return (Index: i,
+                        Recent: now - h.LastRateLimitAtMs < RateLimitBaseMs,
+                        Wait: _learnRates ? OverRateForMs(h) : 0,
+                        Sent: h.WindowSent);
+                })
+                .OrderBy(x => x.Recent)
+                .ThenBy(x => x.Wait)
+                .ThenBy(x => x.Sent)
+                .Select(x => x.Index)
+                .ToList();
         }
     }
 
@@ -336,7 +572,18 @@ public sealed class NodeHealthTracker
     /// </summary>
     public bool TryBeginAttempt(int nodeIndex) => Admit(nodeIndex, allowRateLimitParked: true) == Admission.Admitted;
 
-    public enum Admission { Admitted, RateLimitParked, Refused }
+    public enum Admission { Admitted, RateLimitParked, Refused, OverRate }
+
+    /// <summary>How a call admitted with learned rates uses the node's rate.</summary>
+    public enum RateUse
+    {
+        /// <summary>Spend one unit, into debt if there is none (a probe).</summary>
+        Spend,
+        /// <summary>No rate left: OverRate, not admitted.</summary>
+        Require,
+        /// <summary>Sent over the rate if there is none, and counted as such.</summary>
+        Overdraw,
+    }
 
     /// <summary>
     /// <see cref="TryBeginAttempt"/> plus, when <paramref name="allowRateLimitParked"/>
@@ -344,30 +591,84 @@ public sealed class NodeHealthTracker
     /// under the same lock so a concurrent park cannot slip in between. A node that
     /// is failure-parked is Refused first, even if it is also rate-limit parked: an
     /// outage outranks throttling. Admitted pairs with <see cref="EndAttempt"/>.
+    ///
+    /// With learned rates every admitted call spends one unit of the node's
+    /// rate; <paramref name="rateUse"/> says what happens when none is left.
+    /// Ignored without learned rates. Every call counts as one unit whatever
+    /// its class: the limiters in front of public nodes count requests, not
+    /// their cost.
     /// </summary>
-    public Admission Admit(int nodeIndex, bool allowRateLimitParked)
+    public Admission Admit(int nodeIndex, bool allowRateLimitParked, RateUse rateUse = RateUse.Spend) =>
+        Admit(nodeIndex, allowRateLimitParked, rateUse, out _);
+
+    /// <inheritdoc cref="Admit(int, bool, RateUse)"/>
+    /// <param name="admittedAtMs">The time admission was decided, under the same
+    /// lock: pass it to <see cref="RecordRateLimited"/> as the send time.</param>
+    public Admission Admit(int nodeIndex, bool allowRateLimitParked, RateUse rateUse, out long admittedAtMs) =>
+        Admit(nodeIndex, allowRateLimitParked, rateUse, out admittedAtMs, out _);
+
+    /// <inheritdoc cref="Admit(int, bool, RateUse, out long)"/>
+    /// <param name="parkMark">Marks the parks in force at admission: pass it to
+    /// <see cref="SpendAnother"/> for a further request in the same attempt.</param>
+    public Admission Admit(int nodeIndex, bool allowRateLimitParked, RateUse rateUse, out long admittedAtMs, out long parkMark)
     {
         lock (_lock)
         {
             var now = NowMs;
+            admittedAtMs = now;
+            parkMark = _parkSeq;
             var h = _health[nodeIndex];
             var parked = h.FailureParkedUntilMs > now;
             var halfOpenBusy = !parked && h.FailureParkStreak > 0 && h.InFlight > 0;
-            if (parked || halfOpenBusy)
-            {
-                var othersAvailable = false;
-                for (var j = 0; j < _health.Length && !othersAvailable; j++)
-                {
-                    if (j == nodeIndex) continue;
-                    var o = _health[j];
-                    var oParked = o.FailureParkedUntilMs > now;
-                    var oBusy = !oParked && o.FailureParkStreak > 0 && o.InFlight > 0;
-                    othersAvailable = !oParked && !oBusy;
-                }
-                if (othersAvailable) return Admission.Refused;
-            }
+            if ((parked || halfOpenBusy) && OthersAvailable(nodeIndex, now)) return Admission.Refused;
             if (!allowRateLimitParked && h.RateLimitedUntilMs > now) return Admission.RateLimitParked;
+            if (_learnRates)
+            {
+                Refill(h, now);
+                if (h.Tokens < 1)
+                {
+                    h.WindowLimited = true;
+                    if (rateUse == RateUse.Require) return Admission.OverRate;
+                    if (rateUse == RateUse.Overdraw) h.OverRate++;
+                }
+                h.Tokens = Math.Max(h.Tokens - 1, -BurstCapacity(h));
+                h.WindowSent++;
+            }
             h.InFlight++;
+            return Admission.Admitted;
+        }
+    }
+
+    /// <summary>
+    /// A further request inside an attempt already admitted (the same-node
+    /// fallback after an `unknown method`): it spends one more unit of the
+    /// node's rate, into debt if none is left, without counting as over-rate,
+    /// since no node was chosen for it. <paramref name="sentAtMs"/> is its send
+    /// time, decided under the lock, for <see cref="RecordRateLimited"/>.
+    ///
+    /// Not sent into a park that began since the first request was admitted
+    /// (<paramref name="parkMark"/>, from Admit): Refused for a failure park (an
+    /// outage) when another node can serve, as Admit has it; RateLimitParked
+    /// for a 429 park, or a 429 inside one. A park the first request was let
+    /// into (a probe) does not stop it: the node has just answered.
+    /// </summary>
+    public Admission SpendAnother(int nodeIndex, long parkMark, out long sentAtMs)
+    {
+        lock (_lock)
+        {
+            var now = NowMs;
+            sentAtMs = now;
+            var h = _health[nodeIndex];
+            if (h.FailureParkedUntilMs > now && h.FailureParkSeq > parkMark && OthersAvailable(nodeIndex, now))
+                return Admission.Refused;
+            if (h.RateLimitedUntilMs > now && h.RateParkSeq > parkMark) return Admission.RateLimitParked;
+            if (_learnRates)
+            {
+                Refill(h, now);
+                if (h.Tokens < 1) h.WindowLimited = true;
+                h.Tokens = Math.Max(h.Tokens - 1, -BurstCapacity(h));
+                h.WindowSent++;
+            }
             return Admission.Admitted;
         }
     }
@@ -390,6 +691,7 @@ public sealed class NodeHealthTracker
             return Enumerable.Range(0, _health.Length).Select(i =>
             {
                 var h = _health[i];
+                if (_learnRates) Refill(h, now);
                 var latency = Enumerable.Range(0, CallClassCount)
                     .Select(c => new ClassLatencyView((CallClass)c, h.Latency[c].EwmaMs, h.Latency[c].SampleCount))
                     .ToList();
@@ -397,7 +699,7 @@ public sealed class NodeHealthTracker
                     latency, h.ConsecutiveFailures,
                     h.ConsecutiveFailures > 0 && now - h.LastFailureAtMs < RecentFailureWindowMs,
                     Math.Max(0, h.RateLimitedUntilMs - now), Math.Max(0, h.FailureParkedUntilMs - now),
-                    h.FailureRate);
+                    h.FailureRate, _learnRates ? h.RatePerS : 0, h.LastWindowSent, h.OverRate);
             }).ToList();
         }
     }

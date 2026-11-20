@@ -18,6 +18,16 @@ namespace EcencyApi.Infrastructure;
 ///    lapses soonest, chosen after every unparked node was tried): while the whole pool throttles
 ///    this host, a call reaches one node instead of all of them. A call that
 ///    failed only on 429s throws <see cref="UpstreamRateLimitedException"/>.
+///  - Each node has a learned sending rate (see <see cref="NodeHealthTracker"/>).
+///    A call passes over a node with no rate left, so traffic beyond what the
+///    fastest node allows spills to the next one instead of overrunning it.
+///    When every node is over its rate the call still goes out, over the rate
+///    (order: <see cref="NodeHealthTracker.OverRateOrder"/>). A failure there
+///    moves on to the next such node; after a 429, only to one that has not
+///    answered 429 recently. Under real overload every node has, so a call
+///    draws one over-rate 429 instead of fanning out across the pool. It does not wait for
+///    rate to come back: concurrent calls would wake together and most would
+///    find none anyway.
 ///  - An `unknown method` answer to a call that names a fallback method asks
 ///    the same node the fallback, and marks the node and the method's family
 ///    for a while (CallMethod).
@@ -37,6 +47,10 @@ public sealed class HiveRpcClient
     private readonly NodeHealthTracker _health;
     private readonly Func<long> _clock;
     private int _seq;
+
+    /// <summary>How recent a node's 429 must be for a call that was already
+    /// refused to skip sending to it over the rate.</summary>
+    private const long RefusedRecentlyMs = 2_000;
 
     /// <summary>Test seam: the pool's health state, to stage parks mid-call.</summary>
     internal NodeHealthTracker Health => _health;
@@ -58,7 +72,7 @@ public sealed class HiveRpcClient
         _nodes = nodes;
         _timeoutMs = timeoutMs;
         _failoverThreshold = Math.Max(1, failoverThreshold);
-        _health = new NodeHealthTracker(nodes.Length, clock);
+        _health = new NodeHealthTracker(nodes.Length, clock, learnRates: true);
         _clock = clock ?? (() => Environment.TickCount64);
     }
 
@@ -99,6 +113,11 @@ public sealed class HiveRpcClient
             node["rate_limited_for_ms"] = v.RateLimitedForMs;
             node["parked_for_ms"] = v.FailureParkedForMs;
             node["failure_rate"] = Math.Round(v.FailureRate, 3);
+            // The learned sending rate, what was sent in the last full second,
+            // and how many calls went out over the rate because no node had any.
+            node["rate_per_s"] = Math.Round(v.RatePerS, 1);
+            node["sent_last_s"] = v.SentLastS;
+            node["over_rate"] = v.OverRate;
             // Families this node is asked the fallback for until its mark lapses.
             var unsupported = new JsonArray();
             foreach (var m in UnsupportedFamilies(v.Index)) unsupported.Add(m);
@@ -113,7 +132,10 @@ public sealed class HiveRpcClient
         public RpcException(string message) : base(message) { }
     }
 
-    private static long NowMs => Environment.TickCount64;
+    // Latency is timed on the same clock as the health state: the real one in
+    // production, the test's when one is injected, so a test decides the
+    // ranking instead of scheduler noise.
+    private long NowMs => _clock();
 
     /// <summary>How many nodes may be consulted to satisfy a soft result
     /// preference before the first well-formed answer is accepted as-is.</summary>
@@ -263,6 +285,7 @@ public sealed class HiveRpcClient
         // the advised wait is how long until the first of them can serve again.
         var deferred = new List<int>();
         var throttledNodes = new HashSet<int>();
+        var leftOutNodes = new HashSet<int>();
 
         var ordered = _health.OrderedNodeIndices(callClass);
         // A node left out of the ordering is parked for failing: part of the
@@ -271,38 +294,95 @@ public sealed class HiveRpcClient
 
         // Every node in order, skipping the ones parked for a 429 at the moment
         // they come up (the ordering is a snapshot; another call may have parked
-        // one since). Then ONE probe, to the deferred node whose park lapses
-        // soonest by then: it keeps the pool recoverable when a limit lifts
-        // early, while probing every parked node is the load the 429s asked us
-        // to stop sending. Chosen after the pass, so a node parked mid-call (the
-        // furthest from lapsing) cannot take the probe from an older park. A
+        // one since). Then ONE probe to a deferred node: one whose last 429 is
+        // not recent first, then the park that lapses soonest by then. It keeps
+        // the pool recoverable when a limit lifts early, while probing every
+        // parked node is the load the 429s asked us to stop sending. Chosen
+        // after the pass, so a node parked mid-call (the furthest from
+        // lapsing) cannot take the probe from an older park. A
         // candidate refused at probe time (down, or probed by another call
         // meanwhile) got no request, so the probe passes to the next one.
+        //
+        // Before the probe, the nodes passed over for having no rate left (they
+        // are not throttling us; we are holding back) are sent the call over
+        // their rate. A timeout or a 5xx moves on to the next.
         var probeSent = false;
-        IEnumerable<(int Node, bool Probe)> Sequence()
+        var overRate = new List<int>();
+        // Once this call has drawn a 429 it sends nothing more over the rate to
+        // a node that answered 429 in the last RefusedRecentlyMs, and no probe:
+        // under overload every node's own limiter is drained, and those sends
+        // only multiply the 429s. The window is short so that near capacity,
+        // where a node at its learned rate draws a 429 every several seconds, a
+        // single 429 does not fail the call. Calls that were not refused still
+        // probe, which is what finds a limit that lifted early.
+        var refused = false;
+        IEnumerable<(int Node, Pass Pass)> Sequence()
         {
-            foreach (var i in ordered) yield return (i, false);
-            var candidates = new List<int>(deferred);
-            while (!probeSent && candidates.Count > 0)
+            foreach (var i in ordered) yield return (i, Pass.Ranked);
+            var overRateCandidates = new List<int>(overRate);
+            while (overRateCandidates.Count > 0)
             {
-                var next = candidates.OrderBy(i => _health.RateLimitedForMs(i)).First();
+                if (refused)
+                {
+                    // Left out for refusing a moment ago, usually not parked:
+                    // they count toward the wait advised if the call ends
+                    // throttled, until they would be tried again.
+                    foreach (var i in overRateCandidates.Where(i => _health.RateLimitedRecently(i, RefusedRecentlyMs)).ToList())
+                    {
+                        overRateCandidates.Remove(i);
+                        leftOutNodes.Add(i);
+                    }
+                }
+                if (overRateCandidates.Count == 0) break;
+                var next = _health.OverRateOrder(overRateCandidates)[0];
+                overRateCandidates.Remove(next);
+                yield return (next, Pass.OverRate);
+            }
+            var candidates = new List<int>(deferred);
+            while (!probeSent && !refused && candidates.Count > 0)
+            {
+                // A node that has not answered 429 lately first: one paused
+                // briefly after a 429 a moment ago would otherwise always lapse
+                // soonest and take every probe, while nodes parked on the ladder
+                // that have since recovered go unnoticed until their parks end.
+                var next = candidates
+                    .OrderBy(i => _health.RateLimitedRecently(i))
+                    .ThenBy(i => _health.RateLimitedForMs(i))
+                    .First();
                 candidates.Remove(next);
-                yield return (next, true);
+                yield return (next, Pass.Probe);
             }
         }
 
-        foreach (var (nodeIndex, isProbe) in Sequence())
+        foreach (var (nodeIndex, pass) in Sequence())
         {
             var node = _nodes[nodeIndex];
+            var isProbe = pass == Pass.Probe;
 
             for (var attempt = 0; attempt < _failoverThreshold; attempt++)
             {
                 // Admission is decided now, under one lock with the park check.
-                var admission = _health.Admit(nodeIndex, allowRateLimitParked: isProbe);
+                var admission = _health.Admit(nodeIndex, allowRateLimitParked: isProbe,
+                    pass switch
+                    {
+                        Pass.Ranked => NodeHealthTracker.RateUse.Require,
+                        Pass.OverRate => NodeHealthTracker.RateUse.Overdraw,
+                        _ => NodeHealthTracker.RateUse.Spend,
+                    }, out var sentAt, out var parkMark);
+                if (admission == NodeHealthTracker.Admission.OverRate)
+                {
+                    // Not sent. A first look makes it an over-rate candidate; a
+                    // same-node retry finding no rate just moves on.
+                    if (attempt == 0) overRate.Add(nodeIndex);
+                    break;
+                }
                 if (admission == NodeHealthTracker.Admission.RateLimitParked)
                 {
                     sawRateLimit = true;
                     throttledNodes.Add(nodeIndex);
+                    // No request was sent: a real error from another node says more.
+                    lastError ??= new NodeUnavailableException(
+                        $"RPC node {node} is parked for a 429", advanceImmediately: true, isRateLimit: true);
                     if (attempt == 0) deferred.Add(nodeIndex);
                     break;
                 }
@@ -311,6 +391,8 @@ public sealed class HiveRpcClient
                     // Failure-parked, or a probe of it is already in flight: an
                     // outage, not throttling. No request was sent.
                     sawOtherFailure = true;
+                    lastError ??= new NodeUnavailableException(
+                        $"RPC node {node} is parked for failing", advanceImmediately: true);
                     break;
                 }
                 if (isProbe) probeSent = true;
@@ -333,6 +415,30 @@ public sealed class HiveRpcClient
                         _lacksUntil[(nodeIndex, family!)] = _clock() + UnsupportedMethodTtlMs;
                         // Rank the node on the v1 answer it will give from now on,
                         // not on the probe that does not recur within the TTL.
+                        // A second request to the node: it spends its own unit of
+                        // the node's rate and has its own send time. If the node
+                        // was parked since the first request, it is not sent: a
+                        // 429 park makes the call throttled there, a failure park
+                        // is an outage, not throttling.
+                        var again = _health.SpendAnother(nodeIndex, parkMark, out var fallbackAt);
+                        if (again == NodeHealthTracker.Admission.RateLimitParked)
+                        {
+                            sawRateLimit = true;
+                            throttledNodes.Add(nodeIndex);
+                            lastError = new NodeUnavailableException(
+                                $"RPC node {node} was parked for a 429 before the {method} fallback",
+                                advanceImmediately: true, isRateLimit: true);
+                            break;
+                        }
+                        if (again == NodeHealthTracker.Admission.Refused)
+                        {
+                            sawOtherFailure = true;
+                            lastError = new NodeUnavailableException(
+                                $"RPC node {node} was parked for failing before the {method} fallback",
+                                advanceImmediately: true);
+                            break;
+                        }
+                        sentAt = fallbackAt;
                         started = NowMs;
                         result = await CallNode(node, fallbackBody);
                     }
@@ -382,7 +488,10 @@ public sealed class HiveRpcClient
                     {
                         sawRateLimit = true;
                         throttledNodes.Add(nodeIndex);
-                        _health.RecordRateLimited(nodeIndex, e.RetryAfterMs);
+                        // sentAt (decided under the admission lock) tells a 429 for
+                        // a call sent before the node's last rate decrease from a new one.
+                        _health.RecordRateLimited(nodeIndex, e.RetryAfterMs, sentAt);
+                        refused = true;
                     }
                     else
                     {
@@ -421,7 +530,10 @@ public sealed class HiveRpcClient
         if (sawRateLimit && !sawOtherFailure)
         {
             // A park that lapsed during the call counts as 0: that node can serve now.
-            var wait = throttledNodes.Min(i => _health.RateLimitedForMs(i));
+            var wait = throttledNodes.Select(i => _health.RateLimitedForMs(i))
+                .Concat(leftOutNodes.Select(i => Math.Max(_health.RateLimitedForMs(i),
+                    _health.RateLimitedRecentlyForMs(i, RefusedRecentlyMs))))
+                .Min();
             throw new UpstreamRateLimitedException(
                 $"every RPC node is rate-limiting {method}", (int)Math.Min(int.MaxValue, wait));
         }
@@ -429,6 +541,16 @@ public sealed class HiveRpcClient
         // Every node exhausted — surface the last transport error (dhive throws
         // after cycling the whole list).
         throw lastError ?? new InvalidOperationException("no RPC nodes configured");
+    }
+
+    private enum Pass
+    {
+        /// <summary>The pool in health order, within each node's rate.</summary>
+        Ranked,
+        /// <summary>The nodes passed over for their rate, now over it.</summary>
+        OverRate,
+        /// <summary>One node parked for a 429.</summary>
+        Probe,
     }
 
     /// <summary>
