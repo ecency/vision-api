@@ -72,7 +72,9 @@ public sealed class HiveRpcClient
         // host[:port], so nodes on one host stay apart.
         Trace = new NodeTrace(
             nodes.Select(n => Uri.TryCreate(n, UriKind.Absolute, out var u) ? u.Authority : n).ToArray(),
-            _traceClock, traceLog ?? Console.WriteLine, name);
+            _traceClock, traceLog ?? Console.WriteLine, name,
+            // A request ends within the timeout (its body read included); the rest is scheduling slack.
+            graceMs: timeoutMs + 5_000L);
         // Tests flush by hand; the service logs due minutes from a timer, never a request.
         if (traceLog == null) _traceFlusher = Trace.StartFlushing(TimeSpan.FromSeconds(5));
     }

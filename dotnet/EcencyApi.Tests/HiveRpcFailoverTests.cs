@@ -463,6 +463,14 @@ public class HiveRpcFailoverTests
     }
 
     [Fact]
+    public void TheNodeTrace_HoldsAMinuteBackLongerThanThePoolsTimeout()
+    {
+        var client = new HiveRpcClient(new[] { "https://a.example" }, timeoutMs: 30_000, failoverThreshold: 1,
+            clock: null, traceLog: _ => { });
+        Assert.Equal(35_000, client.Trace.GraceMs); // the timeout, plus scheduling slack
+    }
+
+    [Fact]
     public async Task TheNodeTrace_RecordsEveryUpstreamRequest_WithoutChangingRouting()
     {
         // The throttled node is still tried first and the call still lands on
@@ -479,7 +487,7 @@ public class HiveRpcFailoverTests
 
         Assert.Equal(1, throttled.Hits);
         Assert.Equal(1, good.Hits);
-        unixMs += 60_000 + NodeTrace.GraceMs;
+        unixMs += 60_000 + NodeTrace.DefaultGraceMs;
         client.Trace.Flush();
         Assert.Equal(2, lines.Count);
         Assert.Contains(" rl=1,", lines.Single(l => l.Contains("node=127.0.0.1:" + new Uri(throttled.Url).Port + " ")));
@@ -497,7 +505,7 @@ public class HiveRpcFailoverTests
 
         await Assert.ThrowsAnyAsync<Exception>(() => client.Call("condenser_api", "get_accounts", new JsonArray()));
 
-        unixMs += 60_000 + NodeTrace.GraceMs;
+        unixMs += 60_000 + NodeTrace.DefaultGraceMs;
         client.Trace.Flush();
         var line = Assert.Single(lines);
         Assert.Contains(" timeout=1,", line);
@@ -518,7 +526,7 @@ public class HiveRpcFailoverTests
 
         Assert.NotNull(await client.Call("condenser_api", "get_accounts", new JsonArray()));
 
-        unixMs += 60_000 + NodeTrace.GraceMs;
+        unixMs += 60_000 + NodeTrace.DefaultGraceMs;
         client.Trace.Flush();
         var line = lines.Single(l => l.Contains("node=127.0.0.1:" + new Uri(overloaded.Url).Port + " "));
         Assert.Contains(" e5xx=1,", line);
@@ -541,7 +549,7 @@ public class HiveRpcFailoverTests
 
         await Assert.ThrowsAnyAsync<Exception>(() => client.Call("condenser_api", "get_accounts", new JsonArray()));
 
-        unixMs += 60_000 + NodeTrace.GraceMs;
+        unixMs += 60_000 + NodeTrace.DefaultGraceMs;
         client.Trace.Flush();
         var line = Assert.Single(lines);
         Assert.Contains(" fail=1,", line);
@@ -564,7 +572,7 @@ public class HiveRpcFailoverTests
             fallback: ("bridge.get_post", new JsonObject { ["author"] = "a", ["permlink"] = "p" }, "bridge.*_v2"));
 
         Assert.Equal(2, old.Hits);
-        unixMs += 60_000 + NodeTrace.GraceMs;
+        unixMs += 60_000 + NodeTrace.DefaultGraceMs;
         client.Trace.Flush();
         var line = Assert.Single(lines);
         Assert.Contains(" sent=2,", line);

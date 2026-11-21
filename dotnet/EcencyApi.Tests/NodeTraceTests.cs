@@ -37,7 +37,7 @@ public class NodeTraceTests
         trace.Record(0, T0 + 59_100, NodeTrace.Outcome.Failed);
         trace.Record(1, T0 + 3_000, NodeTrace.Outcome.Answered);
 
-        setNow(T0 + 60_000 + NodeTrace.GraceMs);
+        setNow(T0 + 60_000 + NodeTrace.DefaultGraceMs);
         trace.Flush();
 
         Assert.Equal(2, lines.Count);
@@ -60,13 +60,13 @@ public class NodeTraceTests
         var (trace, lines, setNow) = Make("a.example");
         trace.Record(0, T0 + 59_000, NodeTrace.Outcome.Answered);
 
-        setNow(T0 + 60_000 + NodeTrace.GraceMs - 1);
+        setNow(T0 + 60_000 + NodeTrace.DefaultGraceMs - 1);
         trace.Flush();
         Assert.Empty(lines);
 
         // A slow request sent in that minute ends now: still its minute.
         trace.Record(0, T0 + 59_500, NodeTrace.Outcome.Failed);
-        setNow(T0 + 60_000 + NodeTrace.GraceMs);
+        setNow(T0 + 60_000 + NodeTrace.DefaultGraceMs);
         trace.Flush();
 
         var line = Assert.Single(lines);
@@ -74,16 +74,43 @@ public class NodeTraceTests
     }
 
     [Fact]
+    public void AGraceLongerThanTheDefault_HoldsTheMinuteBackThatLong()
+    {
+        long now = T0;
+        var lines = new List<string>();
+        var trace = new NodeTrace(new[] { "a.example" }, () => now, lines.Add, "ssr", graceMs: 40_000);
+        trace.Record(0, T0 + 59_000, NodeTrace.Outcome.Answered);
+
+        now = T0 + 60_000 + 40_000 - 1;
+        trace.Flush();
+        Assert.Empty(lines);
+
+        // Sent at the end of the minute, ended after a 39s timeout: still its minute.
+        trace.Record(0, T0 + 59_900, NodeTrace.Outcome.Timeout);
+        now = T0 + 60_000 + 40_000;
+        trace.Flush();
+        Assert.Equal(2, Field(Assert.Single(lines), "sent")[59]);
+    }
+
+    [Fact]
+    public void AGraceOutsideItsBounds_IsClampedToThem()
+    {
+        Assert.Equal(NodeTrace.DefaultGraceMs, new NodeTrace(new[] { "a.example" }, () => T0, _ => { }, "ssr", graceMs: 1_000).GraceMs);
+        Assert.Equal(NodeTrace.MaxGraceMs, new NodeTrace(new[] { "a.example" }, () => T0, _ => { }, "ssr", graceMs: 2 * 3_600_000).GraceMs);
+        Assert.True(NodeTrace.MaxGraceMs < (NodeTrace.MaxOpenMinutes - 2) * 60_000L);
+    }
+
+    [Fact]
     public void ARequestEndingAfterItsMinuteWasLogged_IsCountedAsLate_OnTheNextLine()
     {
         var (trace, lines, setNow) = Make("a.example");
         trace.Record(0, T0 + 1_000, NodeTrace.Outcome.Answered);
-        setNow(T0 + 60_000 + NodeTrace.GraceMs);
+        setNow(T0 + 60_000 + NodeTrace.DefaultGraceMs);
         trace.Flush();
 
         trace.Record(0, T0 + 2_000, NodeTrace.Outcome.Failed); // its minute is gone
         trace.Record(0, T0 + 61_000, NodeTrace.Outcome.Answered);
-        setNow(T0 + 120_000 + NodeTrace.GraceMs);
+        setNow(T0 + 120_000 + NodeTrace.DefaultGraceMs);
         trace.Flush();
 
         Assert.Equal(2, lines.Count);
@@ -96,7 +123,7 @@ public class NodeTraceTests
     {
         var (trace, lines, setNow) = Make("a.example", "b.example");
         trace.Record(0, T0 + 1_000, NodeTrace.Outcome.Answered);
-        setNow(T0 + 60_000 + NodeTrace.GraceMs);
+        setNow(T0 + 60_000 + NodeTrace.DefaultGraceMs);
         trace.Flush();
 
         Assert.Single(lines);
@@ -109,7 +136,7 @@ public class NodeTraceTests
         trace.Record(0, T0 + 1_000, NodeTrace.Outcome.RateLimited, retryAfterMs: 3_000);
         trace.Record(0, T0 + 2_000, NodeTrace.Outcome.RateLimited, retryAfterMs: 1_000);
         trace.Record(0, T0 + 3_000, NodeTrace.Outcome.RateLimited);
-        setNow(T0 + 60_000 + NodeTrace.GraceMs);
+        setNow(T0 + 60_000 + NodeTrace.DefaultGraceMs);
         trace.Flush();
 
         Assert.Contains(" retry_after=2:1000:3000", Assert.Single(lines));
@@ -120,8 +147,8 @@ public class NodeTraceTests
     {
         var (trace, lines, setNow) = Make("a.example");
         trace.Record(0, T0 + 1_000, NodeTrace.Outcome.Answered);
-        setNow(T0 + 60_000 + NodeTrace.GraceMs);
-        trace.Record(0, T0 + 60_000 + NodeTrace.GraceMs, NodeTrace.Outcome.Answered);
+        setNow(T0 + 60_000 + NodeTrace.DefaultGraceMs);
+        trace.Record(0, T0 + 60_000 + NodeTrace.DefaultGraceMs, NodeTrace.Outcome.Answered);
 
         Assert.Empty(lines);
         trace.Flush();
@@ -135,7 +162,7 @@ public class NodeTraceTests
         var written = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var trace = new NodeTrace(new[] { "a.example" }, () => Interlocked.Read(ref now), l => written.TrySetResult(l), "ssr");
         trace.Record(0, T0 + 1_000, NodeTrace.Outcome.Answered);
-        Interlocked.Exchange(ref now, T0 + 60_000 + NodeTrace.GraceMs); // no request follows
+        Interlocked.Exchange(ref now, T0 + 60_000 + NodeTrace.DefaultGraceMs); // no request follows
 
         using (trace.StartFlushing(TimeSpan.FromMilliseconds(20)))
         {
@@ -149,7 +176,7 @@ public class NodeTraceTests
         var (trace, lines, setNow) = Make("a.example");
         for (var i = 0; i <= NodeTrace.MaxOpenMinutes; i++)
             trace.Record(0, T0 + i * 60_000L, NodeTrace.Outcome.Answered);
-        setNow(T0 + (NodeTrace.MaxOpenMinutes + 1) * 60_000L + NodeTrace.GraceMs);
+        setNow(T0 + (NodeTrace.MaxOpenMinutes + 1) * 60_000L + NodeTrace.DefaultGraceMs);
         trace.Flush();
 
         Assert.Equal(NodeTrace.MaxOpenMinutes, lines.Count);
@@ -165,7 +192,7 @@ public class NodeTraceTests
             l => { if (l.Contains("node=a.example")) throw new IOException("busy"); lines.Add(l); }, "ssr");
         trace.Record(0, T0 + 1_000, NodeTrace.Outcome.Answered);
         trace.Record(1, T0 + 1_000, NodeTrace.Outcome.Answered);
-        now = T0 + 60_000 + NodeTrace.GraceMs;
+        now = T0 + 60_000 + NodeTrace.DefaultGraceMs;
         trace.Flush();
 
         Assert.Contains(" node=b.example ", Assert.Single(lines));
@@ -179,7 +206,7 @@ public class NodeTraceTests
         trace.Record(0, T0 + 1_000, NodeTrace.Outcome.ServerError);
         trace.Record(0, T0 + 1_000, NodeTrace.Outcome.ServerError);
         trace.Record(0, T0 + 1_000, NodeTrace.Outcome.Failed);
-        setNow(T0 + 60_000 + NodeTrace.GraceMs);
+        setNow(T0 + 60_000 + NodeTrace.DefaultGraceMs);
         trace.Flush();
 
         var line = Assert.Single(lines);
@@ -197,7 +224,7 @@ public class NodeTraceTests
         trace.Record(0, T0 + 1_000, NodeTrace.Outcome.Answered, latencyMs: 100, inFlight: 3);
         trace.Record(0, T0 + 1_500, NodeTrace.Outcome.Answered, latencyMs: 400, inFlight: 7);
         trace.Record(0, T0 + 1_600, NodeTrace.Outcome.RateLimited, latencyMs: 9_000, inFlight: 2);
-        setNow(T0 + 60_000 + NodeTrace.GraceMs);
+        setNow(T0 + 60_000 + NodeTrace.DefaultGraceMs);
         trace.Flush();
 
         var line = Assert.Single(lines);
@@ -213,7 +240,7 @@ public class NodeTraceTests
         trace.Record(0, T0 + 1_000, NodeTrace.Outcome.RateLimited, headers: "server:nginx/1.2 (Ubuntu);ratelimit-limit:10");
         trace.Record(0, T0 + 2_000, NodeTrace.Outcome.RateLimited, headers: "server:other");
         trace.Record(1, T0 + 2_000, NodeTrace.Outcome.Answered);
-        setNow(T0 + 60_000 + NodeTrace.GraceMs);
+        setNow(T0 + 60_000 + NodeTrace.DefaultGraceMs);
         trace.Flush();
 
         Assert.Contains(" hdr=server:nginx/1.2_(Ubuntu);ratelimit-limit:10 ", lines.Single(l => l.Contains("node=a.example")));
@@ -233,7 +260,7 @@ public class NodeTraceTests
         long now = T0;
         var trace = new NodeTrace(new[] { "a.example" }, () => now, _ => throw new IOException("stdout closed"), "ssr");
         trace.Record(0, T0 + 1_000, NodeTrace.Outcome.Answered);
-        now = T0 + 60_000 + NodeTrace.GraceMs;
+        now = T0 + 60_000 + NodeTrace.DefaultGraceMs;
 
         trace.Flush(); // the log throws
     }

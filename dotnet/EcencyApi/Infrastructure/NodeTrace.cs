@@ -31,8 +31,17 @@ public sealed class NodeTrace
 {
     public enum Outcome { Answered, RateLimited, Timeout, ServerError, Failed }
 
-    /// <summary>Longer than any per-node timeout the pool uses.</summary>
-    public const long GraceMs = 15_000;
+    /// <summary>The least a minute is held back after it closes.</summary>
+    public const long DefaultGraceMs = 15_000;
+
+    /// <summary>The most, well inside <see cref="MaxOpenMinutes"/>.</summary>
+    public const long MaxGraceMs = 10 * 60_000;
+
+    /// <summary>
+    /// How long a minute is held back after it closes: longer than the pool's
+    /// per-node timeout, so every request sent in it has ended and been counted.
+    /// </summary>
+    public long GraceMs { get; }
 
     private const int MaxHeaderSample = 300;
 
@@ -60,8 +69,10 @@ public sealed class NodeTrace
     private long _loggedThrough = long.MinValue;
     private int _flushing;
 
-    public NodeTrace(IReadOnlyList<string> nodeNames, Func<long> unixMs, Action<string> log, string poolName)
+    public NodeTrace(IReadOnlyList<string> nodeNames, Func<long> unixMs, Action<string> log, string poolName,
+        long graceMs = DefaultGraceMs)
     {
+        GraceMs = Math.Clamp(graceMs, DefaultGraceMs, MaxGraceMs);
         _names = nodeNames.ToArray();
         _unixMs = unixMs;
         _log = log;
