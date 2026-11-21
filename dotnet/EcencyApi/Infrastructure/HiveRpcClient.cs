@@ -73,7 +73,11 @@ public sealed class HiveRpcClient
         Trace = new NodeTrace(
             nodes.Select(n => Uri.TryCreate(n, UriKind.Absolute, out var u) ? u.Authority : n).ToArray(),
             _traceClock, traceLog ?? Console.WriteLine, name);
+        // Tests flush by hand; the service logs due minutes from a timer, never a request.
+        if (traceLog == null) _traceFlusher = Trace.StartFlushing(TimeSpan.FromSeconds(5));
     }
+
+    private readonly IDisposable? _traceFlusher;
 
     /// <summary>Per-node, per-second upstream requests and outcomes; see NodeTrace.</summary>
     internal NodeTrace Trace { get; }

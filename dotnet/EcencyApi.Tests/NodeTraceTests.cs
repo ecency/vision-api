@@ -116,14 +116,59 @@ public class NodeTraceTests
     }
 
     [Fact]
-    public void Recording_FlushesMinutesThatAreDue()
+    public void Recording_NeverWrites_SoASlowLogCannotHoldUpARequest()
     {
         var (trace, lines, setNow) = Make("a.example");
         trace.Record(0, T0 + 1_000, NodeTrace.Outcome.Answered);
         setNow(T0 + 60_000 + NodeTrace.GraceMs);
         trace.Record(0, T0 + 60_000 + NodeTrace.GraceMs, NodeTrace.Outcome.Answered);
 
+        Assert.Empty(lines);
+        trace.Flush();
         Assert.Single(lines);
+    }
+
+    [Fact]
+    public async Task TheFlushTimer_LogsAnIdleNodesLastMinute()
+    {
+        long now = T0;
+        var written = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var trace = new NodeTrace(new[] { "a.example" }, () => Interlocked.Read(ref now), l => written.TrySetResult(l), "ssr");
+        trace.Record(0, T0 + 1_000, NodeTrace.Outcome.Answered);
+        Interlocked.Exchange(ref now, T0 + 60_000 + NodeTrace.GraceMs); // no request follows
+
+        using (trace.StartFlushing(TimeSpan.FromMilliseconds(20)))
+        {
+            Assert.Contains(" node=a.example ", await written.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+        }
+    }
+
+    [Fact]
+    public void WhileTheLogIsStalled_OnlyTheNewestMinutesAreKept()
+    {
+        var (trace, lines, setNow) = Make("a.example");
+        for (var i = 0; i <= NodeTrace.MaxOpenMinutes; i++)
+            trace.Record(0, T0 + i * 60_000L, NodeTrace.Outcome.Answered);
+        setNow(T0 + (NodeTrace.MaxOpenMinutes + 1) * 60_000L + NodeTrace.GraceMs);
+        trace.Flush();
+
+        Assert.Equal(NodeTrace.MaxOpenMinutes, lines.Count);
+        Assert.DoesNotContain(lines, l => l.Contains(" minute=" + T0 / 1000 + " "));
+    }
+
+    [Fact]
+    public void ALineTheLogFailsOn_DoesNotLoseTheOthers()
+    {
+        long now = T0;
+        var lines = new List<string>();
+        var trace = new NodeTrace(new[] { "a.example", "b.example" }, () => now,
+            l => { if (l.Contains("node=a.example")) throw new IOException("busy"); lines.Add(l); }, "ssr");
+        trace.Record(0, T0 + 1_000, NodeTrace.Outcome.Answered);
+        trace.Record(1, T0 + 1_000, NodeTrace.Outcome.Answered);
+        now = T0 + 60_000 + NodeTrace.GraceMs;
+        trace.Flush();
+
+        Assert.Contains(" node=b.example ", Assert.Single(lines));
     }
 
     [Fact]
@@ -190,7 +235,6 @@ public class NodeTraceTests
         trace.Record(0, T0 + 1_000, NodeTrace.Outcome.Answered);
         now = T0 + 60_000 + NodeTrace.GraceMs;
 
-        trace.Record(0, now, NodeTrace.Outcome.Answered); // flushes, and the log throws
-        trace.Flush();
+        trace.Flush(); // the log throws
     }
 }

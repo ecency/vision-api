@@ -10,6 +10,9 @@ namespace EcencyApi.Infrastructure;
 /// was sent (when a limiter counts it), or `-` when all are 0. `ok_ms` and
 /// `max_ms` are the summed and the longest latency of answered requests;
 /// `inflight` the most requests in flight to the node when one was sent.
+/// `ok` counts every JSON-RPC answer, whether or not the caller could use it:
+/// the node's limiter let it through. A 200 that is not JSON-RPC is `fail`,
+/// though it passed the limiter too, so fit the limiter on `sent` and `rl`.
 /// `hdr` is the first 429 or 5xx's limiter headers that minute, if any.
 ///
 /// It changes nothing in routing. It exists to fit each node's limiter offline
@@ -18,7 +21,9 @@ namespace EcencyApi.Infrastructure;
 /// concurrency rather than rate, and what it says about itself.
 ///
 /// A minute is logged once its slowest requests can have ended
-/// (<see cref="GraceMs"/> after it closes). A request that ends later still is
+/// (<see cref="GraceMs"/> after it closes, plus up to one flush period), by <see cref="StartFlushing"/>'s
+/// timer: recording never writes, so a slow or blocked log cannot hold up a
+/// request, and an idle node's last minute is still logged. A request that ends later still is
 /// counted as `late` on the node's next line. A minute a node was sent nothing
 /// is not logged.
 /// </summary>
@@ -30,6 +35,9 @@ public sealed class NodeTrace
     public const long GraceMs = 15_000;
 
     private const int MaxHeaderSample = 300;
+
+    /// <summary>Per node; past it (the log stalled) the oldest minute is dropped.</summary>
+    public const int MaxOpenMinutes = 60;
 
     private sealed class Minute
     {
@@ -50,6 +58,7 @@ public sealed class NodeTrace
     private readonly Dictionary<long, Minute>[] _open;
     private readonly int[] _late;
     private long _loggedThrough = long.MinValue;
+    private int _flushing;
 
     public NodeTrace(IReadOnlyList<string> nodeNames, Func<long> unixMs, Action<string> log, string poolName)
     {
@@ -82,7 +91,6 @@ public sealed class NodeTrace
     public void Record(int nodeIndex, long sentAtMs, Outcome outcome, int? retryAfterMs = null,
         int latencyMs = 0, int inFlight = 0, string? headers = null)
     {
-        List<string>? due = null;
         try
         {
             lock (_lock)
@@ -95,7 +103,11 @@ public sealed class NodeTrace
                 else
                 {
                     var open = _open[nodeIndex];
-                    if (!open.TryGetValue(minute, out var m)) open[minute] = m = new Minute();
+                    if (!open.TryGetValue(minute, out var m))
+                    {
+                        open[minute] = m = new Minute();
+                        if (open.Count > MaxOpenMinutes) open.Remove(open.Keys.Min());
+                    }
                     var s = (int)((sentAtMs - minute * 60_000) / 1000);
                     m.Sent[s]++;
                     m.InFlight[s] = Math.Max(m.InFlight[s], inFlight);
@@ -119,23 +131,36 @@ public sealed class NodeTrace
                     }
                     if (m.Headers == null && !string.IsNullOrEmpty(headers)) m.Headers = Sanitize(headers);
                 }
-                due = TakeDue();
             }
         }
         catch
         {
             // The trace is best effort: never the caller's failure.
         }
-        Write(due);
     }
 
-    /// <summary>Logs the minutes that are due. Recording does this too.</summary>
+    /// <summary>Logs the minutes that are due. A flush still writing is not joined.</summary>
     public void Flush()
     {
-        List<string>? due;
-        lock (_lock) due = TakeDue();
-        Write(due);
+        if (Interlocked.Exchange(ref _flushing, 1) == 1) return;
+        try
+        {
+            List<string>? due;
+            lock (_lock) due = TakeDue();
+            Write(due);
+        }
+        catch
+        {
+            // The trace is best effort.
+        }
+        finally
+        {
+            Volatile.Write(ref _flushing, 0);
+        }
     }
+
+    /// <summary>Flushes every <paramref name="period"/> off the request path, until disposed.</summary>
+    public IDisposable StartFlushing(TimeSpan period) => new Timer(_ => Flush(), null, period, period);
 
     // One token on a space-separated line, bounded.
     private static string Sanitize(string headers)
@@ -173,17 +198,20 @@ public sealed class NodeTrace
         return lines;
     }
 
-    // Outside the lock: a slow or broken log must not hold up or fail a call.
+    // Outside the lock, line by line: a line the log fails on loses only itself.
     private void Write(List<string>? lines)
     {
         if (lines == null) return;
-        try
+        foreach (var line in lines)
         {
-            foreach (var line in lines) _log(line);
-        }
-        catch
-        {
-            // The trace is best effort.
+            try
+            {
+                _log(line);
+            }
+            catch
+            {
+                // The trace is best effort.
+            }
         }
     }
 }
