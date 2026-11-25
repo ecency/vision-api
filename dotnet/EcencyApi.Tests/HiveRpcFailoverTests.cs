@@ -1031,4 +1031,133 @@ public class HiveRpcFailoverTests
         await Assert.ThrowsAnyAsync<Exception>(() =>
             client.Call("condenser_api", "get_accounts", new JsonArray()));
     }
+
+    [Fact]
+    public async Task AWindowLimitedNode_IsSentWhatItAccepts_InsteadOfBeingOverrunEachTimeItsParkLapses()
+    {
+        // A node that accepts 150 calls per rolling minute (on the test clock) and
+        // answers the rest 429 with Retry-After: 1, like the nodes that cap per
+        // 60s. A healthy, slightly slower second node takes the overflow.
+        const int limit = 150;
+        long now = 0;
+        var accepted = new List<long>();
+        var refused = 0;
+        await using var limited = new StubNode(() =>
+        {
+            lock (accepted)
+            {
+                accepted.RemoveAll(t => t <= now - 60_000);
+                if (accepted.Count < limit) { accepted.Add(now); return 200; }
+                refused++;
+                return 429;
+            }
+        });
+        limited.Headers["Retry-After"] = "1";
+        await using var spare = new StubNode(() => { Thread.Sleep(5); return 200; });
+        var client = new HiveRpcClient(new[] { limited.Url, spare.Url }, timeoutMs: 1000, failoverThreshold: 1,
+            clock: () => now);
+
+        // 20 concurrent calls a second for 90s: concurrency is what overruns a
+        // node, since every call that starts together picks the same best node.
+        var served = 0;
+        for (var tick = 0; tick < 90; tick++)
+        {
+            var batch = await Task.WhenAll(Enumerable.Range(0, 20).Select(_ =>
+                client.Call("condenser_api", "get_accounts", new JsonArray())));
+            served += batch.Count(r => (string?)r?[0]?["port"] == limited.Url);
+            now += 1_000;
+        }
+
+        // Without the cap: a batch of 429s each time the node comes back into
+        // play while its window is still full. With it: the first crossing only.
+        Assert.InRange(refused, 1, 15);
+        // ...and it still serves what it accepts (two windows' worth in 90s).
+        Assert.True(served >= 2 * limit - 20, $"served {served}");
+    }
+
+    [Fact]
+    public async Task AnUnknownMethodFallback_CountsAsItsOwnSend()
+    {
+        await using var node = new StubNode(m => m == "bridge.get_post_v2" ? -6 : 200);
+        var client = new HiveRpcClient(new[] { node.Url }, timeoutMs: 1000, failoverThreshold: 1, clock: () => 0);
+        await client.CallMethod("bridge.get_post_v2", new JsonObject(),
+            fallback: ("bridge.get_post", new JsonObject(), "post_v2"));
+        Assert.Equal(2, node.Hits);
+        Assert.Equal(2, client.Health.Snapshot()[0].WindowSent);
+    }
+
+    [Fact]
+    public async Task AFallbackAnswered429_RefundsOnlyItself()
+    {
+        await using var node = new StubNode(m => m == "bridge.get_post_v2" ? -6 : 429);
+        var client = new HiveRpcClient(new[] { node.Url }, timeoutMs: 1000, failoverThreshold: 1, clock: () => 0);
+        await Assert.ThrowsAnyAsync<Exception>(() => client.CallMethod("bridge.get_post_v2", new JsonObject(),
+            fallback: ("bridge.get_post", new JsonObject(), "post_v2")));
+        Assert.Equal(2, node.Hits);
+        // The node took the first request; only the refused fallback comes off.
+        Assert.Equal(1, client.Health.Snapshot()[0].WindowSent);
+    }
+
+    [Fact]
+    public async Task AFallbackThatWouldPassTheCap_IsNotSent_AndTheCallMovesOn()
+    {
+        await using var lacking = new StubNode(m => m == "bridge.get_post_v2" ? -6 : 200);
+        await using var spare = new StubNode(() => 200);
+        long now = 0;
+        var client = new HiveRpcClient(new[] { lacking.Url, spare.Url }, timeoutMs: 1000, failoverThreshold: 1,
+            clock: () => now);
+        // The lacking node has room for exactly one more request this window.
+        var health = client.Health;
+        for (var i = 0; i < 150; i++)
+        {
+            health.Admit(0, allowRateLimitParked: false, out _);
+            health.EndAttempt(0);
+        }
+        health.Admit(0, allowRateLimitParked: false, out var refused);
+        health.RecordRateLimited(0, 0, refused);
+        health.EndAttempt(0);
+        Assert.Equal(150, health.Snapshot()[0].WindowCap);
+        health.Admit(0, allowRateLimitParked: true, out var probe); // leave it one short
+        health.RecordRateLimited(0, 0, probe);
+        health.EndAttempt(0);
+        now += 60_001;
+        for (var i = 0; i < 149; i++)
+        {
+            health.Admit(0, allowRateLimitParked: false, out _);
+            health.EndAttempt(0);
+        }
+
+        var result = await client.CallMethod("bridge.get_post_v2", new JsonObject(),
+            fallback: ("bridge.get_post", new JsonObject(), "post_v2"));
+        Assert.Equal(spare.Url, (string?)result?[0]?["port"]);
+        // The primary used the last slot; the fallback was not sent over the cap.
+        Assert.Equal(1, lacking.Hits);
+        Assert.Equal(150, health.Snapshot()[0].WindowSent);
+    }
+
+    [Fact]
+    public async Task AFallbackOnALastResortProbe_IsSentPastTheCap()
+    {
+        await using var lacking = new StubNode(m => m == "bridge.get_post_v2" ? -6 : 200);
+        long now = 0;
+        var client = new HiveRpcClient(new[] { lacking.Url }, timeoutMs: 1000, failoverThreshold: 1,
+            clock: () => now);
+        var health = client.Health;
+        for (var i = 0; i < 150; i++)
+        {
+            health.Admit(0, allowRateLimitParked: false, out _);
+            health.EndAttempt(0);
+        }
+        health.Admit(0, allowRateLimitParked: false, out var refused);
+        health.RecordRateLimited(0, 0, refused);
+        health.EndAttempt(0);
+        now += 1;
+
+        // At its cap and the only node: the call goes out as the last resort,
+        // fallback included, rather than failing.
+        var result = await client.CallMethod("bridge.get_post_v2", new JsonObject(),
+            fallback: ("bridge.get_post", new JsonObject(), "post_v2"));
+        Assert.Equal(lacking.Url, (string?)result?[0]?["port"]);
+        Assert.Equal(2, lacking.Hits);
+    }
 }
