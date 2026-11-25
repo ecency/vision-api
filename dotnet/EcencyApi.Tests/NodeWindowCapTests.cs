@@ -137,6 +137,39 @@ public class NodeWindowCapTests
         Assert.Equal(1_000, View(t, 0).WindowCap);
     }
 
+    [Theory]
+    [InlineData(0)]     // Retry-After: 0
+    [InlineData(null)]  // none: our own ladder
+    public void ABurstOf429s_HalvesTheCapOnce_WhateverThePark(int? retryAfterMs)
+    {
+        long now = 0;
+        var t = new NodeHealthTracker(1, () => now);
+        Send(t, 0, 2_000);
+        Refused(t, 0);
+        now += Window + 1;
+        Send(t, 0, 50);
+        var inFlight = new List<NodeHealthTracker.SendTicket?>();
+        for (var i = 0; i < 30; i++)
+        {
+            Assert.Equal(NodeHealthTracker.Admission.Admitted, t.Admit(0, allowRateLimitParked: false, out var sent));
+            inFlight.Add(sent);
+        }
+        // The replies trickle in; with Retry-After: 0 no park is left between them.
+        foreach (var sent in inFlight)
+        {
+            now += 5;
+            t.RecordRateLimited(0, retryAfterMs, sent);
+            t.EndAttempt(0);
+        }
+        Assert.Equal(1_000, View(t, 0).WindowCap);
+
+        // A call sent after the cut (and after any park) and refused again is a
+        // new verdict.
+        now += 60_001;
+        Refused(t, 0);
+        Assert.Equal(500, View(t, 0).WindowCap);
+    }
+
     [Fact]
     public void A429ToAProbe_AtALowCount_LeavesTheCap()
     {
