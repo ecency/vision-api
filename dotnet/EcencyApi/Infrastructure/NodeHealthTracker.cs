@@ -283,16 +283,21 @@ public sealed class NodeHealthTracker
     }
 
     /// <summary>
-    /// Counts a second request sent within one admitted attempt (the
-    /// unknown-method fallback), so the node's window holds every request it
-    /// received. Not gated: the attempt already holds the node, and the
-    /// fallback happens once per node and method family per TTL.
+    /// A second request within one admitted attempt (the unknown-method
+    /// fallback), counted in the node's window like any other. Null when it
+    /// would take the node past its cap: the caller then moves on, as for a
+    /// node at its cap. <paramref name="pastCap"/> is for the last-resort
+    /// probe, which was admitted past the cap already.
     /// </summary>
-    public SendTicket CountExtraSend(int nodeIndex)
+    public SendTicket? TryCountExtraSend(int nodeIndex, bool pastCap)
     {
         lock (_lock)
         {
-            return new SendTicket(_health[nodeIndex].Sent.AddLast(NowMs), probe: true);
+            var now = NowMs;
+            var h = _health[nodeIndex];
+            Prune(h, now);
+            if (!pastCap && h.WindowCap is { } cap && h.Sent.Count >= cap) return null;
+            return new SendTicket(h.Sent.AddLast(now), probe: pastCap);
         }
     }
 

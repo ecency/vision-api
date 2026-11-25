@@ -344,6 +344,7 @@ public sealed class HiveRpcClient
                 }
                 if (isProbe) probeSent = true;
                 var started = NowMs;
+                var atCapForFallback = false;
                 try
                 {
                     var useFallback = fallbackBody != null && Lacks(nodeIndex, family!);
@@ -360,13 +361,32 @@ public sealed class HiveRpcClient
                         // per (node, family) per TTL for each call that reached the
                         // node before the mark, and inside a fill the gate bounds.
                         _lacksUntil[(nodeIndex, family!)] = _clock() + UnsupportedMethodTtlMs;
-                        // Rank the node on the v1 answer it will give from now on,
-                        // not on the probe that does not recur within the TTL.
-                        started = NowMs;
                         // A second request to the node: counted in its window, and
-                        // a 429 to it refunds this send, not the first one.
-                        sent = _health.CountExtraSend(nodeIndex);
-                        result = await TracedCallNode(nodeIndex, fallbackBody);
+                        // a 429 to it refunds this send, not the first one. If it
+                        // would pass the cap it is not sent; the call moves on.
+                        var extra = _health.TryCountExtraSend(nodeIndex, pastCap: isProbe);
+                        if (extra is null)
+                        {
+                            atCapForFallback = true;
+                            result = null;
+                        }
+                        else
+                        {
+                            sent = extra;
+                            // Rank the node on the v1 answer it will give from now on,
+                            // not on the probe that does not recur within the TTL.
+                            started = NowMs;
+                            result = await TracedCallNode(nodeIndex, fallbackBody);
+                        }
+                    }
+                    if (atCapForFallback)
+                    {
+                        // As if met at its cap: no penalty, and a probe candidate,
+                        // where it will be asked the fallback directly.
+                        sawRateLimit = true;
+                        throttledNodes.Add(nodeIndex);
+                        if (attempt == 0) deferred.Add(nodeIndex);
+                        break;
                     }
                     if (validateResult != null && !validateResult(result))
                     {

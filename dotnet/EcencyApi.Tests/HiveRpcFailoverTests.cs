@@ -1097,4 +1097,67 @@ public class HiveRpcFailoverTests
         // The node took the first request; only the refused fallback comes off.
         Assert.Equal(1, client.Health.Snapshot()[0].WindowSent);
     }
+
+    [Fact]
+    public async Task AFallbackThatWouldPassTheCap_IsNotSent_AndTheCallMovesOn()
+    {
+        await using var lacking = new StubNode(m => m == "bridge.get_post_v2" ? -6 : 200);
+        await using var spare = new StubNode(() => 200);
+        long now = 0;
+        var client = new HiveRpcClient(new[] { lacking.Url, spare.Url }, timeoutMs: 1000, failoverThreshold: 1,
+            clock: () => now);
+        // The lacking node has room for exactly one more request this window.
+        var health = client.Health;
+        for (var i = 0; i < 150; i++)
+        {
+            health.Admit(0, allowRateLimitParked: false, out _);
+            health.EndAttempt(0);
+        }
+        health.Admit(0, allowRateLimitParked: false, out var refused);
+        health.RecordRateLimited(0, 0, refused);
+        health.EndAttempt(0);
+        Assert.Equal(150, health.Snapshot()[0].WindowCap);
+        health.Admit(0, allowRateLimitParked: true, out var probe); // leave it one short
+        health.RecordRateLimited(0, 0, probe);
+        health.EndAttempt(0);
+        now += 60_001;
+        for (var i = 0; i < 149; i++)
+        {
+            health.Admit(0, allowRateLimitParked: false, out _);
+            health.EndAttempt(0);
+        }
+
+        var result = await client.CallMethod("bridge.get_post_v2", new JsonObject(),
+            fallback: ("bridge.get_post", new JsonObject(), "post_v2"));
+        Assert.Equal(spare.Url, (string?)result?[0]?["port"]);
+        // The primary used the last slot; the fallback was not sent over the cap.
+        Assert.Equal(1, lacking.Hits);
+        Assert.Equal(150, health.Snapshot()[0].WindowSent);
+    }
+
+    [Fact]
+    public async Task AFallbackOnALastResortProbe_IsSentPastTheCap()
+    {
+        await using var lacking = new StubNode(m => m == "bridge.get_post_v2" ? -6 : 200);
+        long now = 0;
+        var client = new HiveRpcClient(new[] { lacking.Url }, timeoutMs: 1000, failoverThreshold: 1,
+            clock: () => now);
+        var health = client.Health;
+        for (var i = 0; i < 150; i++)
+        {
+            health.Admit(0, allowRateLimitParked: false, out _);
+            health.EndAttempt(0);
+        }
+        health.Admit(0, allowRateLimitParked: false, out var refused);
+        health.RecordRateLimited(0, 0, refused);
+        health.EndAttempt(0);
+        now += 1;
+
+        // At its cap and the only node: the call goes out as the last resort,
+        // fallback included, rather than failing.
+        var result = await client.CallMethod("bridge.get_post_v2", new JsonObject(),
+            fallback: ("bridge.get_post", new JsonObject(), "post_v2"));
+        Assert.Equal(lacking.Url, (string?)result?[0]?["port"]);
+        Assert.Equal(2, lacking.Hits);
+    }
 }

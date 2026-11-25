@@ -220,7 +220,7 @@ public class NodeWindowCapTests
         long now = 0;
         var t = new NodeHealthTracker(1, () => now);
         Assert.Equal(NodeHealthTracker.Admission.Admitted, t.Admit(0, allowRateLimitParked: false, out _));
-        var fallback = t.CountExtraSend(0);
+        var fallback = t.TryCountExtraSend(0, pastCap: false);
         Assert.Equal(2, View(t, 0).WindowSent);
         t.RecordRateLimited(0, 0, fallback);
         t.EndAttempt(0);
