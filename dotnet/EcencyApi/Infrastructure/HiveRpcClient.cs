@@ -14,8 +14,8 @@ namespace EcencyApi.Infrastructure;
 ///    (dhive semantics — an application error, not an unhealthy node).
 ///  - Overload statuses (429/502/503/504) advance to the next node immediately
 ///    instead of burning a same-node retry.
-///  - Only one node parked for a 429 is asked per call (the one whose park
-///    lapses soonest, chosen after every unparked node was tried): while the whole pool throttles
+///  - Only one node parked for a 429 or at its window cap is asked per call
+///    (the one that frees soonest, chosen after every other node was tried): while the whole pool throttles
 ///    this host, a call reaches one node instead of all of them. A call that
 ///    failed only on 429s throws <see cref="UpstreamRateLimitedException"/>.
 ///  - An `unknown method` answer to a call that names a fallback method asks
@@ -121,6 +121,10 @@ public sealed class HiveRpcClient
             node["rate_limited_for_ms"] = v.RateLimitedForMs;
             node["parked_for_ms"] = v.FailureParkedForMs;
             node["failure_rate"] = Math.Round(v.FailureRate, 3);
+            // The node's learned window cap (null: it never said 429 at a full
+            // window) and the calls sent to it in that window.
+            node["window_cap"] = v.WindowCap;
+            node["window_sent"] = v.WindowSent;
             // Families this node is asked the fallback for until its mark lapses.
             var unsupported = new JsonArray();
             foreach (var m in UnsupportedFamilies(v.Index)) unsupported.Add(m);
@@ -307,7 +311,7 @@ public sealed class HiveRpcClient
             var candidates = new List<int>(deferred);
             while (!probeSent && candidates.Count > 0)
             {
-                var next = candidates.OrderBy(i => _health.RateLimitedForMs(i)).First();
+                var next = candidates.OrderBy(i => _health.ThrottledForMs(i)).First();
                 candidates.Remove(next);
                 yield return (next, true);
             }
@@ -321,7 +325,9 @@ public sealed class HiveRpcClient
             {
                 // Admission is decided now, under one lock with the park check.
                 var admission = _health.Admit(nodeIndex, allowRateLimitParked: isProbe);
-                if (admission == NodeHealthTracker.Admission.RateLimitParked)
+                // At its window cap: as good as parked for this call, and no
+                // request was sent, so it is a probe candidate like a parked node.
+                if (admission is NodeHealthTracker.Admission.RateLimitParked or NodeHealthTracker.Admission.AtCap)
                 {
                     sawRateLimit = true;
                     throttledNodes.Add(nodeIndex);
@@ -443,7 +449,7 @@ public sealed class HiveRpcClient
         if (sawRateLimit && !sawOtherFailure)
         {
             // A park that lapsed during the call counts as 0: that node can serve now.
-            var wait = throttledNodes.Min(i => _health.RateLimitedForMs(i));
+            var wait = throttledNodes.Min(i => _health.ThrottledForMs(i));
             throw new UpstreamRateLimitedException(
                 $"every RPC node is rate-limiting {method}", (int)Math.Min(int.MaxValue, wait));
         }

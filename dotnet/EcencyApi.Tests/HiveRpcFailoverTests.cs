@@ -1031,4 +1031,47 @@ public class HiveRpcFailoverTests
         await Assert.ThrowsAnyAsync<Exception>(() =>
             client.Call("condenser_api", "get_accounts", new JsonArray()));
     }
+
+    [Fact]
+    public async Task AWindowLimitedNode_IsSentWhatItAccepts_InsteadOfBeingOverrunEachTimeItsParkLapses()
+    {
+        // A node that accepts 150 calls per rolling minute (on the test clock) and
+        // answers the rest 429 with Retry-After: 1, like the nodes that cap per
+        // 60s. A healthy, slightly slower second node takes the overflow.
+        const int limit = 150;
+        long now = 0;
+        var accepted = new List<long>();
+        var refused = 0;
+        await using var limited = new StubNode(() =>
+        {
+            lock (accepted)
+            {
+                accepted.RemoveAll(t => t <= now - 60_000);
+                if (accepted.Count < limit) { accepted.Add(now); return 200; }
+                refused++;
+                return 429;
+            }
+        });
+        limited.Headers["Retry-After"] = "1";
+        await using var spare = new StubNode(() => { Thread.Sleep(5); return 200; });
+        var client = new HiveRpcClient(new[] { limited.Url, spare.Url }, timeoutMs: 1000, failoverThreshold: 1,
+            clock: () => now);
+
+        // 20 concurrent calls a second for 90s: concurrency is what overruns a
+        // node, since every call that starts together picks the same best node.
+        var served = 0;
+        for (var tick = 0; tick < 90; tick++)
+        {
+            var batch = await Task.WhenAll(Enumerable.Range(0, 20).Select(_ =>
+                client.Call("condenser_api", "get_accounts", new JsonArray())));
+            served += batch.Count(r => (string?)r?[0]?["port"] == limited.Url);
+            now += 1_000;
+        }
+
+        // Without the cap: a batch of 429s each time the node comes back into
+        // play while its window is still full. With it: the first crossing only.
+        Assert.InRange(refused, 1, 15);
+        // ...and it still serves what it accepts (two windows' worth in 90s).
+        Assert.True(served >= 2 * limit - 20, $"served {served}");
+    }
 }

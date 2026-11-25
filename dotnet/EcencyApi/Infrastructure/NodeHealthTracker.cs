@@ -37,8 +37,10 @@ public enum CallClass
 ///  - Per-node health state: consecutive failures, rate-limit parking, and a
 ///    latency EWMA used to order the pool best-first.
 ///  - 429 parks a node for the server's Retry-After when present, else an
-///    escalating window (10s doubling to 60s); the escalation streak resets
-///    after 120s without a throttle. Parked nodes sort last.
+///    escalating window (10s doubling to 60s); only header-less 429s advance
+///    the escalation, and the streak resets after 120s without a throttle.
+///    Parked nodes sort last.
+///  - A per-node window cap: see <see cref="WindowMs"/>.
 ///  - A node with a recent failure (30s window) is deprioritized behind clean
 ///    nodes, so one bad response moves traffic away without banning the node.
 ///  - Healthy nodes are ordered by the latency EWMA of the call class being
@@ -88,6 +90,31 @@ public sealed class NodeHealthTracker
     private const double FailureRateAlpha = 0.1;
     private const double FailureRateParkFloor = 0.5;
 
+    /// <summary>
+    /// The window cap. Several public nodes admit a fixed number of calls per
+    /// rolling minute from one client and answer 429 to the rest (measured: a
+    /// hard 600 per 60s on three of them, the same every day). Parking alone
+    /// cannot respect that: when a park lapses the window is usually still
+    /// full, and every call in flight picks the same best node, so the node is
+    /// overrun again at once. Instead each node counts the calls sent to it in
+    /// the last <see cref="WindowMs"/> and, once it has said 429, is sent no more
+    /// than it had accepted by then:
+    ///  - a 429 is refunded from the count (the node did not count it either),
+    ///    and the count left becomes the cap, or lowers an existing one;
+    ///  - a 429 with fewer than <see cref="WindowCapMinLearn"/> calls in the
+    ///    window is a burst limiter or a passing episode, not a window limit,
+    ///    and leaves the cap alone (the park still applies);
+    ///  - a node held at its cap for a whole window without a 429 (met there
+    ///    again at least every <see cref="CapHeldGapMs"/>) gets half as much again, so a raised limit is found within minutes. The overshoot
+    ///    costs the calls in flight when the 429 comes back, which snaps the cap
+    ///    down again.
+    /// A node at its cap is skipped without a request or a penalty, and stays
+    /// a last-resort candidate (<see cref="Admission.AtCap"/>).
+    /// </summary>
+    internal const int WindowMs = 60_000;
+    internal const int WindowCapMinLearn = 100;
+    internal const int CapHeldGapMs = 10_000;
+
     // The class is an index into each node's latency array, so CallClass values
     // must stay contiguous from zero.
     private static readonly int CallClassCount = Enum.GetValues<CallClass>().Length;
@@ -122,6 +149,14 @@ public sealed class NodeHealthTracker
             Enumerable.Range(0, CallClassCount).Select(_ => new LatencyProfile()).ToArray();
         // Lifetime counters, for the stats endpoint.
         public long Calls, Successes, Failures, Timeouts, RateLimits;
+        // Send times of the attempts admitted in the last WindowMs, oldest first.
+        public readonly LinkedList<long> Sent = new();
+        // Learned from a 429; null until the node has said one at a full window.
+        public int? WindowCap;
+        // When the cap first held this node back since it last changed or a
+        // 429 came back; growth needs a whole window of that.
+        public long? CapHeldSinceMs;
+        public long LastAtCapMs;
     }
 
     /// <summary>One node's latency for one call class, as reported by
@@ -132,7 +167,8 @@ public sealed class NodeHealthTracker
     public sealed record NodeView(
         int Index, long Calls, long Successes, long Failures, long Timeouts, long RateLimits,
         IReadOnlyList<ClassLatencyView> Latency, int ConsecutiveFailures,
-        bool RecentFailure, long RateLimitedForMs, long FailureParkedForMs, double FailureRate);
+        bool RecentFailure, long RateLimitedForMs, long FailureParkedForMs, double FailureRate,
+        int? WindowCap, int WindowSent);
 
     private readonly NodeHealth[] _health;
     private readonly object _lock = new();
@@ -237,12 +273,44 @@ public sealed class NodeHealthTracker
             {
                 h.RateLimitStreak = 0;
             }
-            var parkMs = retryAfterMs
-                         ?? Math.Min(RateLimitBaseMs << Math.Min(h.RateLimitStreak, 3), RateLimitMaxMs);
-            h.RateLimitedUntilMs = now + parkMs;
-            h.RateLimitStreak++;
+            if (retryAfterMs is { } named)
+            {
+                // The node said how long; that is not a step up our own ladder.
+                h.RateLimitedUntilMs = now + named;
+            }
+            else
+            {
+                h.RateLimitedUntilMs = now + Math.Min(RateLimitBaseMs << Math.Min(h.RateLimitStreak, 3), RateLimitMaxMs);
+                h.RateLimitStreak++;
+            }
             h.LastRateLimitAtMs = now;
+
+            // The window cap (see WindowMs): refund this call, learn from the rest.
+            if (h.Sent.Count > 0) h.Sent.RemoveLast();
+            Prune(h, now);
+            var accepted = h.Sent.Count;
+            if (accepted >= WindowCapMinLearn)
+            {
+                h.WindowCap = h.WindowCap is { } cap ? Math.Min(cap, accepted) : accepted;
+            }
+            h.CapHeldSinceMs = null;
         }
+    }
+
+    private static void Prune(NodeHealth h, long now)
+    {
+        while (h.Sent.First is { } oldest && oldest.Value <= now - WindowMs) h.Sent.RemoveFirst();
+    }
+
+    /// <summary>How long until the node's cap lets another call through, 0 when
+    /// it is under its cap or has none.</summary>
+    private static long CapFreesInMs(NodeHealth h, long now)
+    {
+        Prune(h, now);
+        if (h.WindowCap is not { } cap || h.Sent.Count < cap) return 0;
+        // The call whose leaving brings the count back under the cap.
+        var leaving = h.Sent.Skip(h.Sent.Count - cap).First();
+        return Math.Max(0, leaving + WindowMs - now);
     }
 
     private void RecordLatency(NodeHealth h, CallClass callClass, double elapsedMs)
@@ -325,6 +393,18 @@ public sealed class NodeHealthTracker
         }
     }
 
+    /// <summary>How long until the node takes a call again: the later of its
+    /// 429 park and its window cap. 0 when it would be admitted now.</summary>
+    public long ThrottledForMs(int nodeIndex)
+    {
+        lock (_lock)
+        {
+            var now = NowMs;
+            var h = _health[nodeIndex];
+            return Math.Max(Math.Max(0, h.RateLimitedUntilMs - now), CapFreesInMs(h, now));
+        }
+    }
+
     /// <summary>
     /// Admission at attempt time, because the ordering a call holds was taken
     /// when the call started and can be stale by the time it reaches this node:
@@ -336,11 +416,21 @@ public sealed class NodeHealthTracker
     /// </summary>
     public bool TryBeginAttempt(int nodeIndex) => Admit(nodeIndex, allowRateLimitParked: true) == Admission.Admitted;
 
-    public enum Admission { Admitted, RateLimitParked, Refused }
+    public enum Admission
+    {
+        Admitted,
+        RateLimitParked,
+        Refused,
+        /// <summary>The node has had as many calls this window as it accepts
+        /// (see <see cref="WindowMs"/>). No request was sent; like a parked node
+        /// it remains a last-resort candidate.</summary>
+        AtCap,
+    }
 
     /// <summary>
     /// <see cref="TryBeginAttempt"/> plus, when <paramref name="allowRateLimitParked"/>
-    /// is false, a node parked for a 429 is not admitted (RateLimitParked), decided
+    /// is false, a node parked for a 429 is not admitted (RateLimitParked), nor a
+    /// node at its window cap (AtCap), decided
     /// under the same lock so a concurrent park cannot slip in between. A node that
     /// is failure-parked is Refused first, even if it is also rate-limit parked: an
     /// outage outranks throttling. Admitted pairs with <see cref="EndAttempt"/>.
@@ -367,7 +457,31 @@ public sealed class NodeHealthTracker
                 if (othersAvailable) return Admission.Refused;
             }
             if (!allowRateLimitParked && h.RateLimitedUntilMs > now) return Admission.RateLimitParked;
+            Prune(h, now);
+            if (!allowRateLimitParked && h.WindowCap is { } cap && h.Sent.Count >= cap)
+            {
+                // Held there since when: a node under steady demand meets its cap
+                // every time a slot frees, so a gap longer than CapHeldGapMs
+                // means demand fell away and the holding starts over.
+                if (h.CapHeldSinceMs is not { } heldSince || now - h.LastAtCapMs > CapHeldGapMs)
+                {
+                    h.CapHeldSinceMs = now;
+                }
+                else if (now - heldSince >= WindowMs)
+                {
+                    // A whole window at the cap and no 429: the limit may have
+                    // been raised. Try half as much again; a 429 snaps it back.
+                    h.WindowCap = cap + Math.Max(1, cap / 2);
+                    h.CapHeldSinceMs = null;
+                }
+                if (h.Sent.Count >= h.WindowCap)
+                {
+                    h.LastAtCapMs = now;
+                    return Admission.AtCap;
+                }
+            }
             h.InFlight++;
+            h.Sent.AddLast(now);
             return Admission.Admitted;
         }
     }
@@ -397,9 +511,15 @@ public sealed class NodeHealthTracker
                     latency, h.ConsecutiveFailures,
                     h.ConsecutiveFailures > 0 && now - h.LastFailureAtMs < RecentFailureWindowMs,
                     Math.Max(0, h.RateLimitedUntilMs - now), Math.Max(0, h.FailureParkedUntilMs - now),
-                    h.FailureRate);
+                    h.FailureRate, h.WindowCap, CountInWindow(h, now));
             }).ToList();
         }
+    }
+
+    private static int CountInWindow(NodeHealth h, long now)
+    {
+        Prune(h, now);
+        return h.Sent.Count;
     }
 
     /// <summary>Retry-After: delta-seconds or an HTTP date (RFC 9110).</summary>
