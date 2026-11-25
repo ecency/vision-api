@@ -1074,4 +1074,27 @@ public class HiveRpcFailoverTests
         // ...and it still serves what it accepts (two windows' worth in 90s).
         Assert.True(served >= 2 * limit - 20, $"served {served}");
     }
+
+    [Fact]
+    public async Task AnUnknownMethodFallback_CountsAsItsOwnSend()
+    {
+        await using var node = new StubNode(m => m == "bridge.get_post_v2" ? -6 : 200);
+        var client = new HiveRpcClient(new[] { node.Url }, timeoutMs: 1000, failoverThreshold: 1, clock: () => 0);
+        await client.CallMethod("bridge.get_post_v2", new JsonObject(),
+            fallback: ("bridge.get_post", new JsonObject(), "post_v2"));
+        Assert.Equal(2, node.Hits);
+        Assert.Equal(2, client.Health.Snapshot()[0].WindowSent);
+    }
+
+    [Fact]
+    public async Task AFallbackAnswered429_RefundsOnlyItself()
+    {
+        await using var node = new StubNode(m => m == "bridge.get_post_v2" ? -6 : 429);
+        var client = new HiveRpcClient(new[] { node.Url }, timeoutMs: 1000, failoverThreshold: 1, clock: () => 0);
+        await Assert.ThrowsAnyAsync<Exception>(() => client.CallMethod("bridge.get_post_v2", new JsonObject(),
+            fallback: ("bridge.get_post", new JsonObject(), "post_v2")));
+        Assert.Equal(2, node.Hits);
+        // The node took the first request; only the refused fallback comes off.
+        Assert.Equal(1, client.Health.Snapshot()[0].WindowSent);
+    }
 }

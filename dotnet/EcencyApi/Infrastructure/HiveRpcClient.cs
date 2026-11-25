@@ -324,7 +324,8 @@ public sealed class HiveRpcClient
             for (var attempt = 0; attempt < _failoverThreshold; attempt++)
             {
                 // Admission is decided now, under one lock with the park check.
-                var admission = _health.Admit(nodeIndex, allowRateLimitParked: isProbe);
+                // The counted send, refunded by exactly this ticket if answered 429.
+                var admission = _health.Admit(nodeIndex, allowRateLimitParked: isProbe, out var sent);
                 // At its window cap: as good as parked for this call, and no
                 // request was sent, so it is a probe candidate like a parked node.
                 if (admission is NodeHealthTracker.Admission.RateLimitParked or NodeHealthTracker.Admission.AtCap)
@@ -362,6 +363,9 @@ public sealed class HiveRpcClient
                         // Rank the node on the v1 answer it will give from now on,
                         // not on the probe that does not recur within the TTL.
                         started = NowMs;
+                        // A second request to the node: counted in its window, and
+                        // a 429 to it refunds this send, not the first one.
+                        sent = _health.CountExtraSend(nodeIndex);
                         result = await TracedCallNode(nodeIndex, fallbackBody);
                     }
                     if (validateResult != null && !validateResult(result))
@@ -410,7 +414,7 @@ public sealed class HiveRpcClient
                     {
                         sawRateLimit = true;
                         throttledNodes.Add(nodeIndex);
-                        _health.RecordRateLimited(nodeIndex, e.RetryAfterMs);
+                        _health.RecordRateLimited(nodeIndex, e.RetryAfterMs, sent);
                     }
                     else
                     {

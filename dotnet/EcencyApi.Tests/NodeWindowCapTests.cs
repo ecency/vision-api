@@ -22,11 +22,12 @@ public class NodeWindowCapTests
         }
     }
 
-    /// <summary>One more call, answered 429.</summary>
-    private static void Refused(NodeHealthTracker t, int node, int? retryAfterMs = 0)
+    /// <summary>One more call, answered 429. A probe is a last-resort send past
+    /// a park or the cap; otherwise the call is admitted the ordinary way.</summary>
+    private static void Refused(NodeHealthTracker t, int node, int? retryAfterMs = 0, bool probe = false)
     {
-        Assert.Equal(NodeHealthTracker.Admission.Admitted, t.Admit(node, allowRateLimitParked: true));
-        t.RecordRateLimited(node, retryAfterMs);
+        Assert.Equal(NodeHealthTracker.Admission.Admitted, t.Admit(node, allowRateLimitParked: probe, out var sent));
+        t.RecordRateLimited(node, retryAfterMs, sent);
         t.EndAttempt(node);
     }
 
@@ -88,6 +89,112 @@ public class NodeWindowCapTests
     }
 
     [Fact]
+    public void A429WellBelowTheCap_HalvesItTowardsTheCountItCameAt()
+    {
+        long now = 0;
+        var t = new NodeHealthTracker(1, () => now);
+        Send(t, 0, 600);
+        Refused(t, 0);
+        Assert.Equal(600, View(t, 0).WindowCap);
+
+        // The operator drops the limit to 50: each 429 inside the cap halves it,
+        // never below the count the 429 came at.
+        foreach (var expected in new[] { 300, 150, 75, 50 })
+        {
+            now += Window + 1;
+            Send(t, 0, 50);
+            Refused(t, 0);
+            Assert.Equal(expected, View(t, 0).WindowCap);
+        }
+        // Settled: the next window's 51st call is no longer sent.
+        now += Window + 1;
+        Send(t, 0, 50);
+        Assert.Equal(NodeHealthTracker.Admission.AtCap, t.Admit(0, allowRateLimitParked: false));
+    }
+
+    [Fact]
+    public void ABurstOf429s_HalvesTheCapOnce()
+    {
+        long now = 0;
+        var t = new NodeHealthTracker(1, () => now);
+        Send(t, 0, 2_000);
+        Refused(t, 0);
+        now += Window + 1;
+        Send(t, 0, 50);
+        // Thirty calls already in flight when the node starts refusing: one
+        // verdict, not thirty, or one episode would ratchet the cap to the floor.
+        var inFlight = new List<NodeHealthTracker.SendTicket?>();
+        for (var i = 0; i < 30; i++)
+        {
+            Assert.Equal(NodeHealthTracker.Admission.Admitted, t.Admit(0, allowRateLimitParked: false, out var sent));
+            inFlight.Add(sent);
+        }
+        foreach (var sent in inFlight)
+        {
+            t.RecordRateLimited(0, 5_000, sent);
+            t.EndAttempt(0);
+        }
+        Assert.Equal(1_000, View(t, 0).WindowCap);
+    }
+
+    [Fact]
+    public void A429ToAProbe_AtALowCount_LeavesTheCap()
+    {
+        long now = 0;
+        var t = new NodeHealthTracker(1, () => now);
+        Send(t, 0, 600);
+        Refused(t, 0, retryAfterMs: 30_000);
+        now += Window + 1;
+        // Still parked: a last-resort probe sent into the park is expected to be
+        // refused, and says nothing new about the window.
+        Send(t, 0, 0);
+        Refused(t, 0, retryAfterMs: 30_000, probe: true);
+        Assert.Equal(600, View(t, 0).WindowCap);
+    }
+
+    [Fact]
+    public void A429RefundsItsOwnSend_NotTheNewestOne()
+    {
+        long now = 0;
+        var t = new NodeHealthTracker(1, () => now);
+        // An older call still in flight when newer ones are sent and answered.
+        Assert.Equal(NodeHealthTracker.Admission.Admitted, t.Admit(0, allowRateLimitParked: false, out var older));
+        now = 30_000;
+        Send(t, 0, 150);
+        t.RecordRateLimited(0, 0, older);
+        t.EndAttempt(0);
+        Assert.Equal(150, View(t, 0).WindowCap);
+        // All 150 counted calls were sent at 30s, so the first slot frees at 90s,
+        // not when the refused call from 0s would have left.
+        Assert.Equal(Window, t.ThrottledForMs(0));
+    }
+
+    [Fact]
+    public void A429WithoutASend_RefundsNothing()
+    {
+        long now = 0;
+        var t = new NodeHealthTracker(1, () => now);
+        Send(t, 0, 150);
+        // A caller that never admitted (the Hive-Engine client) still parks.
+        t.RecordRateLimited(0, 1_000);
+        Assert.Equal(150, View(t, 0).WindowSent);
+        Assert.Equal(150, View(t, 0).WindowCap);
+    }
+
+    [Fact]
+    public void AnExtraSendOnOneAdmission_IsCountedAndRefundedOnItsOwn()
+    {
+        long now = 0;
+        var t = new NodeHealthTracker(1, () => now);
+        Assert.Equal(NodeHealthTracker.Admission.Admitted, t.Admit(0, allowRateLimitParked: false, out _));
+        var fallback = t.CountExtraSend(0);
+        Assert.Equal(2, View(t, 0).WindowSent);
+        t.RecordRateLimited(0, 0, fallback);
+        t.EndAttempt(0);
+        Assert.Equal(1, View(t, 0).WindowSent);
+    }
+
+    [Fact]
     public void A429AboveTheCap_DoesNotRaiseIt()
     {
         long now = 0;
@@ -102,7 +209,7 @@ public class NodeWindowCapTests
             t.RecordSuccess(0, 50, CallClass.Cheap);
             t.EndAttempt(0);
         }
-        Refused(t, 0);
+        Refused(t, 0, probe: true);
         Assert.Equal(300, View(t, 0).WindowCap);
     }
 

@@ -101,6 +101,10 @@ public sealed class NodeHealthTracker
     /// than it had accepted by then:
     ///  - a 429 is refunded from the count (the node did not count it either),
     ///    and the count left becomes the cap, or lowers an existing one;
+    ///  - a 429 to an ordinary send below that floor halves an existing cap,
+    ///    never below the count it came at, so a limit that drops low is still
+    ///    followed; once per park, since calls in flight together are refused
+    ///    together (a probe's 429 is expected and lowers nothing there);
     ///  - a 429 with fewer than <see cref="WindowCapMinLearn"/> calls in the
     ///    window is a burst limiter or a passing episode, not a window limit,
     ///    and leaves the cap alone (the park still applies);
@@ -259,7 +263,42 @@ public sealed class NodeHealthTracker
         }
     }
 
-    public void RecordRateLimited(int nodeIndex, int? retryAfterMs)
+    /// <summary>One send counted in a node's window (see <see cref="WindowMs"/>),
+    /// handed back with its 429 so exactly that send is refunded: calls answer
+    /// out of order, so the newest entry is not necessarily the refused one.</summary>
+    public sealed class SendTicket
+    {
+        internal readonly LinkedListNode<long> Entry;
+        // Sent past a park or the cap as a last resort: its 429 is expected and
+        // says nothing new about where the limit is.
+        internal readonly bool Probe;
+
+        internal SendTicket(LinkedListNode<long> entry, bool probe)
+        {
+            Entry = entry;
+            Probe = probe;
+        }
+    }
+
+    /// <summary>
+    /// Counts a second request sent within one admitted attempt (the
+    /// unknown-method fallback), so the node's window holds every request it
+    /// received. Not gated: the attempt already holds the node, and the
+    /// fallback happens once per node and method family per TTL.
+    /// </summary>
+    public SendTicket CountExtraSend(int nodeIndex)
+    {
+        lock (_lock)
+        {
+            return new SendTicket(_health[nodeIndex].Sent.AddLast(NowMs), probe: true);
+        }
+    }
+
+    /// <param name="sent">The refused send, from <see cref="Admit(int, bool, out SendTicket?)"/>
+    /// or <see cref="CountExtraSend"/>. Null for a caller that does not count
+    /// its sends: the node is parked and nothing is refunded or learned beyond
+    /// what the window already holds.</param>
+    public void RecordRateLimited(int nodeIndex, int? retryAfterMs, SendTicket? sent = null)
     {
         lock (_lock)
         {
@@ -273,6 +312,9 @@ public sealed class NodeHealthTracker
             {
                 h.RateLimitStreak = 0;
             }
+            // Calls in flight together are refused together: only the 429 that
+            // starts a park is a verdict, the rest of the burst repeats it.
+            var startsPark = h.RateLimitedUntilMs <= now;
             if (retryAfterMs is { } named)
             {
                 // The node said how long; that is not a step up our own ladder.
@@ -286,12 +328,21 @@ public sealed class NodeHealthTracker
             h.LastRateLimitAtMs = now;
 
             // The window cap (see WindowMs): refund this call, learn from the rest.
-            if (h.Sent.Count > 0) h.Sent.RemoveLast();
+            if (sent?.Entry.List == h.Sent) h.Sent.Remove(sent.Entry);
             Prune(h, now);
             var accepted = h.Sent.Count;
             if (accepted >= WindowCapMinLearn)
             {
                 h.WindowCap = h.WindowCap is { } cap ? Math.Min(cap, accepted) : accepted;
+            }
+            else if (h.WindowCap is { } cap && sent is { Probe: false } && startsPark)
+            {
+                // Refused inside the cap at a count too small to learn from
+                // outright: the limit may have dropped below the learning floor,
+                // or this is a passing episode. Halve towards the count, once per
+                // park, so a real drop is reached in a few parks and an episode
+                // costs one halving that growth recovers.
+                h.WindowCap = Math.Min(cap, Math.Max(Math.Max(accepted, 1), cap / 2));
             }
             h.CapHeldSinceMs = null;
         }
@@ -435,8 +486,13 @@ public sealed class NodeHealthTracker
     /// is failure-parked is Refused first, even if it is also rate-limit parked: an
     /// outage outranks throttling. Admitted pairs with <see cref="EndAttempt"/>.
     /// </summary>
-    public Admission Admit(int nodeIndex, bool allowRateLimitParked)
+    public Admission Admit(int nodeIndex, bool allowRateLimitParked) => Admit(nodeIndex, allowRateLimitParked, out _);
+
+    /// <param name="sent">The counted send when Admitted, to hand back with a 429
+    /// (<see cref="RecordRateLimited"/>); null otherwise.</param>
+    public Admission Admit(int nodeIndex, bool allowRateLimitParked, out SendTicket? sent)
     {
+        sent = null;
         lock (_lock)
         {
             var now = NowMs;
@@ -481,7 +537,7 @@ public sealed class NodeHealthTracker
                 }
             }
             h.InFlight++;
-            h.Sent.AddLast(now);
+            sent = new SendTicket(h.Sent.AddLast(now), probe: allowRateLimitParked);
             return Admission.Admitted;
         }
     }

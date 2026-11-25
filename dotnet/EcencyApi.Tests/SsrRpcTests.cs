@@ -886,6 +886,25 @@ public class SsrRpcTests
             Assert.Equal(1, node["samples"]!.GetValue<int>());
             Assert.Equal(1, node["heavy_samples"]!.GetValue<int>());
             Assert.NotNull(node["heavy_ewma_ms"]);
+            // The window cap: none before a 429 at a full window; both reads counted.
+            Assert.Null(node["window_cap"]);
+            Assert.Equal(2, node["window_sent"]!.GetValue<int>());
+
+            // 150 calls in the window, then a 429: the cap is what the node accepted.
+            var health = SsrRpc.Client.Health;
+            for (var i = 0; i < 148; i++)
+            {
+                health.Admit(0, allowRateLimitParked: false, out _);
+                health.EndAttempt(0);
+            }
+            health.Admit(0, allowRateLimitParked: false, out var refused);
+            health.RecordRateLimited(0, 0, refused);
+            health.EndAttempt(0);
+            stats = Request("GET", "/private-api/ssr/stats", "right-secret");
+            await SsrRpc.Stats(stats);
+            node = Assert.Single(JsonNode.Parse(ResponseText(stats))!["nodes"]!.AsArray())!;
+            Assert.Equal(150, node["window_cap"]!.GetValue<int>());
+            Assert.Equal(150, node["window_sent"]!.GetValue<int>());
         }
         finally
         {
