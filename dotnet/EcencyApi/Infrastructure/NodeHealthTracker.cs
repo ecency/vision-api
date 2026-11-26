@@ -381,6 +381,27 @@ public sealed class NodeHealthTracker
         }
     }
 
+    /// <summary>
+    /// How long each node stays rate-limit parked, 0 when it is not. Only the
+    /// node's own throttling: a failure park reflects this client's timeouts,
+    /// which another client with its own may not share. One lock and one small
+    /// array, so it is cheap enough to read on every response.
+    /// </summary>
+    public long[] RateLimitedForMsAll()
+    {
+        lock (_lock)
+        {
+            var now = NowMs;
+            var result = new long[_health.Length];
+            for (var i = 0; i < _health.Length; i++)
+            {
+                var h = _health[i];
+                result[i] = Math.Max(0, h.RateLimitedUntilMs - now);
+            }
+            return result;
+        }
+    }
+
     /// <summary>Per-node state and lifetime counters, for the stats endpoint.</summary>
     public List<NodeView> Snapshot()
     {

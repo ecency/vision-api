@@ -32,6 +32,10 @@ namespace EcencyApi.Handlers;
 ///    answers 503 RATELIMITED with a Retry-After. The proxy itself is fine, so
 ///    a consumer must not count it toward a breaker that would send its other
 ///    reads straight to the same throttling nodes.
+///  - Every answer names the nodes the cache's client has rate-limit parked
+///    (X-Ssr-Node-Parks: authority=ms,...), so a consumer that falls back to
+///    its own pool can skip them instead of re-learning each 429 with a request
+///    of its own from the same address.
 ///  - No per-request logging (invariant 6); counters on /stats instead.
 /// </summary>
 public static partial class SsrRpc
@@ -42,9 +46,53 @@ public static partial class SsrRpc
     /// between nodes, so the pool is ordered for them from their own latency
     /// profile (see <see cref="CallClass"/>). Required, not defaulted: a new
     /// method has to be classified, not silently filed as cheap.</param>
-    internal sealed record MethodPolicy(string Api, string Method, int TtlMs, CallClass Class, string? Fallback = null)
+    /// <param name="LongTtlMs">TTL for an answer <paramref name="LongWhen"/>
+    /// accepts, given the request params and the answer; any other answer (a
+    /// list missing an account a node does not know yet, a null) keeps
+    /// <paramref name="TtlMs"/> and is asked again soon.
+    /// Null keeps <paramref name="TtlMs"/> for every answer.</param>
+    internal sealed record MethodPolicy(string Api, string Method, int TtlMs, CallClass Class, string? Fallback = null,
+        int? LongTtlMs = null, Func<JsonNode, JsonNode?, bool>? LongWhen = null)
     {
         public string Key => $"{Api}.{Method}";
+
+        public int TtlFor(JsonNode @params, JsonNode? result) =>
+            LongTtlMs is { } ttl && LongWhen is { } accept && accept(@params, result) ? ttl : TtlMs;
+    }
+
+    // bridge.get_profiles for the author of the page being rendered: read once
+    // per post render, and the same author repeats across renders far beyond a
+    // minute (a crawl walks one author's posts), while the fields a render reads
+    // (display name, reputation, post count) change on a much longer scale.
+    // Only get_profiles: get_profile is cross-checked against get_accounts by
+    // the full-account read, and the two must stay equally fresh. Posts stay
+    // short however old they are: an edit after payout changes nothing a cache
+    // could key on, and its author is sent straight back to the page.
+    private const int ProfilesTtlMs = 60 * 60_000;
+
+    /// <summary>
+    /// Whether a get_profiles answer names every account the request asked for.
+    /// A node leaves out an account it does not know yet (a new one, or one its
+    /// hivemind has not indexed), and the whole list is cached under one key, so
+    /// a partial answer must stay short or that account stays missing for the
+    /// long TTL.
+    /// </summary>
+    internal static bool IsCompleteProfileList(JsonNode @params, JsonNode? result)
+    {
+        if (result is not JsonArray profiles || profiles.Count == 0) return false;
+        if (@params is not JsonObject p || p["accounts"] is not JsonArray asked || asked.Count == 0) return false;
+        var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var profile in profiles)
+        {
+            if (profile is JsonObject o && o["name"] is JsonValue n && JsVal.TryGetStringLenient(n, out var name))
+                found.Add(name);
+        }
+        foreach (var account in asked)
+        {
+            if (account is not JsonValue a || !JsVal.TryGetStringLenient(a, out var wanted) || !found.Contains(wanted))
+                return false;
+        }
+        return true;
     }
 
     // TTLs follow how fast each read legitimately changes for a page render:
@@ -72,7 +120,7 @@ public static partial class SsrRpc
         new MethodPolicy("bridge", "get_discussion_v2", 30_000, CallClass.Heavy, Fallback: "get_discussion"),
         new MethodPolicy("bridge", "get_post_v2", 30_000, CallClass.Cheap, Fallback: "get_post"),
         new MethodPolicy("bridge", "get_profile", 60_000, CallClass.Cheap),
-        new MethodPolicy("bridge", "get_profiles", 60_000, CallClass.Cheap),
+        new MethodPolicy("bridge", "get_profiles", 60_000, CallClass.Cheap, LongTtlMs: ProfilesTtlMs, LongWhen: IsCompleteProfileList),
         new MethodPolicy("bridge", "get_community", 300_000, CallClass.Cheap),
         new MethodPolicy("bridge", "list_communities", 300_000, CallClass.Cheap),
         new MethodPolicy("condenser_api", "get_accounts", 30_000, CallClass.Cheap),
@@ -433,7 +481,7 @@ public static partial class SsrRpc
             }
             var bytes = Encoding.UTF8.GetBytes(result is null ? "null" : JsJson.Stringify(result));
             counter.RecordUpstream(Environment.TickCount64 - started);
-            Cache.Set(key, bytes, policy.TtlMs);
+            Cache.Set(key, bytes, policy.TtlFor(@params, result));
             tcs.TrySetResult(bytes);
         }
         catch (Exception e)
@@ -485,6 +533,7 @@ public static partial class SsrRpc
 
         var resolution = await Resolve(policy, @params);
         ctx.Response.Headers["X-Ssr-Cache"] = resolution.Outcome.ToString().ToUpperInvariant();
+        if (Client.RateLimitedNodesHeader() is { } parks) ctx.Response.Headers["X-Ssr-Node-Parks"] = parks;
         switch (resolution.Outcome)
         {
             case Outcome.Hit:

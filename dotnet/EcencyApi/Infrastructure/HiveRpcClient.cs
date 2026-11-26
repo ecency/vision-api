@@ -87,6 +87,31 @@ public sealed class HiveRpcClient
     public IReadOnlyList<string> Nodes => _nodes;
 
     /// <summary>
+    /// The nodes this client has rate-limit parked, as `authority=ms` pairs joined
+    /// by commas (authority is host plus any non-default port, the form a
+    /// consumer's node URL reduces to), or null when none is. Lets a consumer that
+    /// falls back to its own pool from the same address skip a node that is
+    /// throttling that address, instead of drawing the same 429 itself. Failure
+    /// parks are left out: they follow this client's own timeouts, which a
+    /// consumer with longer ones need not share.
+    /// </summary>
+    public string? RateLimitedNodesHeader()
+    {
+        var parked = _health.RateLimitedForMsAll();
+        System.Text.StringBuilder? sb = null;
+        for (var i = 0; i < parked.Length; i++)
+        {
+            if (parked[i] <= 0) continue;
+            sb ??= new System.Text.StringBuilder();
+            if (sb.Length > 0) sb.Append(',');
+            sb.Append(Uri.TryCreate(_nodes[i], UriKind.Absolute, out var u) ? u.Authority : _nodes[i])
+              .Append('=')
+              .Append(parked[i].ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+        return sb?.ToString();
+    }
+
+    /// <summary>
     /// Per-node health for an internal stats endpoint: which node carries the
     /// traffic, which one times out, which one is parked. Hosts only; these are
     /// the public node names, nothing about this deployment.
