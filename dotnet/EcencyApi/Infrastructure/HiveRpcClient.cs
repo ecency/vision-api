@@ -87,6 +87,31 @@ public sealed class HiveRpcClient
     public IReadOnlyList<string> Nodes => _nodes;
 
     /// <summary>
+    /// The nodes this client is currently keeping out of rotation, as
+    /// `authority=ms` pairs joined by commas (authority is host plus any
+    /// non-default port, the form a consumer's node URL reduces to), or null when
+    /// every node is available. Lets a consumer that falls back to its own pool
+    /// skip a node this client already learned is rate-limiting or failing,
+    /// instead of learning it again with a request of its own from the same
+    /// address.
+    /// </summary>
+    public string? UnavailableNodesHeader()
+    {
+        var parked = _health.UnavailableForMs();
+        System.Text.StringBuilder? sb = null;
+        for (var i = 0; i < parked.Length; i++)
+        {
+            if (parked[i] <= 0) continue;
+            sb ??= new System.Text.StringBuilder();
+            if (sb.Length > 0) sb.Append(',');
+            sb.Append(Uri.TryCreate(_nodes[i], UriKind.Absolute, out var u) ? u.Authority : _nodes[i])
+              .Append('=')
+              .Append(parked[i].ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+        return sb?.ToString();
+    }
+
+    /// <summary>
     /// Per-node health for an internal stats endpoint: which node carries the
     /// traffic, which one times out, which one is parked. Hosts only; these are
     /// the public node names, nothing about this deployment.

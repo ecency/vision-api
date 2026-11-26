@@ -381,6 +381,26 @@ public sealed class NodeHealthTracker
         }
     }
 
+    /// <summary>
+    /// How long each node stays out of the healthy order: the later of its
+    /// rate-limit park and its failure park, 0 when it is neither. One lock and
+    /// one small array, so it is cheap enough to read on every response.
+    /// </summary>
+    public long[] UnavailableForMs()
+    {
+        lock (_lock)
+        {
+            var now = NowMs;
+            var result = new long[_health.Length];
+            for (var i = 0; i < _health.Length; i++)
+            {
+                var h = _health[i];
+                result[i] = Math.Max(0, Math.Max(h.RateLimitedUntilMs, h.FailureParkedUntilMs) - now);
+            }
+            return result;
+        }
+    }
+
     /// <summary>Per-node state and lifetime counters, for the stats endpoint.</summary>
     public List<NodeView> Snapshot()
     {

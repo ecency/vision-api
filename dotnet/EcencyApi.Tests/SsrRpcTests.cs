@@ -245,6 +245,44 @@ public class SsrRpcTests
     }
 
     [Fact]
+    public async Task A_found_profile_list_outlives_the_short_ttl_while_an_empty_one_does_not()
+    {
+        await using var stub = new RpcStub
+        {
+            RawBody = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[{\"name\":\"a\",\"post_count\":9}]}",
+        };
+        Use(stub);
+        var shortLived = SsrRpc.Allowlist["bridge.get_profiles"] with { TtlMs = 150 };
+        var found = new JsonObject { ["accounts"] = new JsonArray("a") };
+        Assert.Equal(SsrRpc.Outcome.Miss, (await SsrRpc.Resolve(shortLived, found)).Outcome);
+        await Task.Delay(300);
+        Assert.Equal(SsrRpc.Outcome.Hit, (await SsrRpc.Resolve(shortLived, found)).Outcome);
+        Assert.Equal(1, stub.Hits);
+
+        // An account a node does not know yet: asked again soon, not in an hour.
+        stub.RawBody = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":[]}";
+        var missing = new JsonObject { ["accounts"] = new JsonArray("new-account") };
+        Assert.Equal(SsrRpc.Outcome.Miss, (await SsrRpc.Resolve(shortLived, missing)).Outcome);
+        await Task.Delay(300);
+        Assert.Equal(SsrRpc.Outcome.Miss, (await SsrRpc.Resolve(shortLived, missing)).Outcome);
+        Assert.Equal(3, stub.Hits);
+    }
+
+    [Fact]
+    public void Only_the_profile_list_is_long_lived()
+    {
+        Assert.True(SsrRpc.Allowlist["bridge.get_profiles"].LongTtlMs >= 30 * 60_000);
+        // get_profile is cross-checked against get_accounts by the full-account
+        // read, and posts can be edited at any age: both stay short.
+        foreach (var (key, policy) in SsrRpc.Allowlist)
+        {
+            if (key == "bridge.get_profiles") continue;
+            Assert.Null(policy.LongTtlMs);
+            Assert.True(policy.TtlMs <= 300_000, key);
+        }
+    }
+
+    [Fact]
     public async Task Budget_exceeded_answers_timeout_while_the_fill_still_lands_in_the_cache()
     {
         await using var stub = new RpcStub { DelayMs = 400 };
@@ -399,6 +437,12 @@ public class SsrRpcTests
             Assert.Equal("RATELIMITED", ctx.Response.Headers["X-Ssr-Cache"].ToString());
             Assert.True(int.TryParse(ctx.Response.Headers.RetryAfter.ToString(), out var secs) && secs >= 1,
                 $"Retry-After '{ctx.Response.Headers.RetryAfter}'");
+            // The parked node is named (authority=ms) so the consumer's fallback
+            // can skip it instead of drawing its own 429 from it.
+            var parks = ctx.Response.Headers["X-Ssr-Node-Parks"].ToString();
+            var authority = new Uri(stub.Url).Authority;
+            Assert.StartsWith(authority + "=", parks);
+            Assert.True(long.Parse(parks[(authority.Length + 1)..]) > 0, parks);
 
             var stats = Request("GET", "/private-api/ssr/stats", "right-secret");
             await SsrRpc.Stats(stats);
@@ -703,6 +747,8 @@ public class SsrRpcTests
             await SsrRpc.Rpc(ctx);
             Assert.True(ctx.Response.StatusCode == 200, $"status {ctx.Response.StatusCode}: {ResponseText(ctx)}");
             Assert.StartsWith("application/json", ctx.Response.ContentType);
+            // A healthy pool names no node.
+            Assert.False(ctx.Response.Headers.ContainsKey("X-Ssr-Node-Parks"));
             Assert.Equal("null", ResponseText(ctx));
         }
         finally
