@@ -382,11 +382,12 @@ public sealed class NodeHealthTracker
     }
 
     /// <summary>
-    /// How long each node stays out of the healthy order: the later of its
-    /// rate-limit park and its failure park, 0 when it is neither. One lock and
-    /// one small array, so it is cheap enough to read on every response.
+    /// How long each node stays rate-limit parked, 0 when it is not. Only the
+    /// node's own throttling: a failure park reflects this client's timeouts,
+    /// which another client with its own may not share. One lock and one small
+    /// array, so it is cheap enough to read on every response.
     /// </summary>
-    public long[] UnavailableForMs()
+    public long[] RateLimitedForMsAll()
     {
         lock (_lock)
         {
@@ -395,7 +396,7 @@ public sealed class NodeHealthTracker
             for (var i = 0; i < _health.Length; i++)
             {
                 var h = _health[i];
-                result[i] = Math.Max(0, Math.Max(h.RateLimitedUntilMs, h.FailureParkedUntilMs) - now);
+                result[i] = Math.Max(0, h.RateLimitedUntilMs - now);
             }
             return result;
         }

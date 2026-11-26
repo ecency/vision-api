@@ -32,10 +32,10 @@ namespace EcencyApi.Handlers;
 ///    answers 503 RATELIMITED with a Retry-After. The proxy itself is fine, so
 ///    a consumer must not count it toward a breaker that would send its other
 ///    reads straight to the same throttling nodes.
-///  - Every answer names the nodes the cache's client is keeping out of
-///    rotation (X-Ssr-Node-Parks: authority=ms,...), so a consumer that falls
-///    back to its own pool can skip them instead of re-learning each 429 with a
-///    request of its own from the same address.
+///  - Every answer names the nodes the cache's client has rate-limit parked
+///    (X-Ssr-Node-Parks: authority=ms,...), so a consumer that falls back to
+///    its own pool can skip them instead of re-learning each 429 with a request
+///    of its own from the same address.
 ///  - No per-request logging (invariant 6); counters on /stats instead.
 /// </summary>
 public static partial class SsrRpc
@@ -509,7 +509,7 @@ public static partial class SsrRpc
 
         var resolution = await Resolve(policy, @params);
         ctx.Response.Headers["X-Ssr-Cache"] = resolution.Outcome.ToString().ToUpperInvariant();
-        if (Client.UnavailableNodesHeader() is { } parks) ctx.Response.Headers["X-Ssr-Node-Parks"] = parks;
+        if (Client.RateLimitedNodesHeader() is { } parks) ctx.Response.Headers["X-Ssr-Node-Parks"] = parks;
         switch (resolution.Outcome)
         {
             case Outcome.Hit:

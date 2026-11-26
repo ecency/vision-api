@@ -245,6 +245,23 @@ public class SsrRpcTests
     }
 
     [Fact]
+    public void Only_rate_limit_parks_are_reported_not_failure_parks()
+    {
+        // A failure park follows this client's own short timeouts; a consumer
+        // with longer ones may still get an answer from that node.
+        var clock = 1_000L;
+        var tracker = new NodeHealthTracker(3, () => clock);
+        for (var i = 0; i < 10; i++) tracker.RecordFailure(0, 2000, CallClass.Cheap, timedOut: true);
+        tracker.RecordRateLimited(1, 5_000);
+        var parked = tracker.RateLimitedForMsAll();
+        Assert.Equal(0, parked[0]);
+        Assert.Equal(5_000, parked[1]);
+        Assert.Equal(0, parked[2]);
+        clock += 2_000;
+        Assert.Equal(3_000, tracker.RateLimitedForMsAll()[1]);
+    }
+
+    [Fact]
     public async Task A_found_profile_list_outlives_the_short_ttl_while_an_empty_one_does_not()
     {
         await using var stub = new RpcStub

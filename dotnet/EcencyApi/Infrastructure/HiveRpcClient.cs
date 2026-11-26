@@ -87,17 +87,17 @@ public sealed class HiveRpcClient
     public IReadOnlyList<string> Nodes => _nodes;
 
     /// <summary>
-    /// The nodes this client is currently keeping out of rotation, as
-    /// `authority=ms` pairs joined by commas (authority is host plus any
-    /// non-default port, the form a consumer's node URL reduces to), or null when
-    /// every node is available. Lets a consumer that falls back to its own pool
-    /// skip a node this client already learned is rate-limiting or failing,
-    /// instead of learning it again with a request of its own from the same
-    /// address.
+    /// The nodes this client has rate-limit parked, as `authority=ms` pairs joined
+    /// by commas (authority is host plus any non-default port, the form a
+    /// consumer's node URL reduces to), or null when none is. Lets a consumer that
+    /// falls back to its own pool from the same address skip a node that is
+    /// throttling that address, instead of drawing the same 429 itself. Failure
+    /// parks are left out: they follow this client's own timeouts, which a
+    /// consumer with longer ones need not share.
     /// </summary>
-    public string? UnavailableNodesHeader()
+    public string? RateLimitedNodesHeader()
     {
-        var parked = _health.UnavailableForMs();
+        var parked = _health.RateLimitedForMsAll();
         System.Text.StringBuilder? sb = null;
         for (var i = 0; i < parked.Length; i++)
         {
