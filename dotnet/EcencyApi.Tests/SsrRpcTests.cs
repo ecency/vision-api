@@ -285,6 +285,20 @@ public class SsrRpcTests
         Assert.Equal(3, stub.Hits);
     }
 
+    [Theory]
+    [InlineData("[\"a\"]", "[{\"name\":\"a\"}]", true)]
+    [InlineData("[\"a\",\"b\"]", "[{\"name\":\"b\"},{\"name\":\"a\"}]", true)]
+    // A node that does not know `new` yet leaves it out: the list stays short.
+    [InlineData("[\"a\",\"new\"]", "[{\"name\":\"a\"}]", false)]
+    [InlineData("[\"a\"]", "[]", false)]
+    [InlineData("[\"a\"]", "null", false)]
+    [InlineData("[]", "[{\"name\":\"a\"}]", false)]
+    public void Only_a_profile_list_naming_every_asked_account_is_long_lived(string asked, string answer, bool complete)
+    {
+        var @params = new JsonObject { ["accounts"] = JsonNode.Parse(asked) };
+        Assert.Equal(complete, SsrRpc.IsCompleteProfileList(@params, JsonNode.Parse(answer)));
+    }
+
     [Fact]
     public void Only_the_profile_list_is_long_lived()
     {

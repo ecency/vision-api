@@ -47,16 +47,17 @@ public static partial class SsrRpc
     /// profile (see <see cref="CallClass"/>). Required, not defaulted: a new
     /// method has to be classified, not silently filed as cheap.</param>
     /// <param name="LongTtlMs">TTL for an answer <paramref name="LongWhen"/>
-    /// accepts; any other answer (an empty list for an account that does not
-    /// exist yet, a null) keeps <paramref name="TtlMs"/> and is asked again soon.
+    /// accepts, given the request params and the answer; any other answer (a
+    /// list missing an account a node does not know yet, a null) keeps
+    /// <paramref name="TtlMs"/> and is asked again soon.
     /// Null keeps <paramref name="TtlMs"/> for every answer.</param>
     internal sealed record MethodPolicy(string Api, string Method, int TtlMs, CallClass Class, string? Fallback = null,
-        int? LongTtlMs = null, Func<JsonNode?, bool>? LongWhen = null)
+        int? LongTtlMs = null, Func<JsonNode, JsonNode?, bool>? LongWhen = null)
     {
         public string Key => $"{Api}.{Method}";
 
-        public int TtlFor(JsonNode? result) =>
-            LongTtlMs is { } ttl && LongWhen is { } accept && accept(result) ? ttl : TtlMs;
+        public int TtlFor(JsonNode @params, JsonNode? result) =>
+            LongTtlMs is { } ttl && LongWhen is { } accept && accept(@params, result) ? ttl : TtlMs;
     }
 
     // bridge.get_profiles for the author of the page being rendered: read once
@@ -69,7 +70,30 @@ public static partial class SsrRpc
     // could key on, and its author is sent straight back to the page.
     private const int ProfilesTtlMs = 60 * 60_000;
 
-    internal static bool IsNonEmptyList(JsonNode? result) => result is JsonArray { Count: > 0 };
+    /// <summary>
+    /// Whether a get_profiles answer names every account the request asked for.
+    /// A node leaves out an account it does not know yet (a new one, or one its
+    /// hivemind has not indexed), and the whole list is cached under one key, so
+    /// a partial answer must stay short or that account stays missing for the
+    /// long TTL.
+    /// </summary>
+    internal static bool IsCompleteProfileList(JsonNode @params, JsonNode? result)
+    {
+        if (result is not JsonArray profiles || profiles.Count == 0) return false;
+        if (@params is not JsonObject p || p["accounts"] is not JsonArray asked || asked.Count == 0) return false;
+        var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var profile in profiles)
+        {
+            if (profile is JsonObject o && o["name"] is JsonValue n && JsVal.TryGetStringLenient(n, out var name))
+                found.Add(name);
+        }
+        foreach (var account in asked)
+        {
+            if (account is not JsonValue a || !JsVal.TryGetStringLenient(a, out var wanted) || !found.Contains(wanted))
+                return false;
+        }
+        return true;
+    }
 
     // TTLs follow how fast each read legitimately changes for a page render:
     // dynamic props every block, a created feed within seconds, a post's
@@ -96,7 +120,7 @@ public static partial class SsrRpc
         new MethodPolicy("bridge", "get_discussion_v2", 30_000, CallClass.Heavy, Fallback: "get_discussion"),
         new MethodPolicy("bridge", "get_post_v2", 30_000, CallClass.Cheap, Fallback: "get_post"),
         new MethodPolicy("bridge", "get_profile", 60_000, CallClass.Cheap),
-        new MethodPolicy("bridge", "get_profiles", 60_000, CallClass.Cheap, LongTtlMs: ProfilesTtlMs, LongWhen: IsNonEmptyList),
+        new MethodPolicy("bridge", "get_profiles", 60_000, CallClass.Cheap, LongTtlMs: ProfilesTtlMs, LongWhen: IsCompleteProfileList),
         new MethodPolicy("bridge", "get_community", 300_000, CallClass.Cheap),
         new MethodPolicy("bridge", "list_communities", 300_000, CallClass.Cheap),
         new MethodPolicy("condenser_api", "get_accounts", 30_000, CallClass.Cheap),
@@ -457,7 +481,7 @@ public static partial class SsrRpc
             }
             var bytes = Encoding.UTF8.GetBytes(result is null ? "null" : JsJson.Stringify(result));
             counter.RecordUpstream(Environment.TickCount64 - started);
-            Cache.Set(key, bytes, policy.TtlFor(result));
+            Cache.Set(key, bytes, policy.TtlFor(@params, result));
             tcs.TrySetResult(bytes);
         }
         catch (Exception e)
